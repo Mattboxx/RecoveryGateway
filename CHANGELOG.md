@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.20] - 2026-11-14
+
+### Changed
+
+- First boot offers a Wake-on-LAN preset and an explicit path to continue without Tailscale. Other roles remain available.
+- Telegram and ntfy settings include a command reference for sending Wake-on-LAN, checking a saved device and verifying recovery.
+
 ## [3.0.19] - 2026-11-13
 
 ### Fixed
