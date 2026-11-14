@@ -1,5 +1,15 @@
 # Maintainer continuation
 
+## Active candidate — 3.0.22-beta.1 first-boot choices by goal
+
+- Source `60cc662` on `feat/setup-goal-choices-20261114` (from `release/3.0.21-final`). Step 4 of the first-boot wizard groups the functions by goal, marks Tailscale dependencies, shows a live summary and undoes presets on untick. Field ids, role values, defaults and the finish request are unchanged.
+- Image and ELF are in ignored `build/development-3.0.22-beta.1/60cc662/` with `SHA256SUMS` (BIN daaa15c86a4c71efbf3eae4c763cc29f8e2b5fc5239b82b657258c1039d8275b). The owner approved the preview and the build. Flash, OTA, push and publication still need explicit owner authorization.
+- 3.0.22-beta.2 (source `f2daa14`): Tailscale step as one now/not-now choice, no Wake-on-LAN shortcut, no page scrolling behind the wizard, `.local` name at setup (`lan_name`, saved as `hostname`), gateway Wi-Fi box named after its mode, optional open AP (`ap_open` NVS flag, only on explicit choice; a dashboard password closes it). Image in ignored `build/development-3.0.22-beta.2/f2daa14/` (BIN e1d2959027de7d593f8029fbea11690dd125924f9fdcf4ae57805214d7a9b22b). Owner-authorized install on test board B (COM6, MAC verified): bootloader, partition table and image written with esptool hash verification, NVS and otadata erased; serial shows first-boot setup mode and no panic.
+- The owner completed the wizard on board B and reported it working. Still unconfirmed by captured evidence: the open AP without WPA2 and closing it with a dashboard password; the chosen `.local` name answering. Pending: full `tools/validate_all.py`, then push/release only with owner authorization.
+- Interactive preview: `node tools/preview_first_boot.cjs` (synthetic data, mock gateway of `tools/test_first_boot_ui.cjs`).
+- 2026-11-14, owner-authorized: test board B (COM6, identity verified by MAC) received bootloader, partition table and this image at 0x20000 (esptool hash verified), with NVS and otadata erased. Serial: it booted into first-boot setup mode with its setup access point and no panic. Logs are in the same ignored folder.
+- Pending: the owner's walk through the wizard on board B, then checking that `ui_roles`, extras and AP settings are stored as chosen; full `tools/validate_all.py` campaign.
+
 ## Active qualification — 3.0.19-beta.1 reliability fixes
 
 - Runtime source `fceb7c03a323` implements OTA boot confirmation after local admin startup, restart admission before OTA writes, fair due-device scheduling, bounded ntfy result delivery, and mDNS re-probing only on IPv4 or interface change. Later commits update host fixtures and validation records.

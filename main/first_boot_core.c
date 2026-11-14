@@ -247,6 +247,16 @@ const char *fb_check_ap_password(const char *pw)
     return printable(pw) ? NULL : "access point password contains control characters";
 }
 
+/* The gateway's own Wi-Fi: WPA2 with its own password, or open when the
+ * user explicitly asks for it (then no password is accepted at all). */
+const char *fb_check_ap_settings(const char *pw, bool open, const char *admin)
+{
+    if (open) return pw && *pw ? "an open access point takes no password" : NULL;
+    const char *reason = fb_check_ap_password(pw);
+    if (!reason && admin && !strcmp(pw, admin)) reason = "use a different password for the access point";
+    return reason;
+}
+
 const char *fb_check_auth_key(const char *key)
 {
     if (!key || !*key) return NULL;                      /* tailnet can be joined later */
@@ -275,6 +285,15 @@ const char *fb_check_hostname(const char *name)
     for (const char *p = name; *p; p++)
         if (!(islower((unsigned char)*p) || isdigit((unsigned char)*p) || *p == '-')) return "device name may use a-z, 0-9 and '-'";
     return NULL;
+}
+
+/* Name on the home network (<name>.local, and the DHCP hostname). Empty keeps
+ * the board's own name; otherwise the rule of lan_name.c (LAN_NAME_MAX 32). */
+const char *fb_check_lan_name(const char *name)
+{
+    if (!name || !*name) return NULL;
+    if (strlen(name) > 32) return "home network name must be at most 32 characters";
+    return fb_check_hostname(name) ? "home network name may use a-z, 0-9 and '-' (not at the start or end)" : NULL;
 }
 
 int fb_hex_decode(const char *hex, uint8_t *out, size_t out_len)

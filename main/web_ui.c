@@ -666,7 +666,11 @@ static esp_err_t network_handler(httpd_req_t *req)
      * build-time AP password; tell the operator (the value is never sent). */
     {
         char *pw = nvs_param_get_str("ap_passwd");
-        cJSON_AddBoolToObject(ap, "default_password", !(pw && pw[0]) && CONFIG_ESP_WIFI_AP_PASSWORD[0]);
+        uint8_t open = 0;
+        nvs_param_get_u8("ap_open", &open);
+        bool empty = !(pw && pw[0]);
+        cJSON_AddBoolToObject(ap, "default_password", empty && !open && CONFIG_ESP_WIFI_AP_PASSWORD[0]);
+        cJSON_AddBoolToObject(ap, "open", empty && open);
         free(pw);
     }
     /* Report the LIVE AP channel (read-only in the UI). On the single-radio
@@ -1229,6 +1233,8 @@ static esp_err_t network_save_handler(httpd_req_t *req)
 
         save_str_if_present(ap, "ssid",     "ap_ssid");
         save_str_if_present(ap, "password", "ap_passwd");
+        const cJSON *ap_pw_j = cJSON_GetObjectItem(ap, "password");
+        if (cJSON_IsString(ap_pw_j) && ap_pw_j->valuestring[0]) nvs_save_u8("ap_open", 0);   /* a password closes an open AP */
         /* AP channel is auto-managed (follows the uplink on the single radio);
          * the UI exposes it read-only, so there is nothing to persist here. */
         save_str_if_present(ap, "ip",       "ap_ip");

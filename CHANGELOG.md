@@ -6,6 +6,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.22] - 2026-11-14
+
+### Added
+
+- Choose the name on the home network (`name.local`) during first boot, next to the tested address. The board's own name stays the default.
+- The gateway Wi-Fi can be an open network when the user explicitly chooses it at setup, with a warning. It keeps a password by default, and setting a password on the Network page closes it again.
+
+### Changed
+
+- First boot groups the choice of functions by goal, marks which ones need Tailscale and summarizes what each choice turns on now and what to set up after the restart. Wake-on-LAN and device checks are listed first and work without Tailscale.
+- The Tailscale step asks one question, connect now or not now; the key fields appear only for "connect now".
+- The gateway Wi-Fi has its own box named after its mode: emergency Wi-Fi, or access point for IoT devices when it stays on. Its password is no longer pre-generated.
+- Network options and extras are expandable sections with a description and a count of what is on; a choice never opens them or moves the page.
+
+### Fixed
+
+- Unticking a first-boot choice turns off only the options it had turned on.
+- Phones no longer scroll an invisible page behind the setup wizard, and each setup step starts at its top.
+
 ## [3.0.21] - 2026-11-14
 
 ### Added

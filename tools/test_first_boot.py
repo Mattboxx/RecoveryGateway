@@ -139,9 +139,16 @@ int main(void) {
     assert(!fb_check_wifi("Net", "12345678") && fb_check_wifi("123456789012345678901234567890123", "12345678"));
     char hex64[65]; memset(hex64, 'a', 64); hex64[64] = 0; assert(!fb_check_wifi("Net", hex64)); hex64[3] = 'z'; assert(fb_check_wifi("Net", hex64));
     assert(fb_check_ap_password("1234567") && !fb_check_ap_password("12345678"));
+    /* Open access point only on request, and then without any password. */
+    assert(!fb_check_ap_settings("", true, "admin-pass-1") && !fb_check_ap_settings(NULL, true, NULL) && fb_check_ap_settings("12345678", true, NULL));
+    assert(fb_check_ap_settings("", false, NULL) && fb_check_ap_settings(NULL, false, NULL) && !fb_check_ap_settings("12345678", false, "admin-pass-1"));
+    assert(fb_check_ap_settings("admin-pass-1", false, "admin-pass-1"));
     assert(!fb_check_auth_key("") && fb_check_auth_key("tskey") && fb_check_auth_key("tskey-auth with space") && !fb_check_auth_key("synthetic-preauth-0123456789"));
     assert(!fb_check_login_server("") && !fb_check_login_server("https://hs.example.com") && fb_check_login_server("ftp://x") && fb_check_login_server("https://a b"));
     assert(!fb_check_hostname("") && !fb_check_hostname("tailnet-gateway") && fb_check_hostname("-x") && fb_check_hostname("Upper") && fb_check_hostname("a_b"));
+    /* Home network name: empty keeps the board's own; 32 characters at most. */
+    assert(!fb_check_lan_name(NULL) && !fb_check_lan_name("") && !fb_check_lan_name("nas-gateway") && !fb_check_lan_name("abcdefghijklmnopqrstuvwxyz012345"));
+    assert(fb_check_lan_name("abcdefghijklmnopqrstuvwxyz0123456") && fb_check_lan_name("Gateway") && fb_check_lan_name("gw-") && fb_check_lan_name("my gw") && fb_check_lan_name("gw.local"));
     /* Internet connection chosen in setup. */
     assert(!fb_check_uplink(NULL, true) && fb_check_uplink(NULL, false)); /* 3.0 pages default to Wi-Fi */
     assert(!fb_check_uplink("wifi", true) && fb_check_uplink("wifi", false));

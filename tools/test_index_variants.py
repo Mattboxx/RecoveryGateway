@@ -81,6 +81,10 @@ with tempfile.TemporaryDirectory(prefix='index-variants-') as d:
     for marker in (b'id="vendor-sjcl"', b'fb-done-open', b'window.I18N_FETCH'):
         assert marker in en, marker
     page_gz = len(gzip.compress(full, 9, mtime=0))
-    assert page_gz < 170000, page_gz
+    # Soft budget for the page every visitor downloads from the gateway. Raised
+    # from 170000 for the first-boot choices grouped by goal and the clearer
+    # Tailscale and gateway Wi-Fi steps (about 2.4 KB); the 3584 KiB app
+    # slots keep more than 1 MiB free.
+    assert page_gz < 173000, page_gz
 print(f'PASS: actual page generator: page with {len(langs)} languages as separate scripts ({page_gz} gzip bytes), '
       f'English-only page without them and otherwise identical, C arrays decode to the page and scripts (host)')

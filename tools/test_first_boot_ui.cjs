@@ -77,7 +77,7 @@ function mockGateway(opts = {}) {
         catch (e) { return send(403, { error: 'seal' }); }
         g.seq = m.seq;
         if (cmd.action === 'wifi_test') { g.wifi = 'testing'; g.polls = 0; g.tested = cmd.wifi; return send(200, { wifi: 'testing' }); }
-        if (cmd.action === 'finish') { g.finish = cmd; return send(200, { ok: true, restart_in_s: 3, tailnet: !!cmd.tailnet.auth_key, lan_name: 'esp32-tailnet-1a2b', uplink: cmd.uplink.type }); }
+        if (cmd.action === 'finish') { g.finish = cmd; return send(200, { ok: true, restart_in_s: 3, tailnet: !!cmd.tailnet.auth_key, lan_name: cmd.lan_name || 'esp32-tailnet-1a2b', uplink: cmd.uplink.type }); }
         return send(400, { error: 'action' });
       }
       case '/api/network/scan': return send(200, { status: 'scanning' });
@@ -92,7 +92,7 @@ function mockGateway(opts = {}) {
 
 async function layout(page, touch) {
   return page.evaluate((touch) => {
-    const vw = window.innerWidth, out = { overflow: document.documentElement.scrollWidth - vw, clipped: [], small: [], tiny: [] };
+    const vw = window.innerWidth, out = { overflow: document.documentElement.scrollWidth - vw, behind: document.documentElement.scrollHeight - window.innerHeight, clipped: [], small: [], tiny: [] };
     const card = document.querySelector('#firstBoot');
     card.querySelectorAll('button, input, select, summary').forEach(el => {
       const b = el.getBoundingClientRect(), s = getComputedStyle(el);
@@ -131,31 +131,41 @@ async function uplinkFlows(context) {
   await page.fill('#fb-eth-cs', '11');
   assert.equal(await page.isEnabled('#fb-next'), false, 'a pin used twice is refused');
   await page.fill('#fb-eth-cs', '10');
+  assert.equal(await page.isVisible('#fb-lan'), true, '.local name on Ethernet too');
+  await page.fill('#fb-lan', 'nas-gateway');
   await page.click('#fb-next');                          /* no Wi-Fi test question without Wi-Fi */
-  await page.waitForSelector('#fb-key', { state: 'visible' });
+  await page.waitForSelector('#fb-ts-later', { state: 'visible' });
+  await page.check('#fb-ts-later');
   await page.click('#fb-next');                          /* tailnet later is fine on Ethernet */
   await page.waitForSelector('#fb-apname', { state: 'visible' });
+  await page.click('#fb-appw-gen');
   assert.equal(await page.isVisible('#fb-share-lan-row'), false, 'home-network route needs a Wi-Fi test: offered later on Ethernet');
   await page.check('#fb-roles input[value="subnet-router"]');
   assert.equal(await page.isChecked('#fb-share-lan'), false);
   await page.click('#fb-next'); await page.waitForSelector('#fb-summary dt');
   assert.ok((await page.textContent('#fb-summary')).includes('Ethernet cable'));
+  assert.ok((await page.textContent('#fb-summary')).includes('http://nas-gateway.local/'), 'chosen .local name in the summary');
   await page.click('#fb-next'); await page.waitForSelector('#fb-done', { state: 'visible' });
   assert.deepEqual(g.finish.uplink, { type: 'ethernet', ethernet: { sclk: 12, mosi: 11, miso: 13, cs: 10, intr: 14, rst: 9 } });
   assert.deepEqual(g.finish.wifi, { ssid: '', password: '' }); assert.equal(g.finish.share_lan, false);
+  assert.equal(g.finish.lan_name, 'nas-gateway');
+  assert.ok((await page.textContent('#fb-done-open')).includes('http://nas-gateway.local/'));
   await page.close();
 
   ({ page, g } = await paired(context));
   await page.check('input[name="fb-up"][value="cellular"]');
   assert.equal(await page.isVisible('#fb-apn'), true);
+  assert.equal(await page.isVisible('#fb-lan'), false, 'no .local name without a home network');
   await page.fill('#fb-apn', 'internet'); await page.fill('#fb-simpin', '12');
   assert.equal(await page.isEnabled('#fb-next'), false, 'short SIM PIN refused');
   await page.fill('#fb-simpin', '1234');
   assert.equal(await page.isEnabled('#fb-next'), false, 'mobile data needs consent');
   await page.check('#fb-data-ack');
-  await page.click('#fb-next'); await page.waitForSelector('#fb-key', { state: 'visible' });
+  await page.click('#fb-next'); await page.waitForSelector('#fb-ts-later', { state: 'visible' });
+  await page.check('#fb-ts-later');
   assert.equal(await page.isEnabled('#fb-next'), true, 'SIM only: local administration works through the AP');
   await page.click('#fb-next'); await page.waitForSelector('#fb-apname', { state: 'visible' });
+  await page.click('#fb-appw-gen');
   await page.locator('details:has(#fb-exit-row) > summary').click();
   assert.equal(await page.isVisible('#fb-exit-row'), true, 'exit node is an explicit opt-in on mobile data');
   assert.equal(await page.isChecked('#fb-exit'), false);
@@ -164,23 +174,116 @@ async function uplinkFlows(context) {
   assert.ok(sum.includes('.local/') && !sum.includes('1234'), 'local address shown; PIN never shown');
   await page.click('#fb-next'); await page.waitForSelector('#fb-done', { state: 'visible' });
   assert.deepEqual(g.finish.uplink, { type: 'cellular', cellular: { tx: 17, rx: 18, pwrkey: -1, apn: 'internet', pin: '1234', roaming: false, data_ack: true } });
-  assert.equal(g.finish.exit_node, false);
+  assert.equal(g.finish.exit_node, false); assert.equal(g.finish.lan_name, '');
   assert.ok((await page.textContent('#fb-done-open')).includes('.local/'));
   assert.match(await page.textContent('#fb-done-reconnect'), /access point/i);
   for (const b of g.bodies) assert.ok(!b.includes('"1234"') && !b.includes(SECRETS.key), 'SIM PIN and key only sealed');
   await page.close();
 }
 
-/* One-click recovery starts locally, leaving other roles available. */
+/* Step 4 opens on the title of the choices, at the top of the view on every width. */
+async function choicesStart(page) {
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'fb-roles-title');
+  const r = await page.evaluate(() => { const o = document.getElementById('firstBoot'); return { top: document.getElementById('fb-roles-title').getBoundingClientRect().top, end: o.scrollTop + o.clientHeight >= o.scrollHeight - 1 }; });
+  assert.ok(r.top >= 0 && (r.top < 40 || r.end), 'step 4 starts from the title of the choices, not from a field below: ' + r.top);
+}
+
+/* Step 4 without Tailscale: presets undone by unticking (but not what another
+ * choice or the user still wants), no section opened and no page jump on a
+ * click, the live and final summaries, and the default restored when a key
+ * is entered after all. Sent roles keep the firmware's order. */
+async function choicesFlow(context) {
+  const { page, g } = await paired(context);
+  await page.check('input[name="fb-up"][value="ethernet"]');
+  await page.click('#fb-next'); await page.waitForSelector('#fb-ts-later', { state: 'visible' });
+  await page.check('#fb-ts-later'); await page.click('#fb-next');
+  await choicesStart(page);
+  await page.click('#fb-appw-gen');
+  const tick = v => page.evaluate(v => { const o = document.getElementById('firstBoot'), y = o.scrollTop; document.querySelector(v.startsWith('#') ? v : `#fb-roles input[value="${v}"]`).click(); return o.scrollTop - y; }, v);
+  const on = () => page.evaluate(() => [...document.querySelectorAll('#fb-net input, #fb-extras input, #fb-ap-always')].filter(i => i.checked).map(i => i.id));
+  const shown = id => page.isVisible(id);
+  const sum = async () => (await page.innerText('#fb-picked')).replace(/\s+/g, ' ');
+  assert.match(await sum(), /Nothing selected/);
+  assert.ok(await page.isVisible('#fb-ts-off') && !(await page.isVisible('#fb-ts-on')), 'says that Tailscale was skipped');
+  assert.deepEqual(await on(), [], 'without Tailscale every network option and extra starts off');
+  assert.ok(await shown('#fb-ap-off-t') && !(await shown('#fb-ap-on-t')), 'recovery-only: the box is the emergency Wi-Fi');
+  for (const v of ['monitoring', 'wol', 'iot-ap']) assert.equal(await tick(v), 0, 'a choice does not move the page');
+  assert.equal(await page.evaluate(() => document.getElementById('fb-net').open || document.getElementById('fb-extras').open), false, 'a choice opens no section');
+  assert.deepEqual(await on(), ['fb-share-ap', 'fb-ap-always', 'fb-x-history', 'fb-x-trends', 'fb-x-snapshots', 'fb-x-names']);
+  assert.ok(await shown('#fb-ap-on-t') && !(await shown('#fb-ap-off-t')), 'always on: the box is the IoT access point, not an emergency Wi-Fi');
+  assert.equal((await page.textContent('#fb-ap-on-t')).trim(), 'Access point for IoT devices');
+  assert.equal(await page.textContent('#fb-net-n'), '✓ 2'); assert.equal(await page.textContent('#fb-extras-n'), '✓ 4', 'closed sections count what is on');
+  let s = await sum();
+  assert.match(s, /Wake a NAS or PC No Tailscale needed Turned on now Keep an event history After the restart Save the device/);
+  assert.match(s, /Wi-Fi for IoT devices Tailscale optional Turned on now Share the gateway's own Wi-Fi network \(waits for Tailscale\), Keep the gateway's own Wi-Fi always on, Tailnet names for devices on the gateway's Wi-Fi \(waits for Tailscale\)/);
+  assert.ok(await page.isVisible('#fb-ap-on'), 'IoT: the emergency Wi-Fi is always on');
+  await tick('monitoring');
+  assert.deepEqual(await on(), ['fb-share-ap', 'fb-ap-always', 'fb-x-history', 'fb-x-names'], 'unticking keeps what another choice still wants');
+  await tick('#fb-x-history'); await tick('wol');
+  assert.deepEqual(await on(), ['fb-share-ap', 'fb-ap-always', 'fb-x-names'], 'an option changed by hand stays as the user left it');
+  await tick('iot-ap');
+  assert.deepEqual(await on(), [], 'unticking every choice undoes its presets');
+  assert.equal(await page.textContent('#fb-net-n'), '', 'no count when nothing is on');
+  assert.ok(await page.isVisible('#fb-ap-off'));
+  await tick('subnet-router'); await tick('wol');
+  s = await sum();
+  assert.match(s, /Reach this network from your Tailnet Waits for Tailscale .*On Ethernet or SIM/);
+  assert.deepEqual(await on(), ['fb-x-history'], 'no home-network route at setup on Ethernet');
+  await page.click('#fb-next'); await page.waitForSelector('#fb-summary dt');
+  assert.match(await page.textContent('#fb-summary'), /Waits for TailscaleReach this network from your Tailnet/);
+  await page.click('#fb-back'); await tick('subnet-router');
+  await page.click('#fb-next'); await page.waitForSelector('#fb-summary dt');
+  assert.doesNotMatch(await page.textContent('#fb-summary'), /Waits for Tailscale/, 'Wake-on-LAN alone waits for nothing');
+  await page.click('#fb-back'); await page.click('#fb-back');
+  await page.check('#fb-ts-now'); await page.fill('#fb-key', SECRETS.key); await page.click('#fb-next'); await choicesStart(page);
+  assert.equal(await page.isChecked('#fb-share-ap'), true, 'a key entered after skipping restores the default');
+  assert.ok(await page.isVisible('#fb-ts-on'));
+  await tick('lan-tailnet');
+  assert.match(await sum(), /Let a LAN device use one Tailnet service Needs Tailscale .*Also turned on Share the gateway's own Wi-Fi network$/);
+  /* A language chosen on this step redraws the summary, names included. */
+  await page.selectOption('#fb-lang', 'it');
+  await page.waitForFunction(() => /Le tue scelte[\s\S]*Accendi un NAS o un PC[\s\S]*Dopo il riavvio/.test(document.getElementById('fb-picked').innerText));
+  await page.selectOption('#fb-lang', 'en');
+  await page.waitForFunction(() => /Your choices[\s\S]*Wake a NAS or PC[\s\S]*After the restart/.test(document.getElementById('fb-picked').innerText));
+  /* An open gateway Wi-Fi only on explicit request, then without a password. */
+  assert.equal(await page.isChecked('#fb-ap-open'), false);
+  await page.check('#fb-ap-open');
+  assert.equal(await page.isVisible('#fb-appw'), false, 'no password field for an open network');
+  await page.fill('#fb-apname', 'IoT-Open');
+  await page.click('#fb-next'); await page.waitForSelector('#fb-summary dt');
+  assert.match(await page.textContent('#fb-summary'), /IoT-Open · when the local LAN is unavailable · open, no password/);
+  await page.click('#fb-next'); await page.waitForSelector('#fb-done', { state: 'visible' });
+  assert.equal(g.finish.ap_open, true); assert.equal(g.finish.ap_password, '', 'a password typed before is not sent for an open network');
+  assert.deepEqual(g.finish.roles, ['lan-tailnet', 'wol'], 'roles in the order the firmware always received');
+  assert.deepEqual(g.finish.extras, { history: true, trends: false, snapshots: false, tailnet_names: false });
+  assert.equal(g.finish.share_ap, true); assert.equal(g.finish.ap_recovery_only, true);
+  await page.close();
+}
+
+/* Tailscale is an explicit choice: none at first, a key only with "Yes",
+ * and "Not now" discards a key typed before. Wake-on-LAN alone works locally. */
 async function standaloneRecoveryFlow(context) {
   const { page, g } = await paired(context);
   await page.check('input[name="fb-up"][value="ethernet"]');
   await page.click('#fb-next');
-  await page.waitForSelector('#fb-wol-only', { state: 'visible' });
+  await page.waitForSelector('#fb-ts-later', { state: 'visible' });
+  assert.equal(await page.isEnabled('#fb-next'), false, 'Tailscale now or later must be chosen');
+  assert.equal(await page.isVisible('#fb-key'), false, 'no key field before choosing to connect');
+  await page.check('#fb-ts-now');
+  assert.equal(await page.isEnabled('#fb-next'), false, 'connecting now needs a key');
   await page.fill('#fb-key', SECRETS.key);
-  await page.click('#fb-wol-only');
-  await page.waitForSelector('#fb-apname', { state: 'visible' });
-  assert.deepEqual(await page.locator('#fb-roles input:checked').evaluateAll(roles => roles.map(role => role.value)), ['wol']);
+  assert.equal(await page.isEnabled('#fb-next'), true);
+  await page.check('#fb-ts-later');
+  assert.equal(await page.isVisible('#fb-key'), false);
+  await page.click('#fb-next');
+  await choicesStart(page);
+  assert.equal(await page.inputValue('#fb-key'), '', 'Not now clears a key typed before');
+  await page.fill('#fb-appw', 'emergency-wifi-pass');
+  assert.deepEqual(await page.locator('#fb-roles input:checked').evaluateAll(roles => roles.map(role => role.value)), []);
+  assert.equal(await page.locator('#fb-roles input').first().getAttribute('value'), 'wol', 'Wake-on-LAN is the first choice');
+  await page.check('#fb-roles input[value="wol"]');
+  assert.equal(await page.isChecked('#fb-x-history'), true);
+  assert.match(await page.textContent('#fb-picked'), /Wake a NAS or PC/);
   assert.ok(!(await page.isChecked('#fb-share-ap')));
   assert.ok(await page.isVisible('#fb-roles input[value="home-assistant"]'));
   await page.click('#fb-next');
@@ -205,6 +308,7 @@ async function flow(browser, [width, height, locale], failures, full) {
   const check = async (step) => {
     const r = await layout(page, touch);
     if (r.overflow > 0) failures.push(`${where} step ${step}: page scrolls horizontally by ${r.overflow}px`);
+    if (r.behind > 1) failures.push(`${where} step ${step}: the page behind the wizard scrolls by ${r.behind}px`);
     if (r.clipped.length) failures.push(`${where} step ${step}: clipped ${r.clipped.slice(0, 5).join(', ')}`);
     if (r.small.length) failures.push(`${where} step ${step}: touch targets <36px ${r.small.slice(0, 5).join(', ')}`);
     if (r.tiny.length) failures.push(`${where} step ${step}: text <11px ${r.tiny.slice(0, 4).join(', ')}`);
@@ -269,9 +373,16 @@ async function flow(browser, [width, height, locale], failures, full) {
     await page.click('#fb-test');
     await page.waitForFunction(() => document.getElementById('fb-tested-ip').value === '192.168.1.77', null, { timeout: 15000 });
     assert.deepEqual(g.tested, { ssid: 'HomeNetwork', password: SECRETS.wifi });
+    assert.equal(await page.inputValue('#fb-lan'), 'esp32-tailnet-1a2b', 'the board name is suggested for .local');
+    await page.fill('#fb-lan', 'Bad_Name');
+    assert.equal(await page.inputValue('#fb-lan'), 'bad_name', 'typed lowercase');
+    assert.equal(await page.isEnabled('#fb-next'), false, 'an invalid .local name is refused');
+    await page.fill('#fb-lan', 'esp32-tailnet-1a2b');
     await check(2);
     await page.click('#fb-next');
-    await page.waitForSelector('#fb-key', { state: 'visible' });
+    await page.waitForSelector('#fb-ts-now', { state: 'visible' });
+    assert.equal(await page.isEnabled('#fb-next'), false, 'Tailscale now or later must be chosen');
+    await page.check('#fb-ts-now');
     await page.fill('#fb-key', 'tskey');
     assert.equal(await page.isEnabled('#fb-next'), false, 'short key refused');
     await page.fill('#fb-key', SECRETS.key);
@@ -284,7 +395,11 @@ async function flow(browser, [width, height, locale], failures, full) {
     await check(3);
     await page.click('#fb-next');
     await page.waitForSelector('#fb-apname', { state: 'visible' });
+    await choicesStart(page);
     assert.equal(await page.inputValue('#fb-apname'), 'ESP32-Tailnet-1A2B');
+    assert.equal(await page.inputValue('#fb-appw'), '', 'no gateway Wi-Fi password is chosen for the user');
+    assert.equal(await page.isEnabled('#fb-next'), false, 'the gateway Wi-Fi password is required');
+    await page.click('#fb-appw-gen');
     const apPw = await page.inputValue('#fb-appw');
     assert.match(apPw, /^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}-[A-Za-z0-9]{4}$/);
     await page.fill('#fb-appw', SECRETS.admin);
@@ -299,6 +414,7 @@ async function flow(browser, [width, height, locale], failures, full) {
     assert.equal(await page.isChecked('#fb-x-trends') && await page.isChecked('#fb-x-snapshots'), true, 'Monitor and get alerts selects trends and settings copies');
     assert.equal(await page.isChecked('#fb-x-names'), false, 'tailnet names only for the IoT role or by hand');
     await page.check('#fb-roles input[value="advanced"]');
+    assert.equal(await page.evaluate(() => document.getElementById('fb-net').open || document.getElementById('fb-extras').open), false, 'a choice opens no section');
     await check(4);
     await page.click('#fb-next');
     await page.waitForSelector('#fb-summary dt');
@@ -316,6 +432,8 @@ async function flow(browser, [width, height, locale], failures, full) {
     assert.deepEqual(g.finish.tailnet, { auth_key: SECRETS.key, login_server: 'https://headscale.example.com', hostname: 'home-gateway' });
     assert.equal(g.finish.share_lan, true); assert.equal(g.finish.exit_node, false); assert.equal(g.finish.ap_recovery_only, true);
     assert.equal(g.finish.ap_ssid, 'ESP32-Tailnet-1A2B');
+    assert.equal(g.finish.lan_name, '', 'the suggested name is the board default: nothing to save');
+    assert.equal(g.finish.ap_open, false, 'the gateway Wi-Fi has a password unless the user removes it');
     assert.deepEqual(g.finish.roles, ['subnet-router', 'wol', 'monitoring', 'advanced']);
     assert.deepEqual(g.finish.extras, { history: true, trends: true, snapshots: true, tailnet_names: false });
     const [xh, xt] = await page.evaluate(() => [I18N.t('Event history'), I18N.t('Trends')]);
@@ -332,6 +450,7 @@ async function flow(browser, [width, height, locale], failures, full) {
     if (!full) return;
     await uplinkFlows(context);
     await standaloneRecoveryFlow(context);
+    await choicesFlow(context);
     // Setup-code pairing with one wrong code, on a fresh page.
     const p2 = await context.newPage(); const g2 = mockGateway(); await p2.route('http://esp32.test/**', g2.handle);
     await p2.goto('http://esp32.test/'); await p2.waitForSelector('#firstBoot', { state: 'visible' });
@@ -360,7 +479,8 @@ async function flow(browser, [width, height, locale], failures, full) {
   } finally { await context.close(); }
 }
 
-(async () => {
+module.exports = { mockGateway, html, SECRETS };
+if (require.main === module) (async () => {
   const browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome' });
   const failures = [];
   const runs = [[390, 844, 'en-US', true], [1440, 900, 'en-US', true]].concat(
