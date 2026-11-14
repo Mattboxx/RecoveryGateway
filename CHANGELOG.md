@@ -6,7 +6,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [3.0.22-beta.2] - 2026-11-14
+## [3.0.22] - 2026-11-14
 
 ### Added
 
@@ -15,24 +15,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- The Tailscale step asks one question, connect now or not now; the key fields appear only for "connect now". The Wake-on-LAN shortcut there is gone: Wake-on-LAN is the first choice of the next step.
-- The gateway Wi-Fi box is named after its mode: emergency Wi-Fi, or access point for IoT devices when it stays on. Its password is no longer pre-generated.
-- Network options and extras look like expandable sections with a description and a count of what is on.
-
-### Fixed
-
-- Phones no longer scroll an invisible page behind the setup wizard.
-
-## [3.0.22-beta.1] - 2026-11-14
-
-### Changed
-
 - First boot groups the choice of functions by goal, marks which ones need Tailscale and summarizes what each choice turns on now and what to set up after the restart. Wake-on-LAN and device checks are listed first and work without Tailscale.
-- The emergency Wi-Fi name and password have their own box that explains when the network is used. Network options and extras stay closed until opened, and the step opens on its title.
+- The Tailscale step asks one question, connect now or not now; the key fields appear only for "connect now".
+- The gateway Wi-Fi has its own box named after its mode: emergency Wi-Fi, or access point for IoT devices when it stays on. Its password is no longer pre-generated.
+- Network options and extras are expandable sections with a description and a count of what is on; a choice never opens them or moves the page.
 
 ### Fixed
 
-- Unticking a first-boot choice turns off only the options it had turned on. Starting with Wake-on-LAN applies the same preset as ticking it, and entering a Tailscale key after skipping restores sharing of the gateway Wi-Fi.
+- Unticking a first-boot choice turns off only the options it had turned on.
+- Phones no longer scroll an invisible page behind the setup wizard, and each setup step starts at its top.
 
 ## [3.0.21] - 2026-11-14
 

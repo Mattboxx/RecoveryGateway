@@ -69,11 +69,14 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.21
+## What's new in Firmware 3.0.22
 
-- Save up to four named IPv4 and TCP port checks for manual or periodic testing.
-- Use `probe NAME` and `checks` in Telegram or ntfy, including without Tailscale.
-- The standalone Wake-on-LAN setup introduced in 3.0.20 remains available.
+- First boot groups the functions by goal and shows which ones need Tailscale.
+  Wake-on-LAN and device checks come first and work without it.
+- A live summary shows what each choice turns on now and what to set up later.
+- Tailscale is one clear question: connect now, or not now.
+- Choose the gateway's `.local` name during setup. The gateway Wi-Fi is named
+  after its mode and can be left open only if you explicitly choose that.
 
 [Install the current firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
 · [Full changelog](CHANGELOG.md)
