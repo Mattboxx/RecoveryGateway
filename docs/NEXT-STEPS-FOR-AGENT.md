@@ -5,7 +5,8 @@
 - Source `60cc662` on `feat/setup-goal-choices-20261114` (from `release/3.0.21-final`). Step 4 of the first-boot wizard groups the functions by goal, marks Tailscale dependencies, shows a live summary and undoes presets on untick. Field ids, role values, defaults and the finish request are unchanged.
 - Image and ELF are in ignored `build/development-3.0.22-beta.1/60cc662/` with `SHA256SUMS` (BIN daaa15c86a4c71efbf3eae4c763cc29f8e2b5fc5239b82b657258c1039d8275b). The owner approved the preview and the build. Flash, OTA, push and publication still need explicit owner authorization.
 - Interactive preview: `node tools/preview_first_boot.cjs` (synthetic data, mock gateway of `tools/test_first_boot_ui.cjs`).
-- Pending: a first boot on hardware (erased NVS or the test board), checking that `ui_roles`, extras and AP settings are stored as chosen; full `tools/validate_all.py` campaign.
+- 2026-11-14, owner-authorized: test board B (COM6, identity verified by MAC) received bootloader, partition table and this image at 0x20000 (esptool hash verified), with NVS and otadata erased. Serial: it booted into first-boot setup mode with its setup access point and no panic. Logs are in the same ignored folder.
+- Pending: the owner's walk through the wizard on board B, then checking that `ui_roles`, extras and AP settings are stored as chosen; full `tools/validate_all.py` campaign.
 
 ## Active qualification — 3.0.19-beta.1 reliability fixes
 

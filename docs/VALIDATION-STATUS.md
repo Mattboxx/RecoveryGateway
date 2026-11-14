@@ -1,6 +1,6 @@
 # Validation records
 
-First-boot choices by goal (3.0.22-beta.1, source `60cc662`): `tools/test_first_boot_ui.cjs` passed 20 viewport/language runs, including the new step-4 flow (focus on the title, no section opened or page moved by a choice, preset undo, summaries, language change, firmware role order). `tools/test_index_variants.py` passed at 171828 gzip bytes under the raised 172000 budget; `tools/i18n_extract.py --check 90` passed. The ESP32-S3 build succeeded (66.7 % of the app slot). Full `validate_all.py` and hardware first boot are pending.
+First-boot choices by goal (3.0.22-beta.1, source `60cc662`): `tools/test_first_boot_ui.cjs` passed 20 viewport/language runs, including the new step-4 flow (focus on the title, no section opened or page moved by a choice, preset undo, summaries, language change, firmware role order). `tools/test_index_variants.py` passed at 171828 gzip bytes under the raised 172000 budget; `tools/i18n_extract.py --check 90` passed. The ESP32-S3 build succeeded (66.7 % of the app slot). Board B (test-only) was flashed with the image and booted into first-boot setup mode without a panic; the wizard walk-through on hardware and full `validate_all.py` are pending.
 
 Per-integration recovery controls: ESP32-S3 build, five host command/operations
 drivers, Telegram UI and 105 Chromium automation scenarios passed. Host tests
