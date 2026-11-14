@@ -29,6 +29,7 @@
 #include "web_ui.h"
 #include "web_idle.h"
 #include "lan_name.h"
+#include "first_boot_core.h"
 #include "json_guard.h"
 #include "web_origin.h"
 #include "homelab_ops.h"
@@ -1097,6 +1098,22 @@ static esp_err_t network_save_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
         return ESP_FAIL;
     }
+    /* The gateway Wi-Fi opens (no password) only when asked for, and an open
+     * one closes only with a password: checked before anything is written. */
+    const cJSON *ap_req = cJSON_GetObjectItem(root, "ap");
+    const cJSON *ap_open_req = cJSON_IsObject(ap_req) ? cJSON_GetObjectItem(ap_req, "open") : NULL;
+    if (cJSON_IsBool(ap_open_req)) {
+        const cJSON *pw_req = cJSON_GetObjectItem(ap_req, "password");
+        char *stored = nvs_param_get_str("ap_passwd");
+        const char *why = fb_check_ap_change(cJSON_IsTrue(ap_open_req), cJSON_IsString(pw_req) ? pw_req->valuestring : NULL,
+                                             stored && stored[0]);
+        free(stored);
+        if (why) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, why);
+            return ESP_FAIL;
+        }
+    }
     if (!save_txn_begin()) {
         cJSON_Delete(root);
         return send_save_response(req);
@@ -1232,9 +1249,16 @@ static esp_err_t network_save_handler(httpd_req_t *req)
         compute_ap_cidr_from_nvs(old_cidr, sizeof old_cidr);
 
         save_str_if_present(ap, "ssid",     "ap_ssid");
-        save_str_if_present(ap, "password", "ap_passwd");
-        const cJSON *ap_pw_j = cJSON_GetObjectItem(ap, "password");
-        if (cJSON_IsString(ap_pw_j) && ap_pw_j->valuestring[0]) nvs_save_u8("ap_open", 0);   /* a password closes an open AP */
+        const cJSON *ap_open_j = cJSON_GetObjectItem(ap, "open");
+        if (cJSON_IsTrue(ap_open_j)) {
+            nvs_save_str("ap_passwd", "");
+            nvs_save_u8("ap_open", 1);
+        } else {
+            save_str_if_present(ap, "password", "ap_passwd");
+            const cJSON *ap_pw_j = cJSON_GetObjectItem(ap, "password");
+            if (cJSON_IsFalse(ap_open_j) || (cJSON_IsString(ap_pw_j) && ap_pw_j->valuestring[0]))
+                nvs_save_u8("ap_open", 0);   /* a password closes an open AP */
+        }
         /* AP channel is auto-managed (follows the uplink on the single radio);
          * the UI exposes it read-only, so there is nothing to persist here. */
         save_str_if_present(ap, "ip",       "ap_ip");

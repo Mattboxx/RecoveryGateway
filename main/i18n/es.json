@@ -2069,10 +2069,12 @@
  "No password (open network)": "Sin contraseña (red abierta)",
  "Anyone nearby can join it and, through the gateway, reach your home network and, with sharing on, your Tailnet. Choose it only if you accept that risk.": "Cualquiera cerca puede conectarse y, a través del gateway, llegar a tu red de casa y, con el uso compartido activo, a tu Tailnet. Elígelo solo si aceptas ese riesgo.",
  "open, no password": "abierta, sin contraseña",
- "Open network without a password, as chosen at setup: anyone nearby can join it. Set a password here to protect it.": "Red abierta sin contraseña, como se eligió en la configuración: cualquiera cerca puede conectarse. Establece aquí una contraseña para protegerla.",
  "always on": "siempre activa",
  "when the local LAN is unavailable": "cuando la red de casa no está disponible",
  "tested": "probada",
  "not tested": "no probada",
- "No": "No"
+ "No": "No",
+ "Password required": "Contraseña obligatoria",
+ "Enter a password to close the open network.": "Introduce una contraseña para cerrar la red abierta.",
+ "Open network: anyone nearby can join it.": "Red abierta: cualquiera cerca puede conectarse."
 }

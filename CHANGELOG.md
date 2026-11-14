@@ -6,6 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.23] - 2026-11-14
+
+### Added
+
+- **Network → Gateway Wi-Fi** can switch the access point to an open network without a password, as first boot can, and close it again with a new password. Other AP edits never change the security mode.
+
 ## [3.0.22] - 2026-11-14
 
 ### Added

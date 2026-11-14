@@ -257,6 +257,16 @@ const char *fb_check_ap_settings(const char *pw, bool open, const char *admin)
     return reason;
 }
 
+/* Network page: open the gateway Wi-Fi (no password) or keep WPA2. Closing an
+ * open network needs a new password unless one is stored: an empty password
+ * would otherwise fall back to the shared build-time default. */
+const char *fb_check_ap_change(bool open, const char *new_pw, bool have_stored)
+{
+    if (open) return new_pw && *new_pw ? "an open access point takes no password" : NULL;
+    if (new_pw && *new_pw) return fb_check_ap_password(new_pw);
+    return have_stored ? NULL : "set a password to close the open network";
+}
+
 const char *fb_check_auth_key(const char *key)
 {
     if (!key || !*key) return NULL;                      /* tailnet can be joined later */

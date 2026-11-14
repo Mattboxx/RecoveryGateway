@@ -143,6 +143,10 @@ int main(void) {
     assert(!fb_check_ap_settings("", true, "admin-pass-1") && !fb_check_ap_settings(NULL, true, NULL) && fb_check_ap_settings("12345678", true, NULL));
     assert(fb_check_ap_settings("", false, NULL) && fb_check_ap_settings(NULL, false, NULL) && !fb_check_ap_settings("12345678", false, "admin-pass-1"));
     assert(fb_check_ap_settings("admin-pass-1", false, "admin-pass-1"));
+    /* Network page: open without a password; close with a new one or a stored one. */
+    assert(!fb_check_ap_change(true, NULL, true) && !fb_check_ap_change(true, "", false) && fb_check_ap_change(true, "12345678", true));
+    assert(!fb_check_ap_change(false, "12345678", false) && fb_check_ap_change(false, "1234567", true) && !fb_check_ap_change(false, NULL, true));
+    assert(fb_check_ap_change(false, NULL, false) && fb_check_ap_change(false, "", false));
     assert(!fb_check_auth_key("") && fb_check_auth_key("tskey") && fb_check_auth_key("tskey-auth with space") && !fb_check_auth_key("synthetic-preauth-0123456789"));
     assert(!fb_check_login_server("") && !fb_check_login_server("https://hs.example.com") && fb_check_login_server("ftp://x") && fb_check_login_server("https://a b"));
     assert(!fb_check_hostname("") && !fb_check_hostname("tailnet-gateway") && fb_check_hostname("-x") && fb_check_hostname("Upper") && fb_check_hostname("a_b"));
