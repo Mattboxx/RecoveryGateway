@@ -13,7 +13,7 @@ order: 4
 <h2 id="without-tailnet">Set up Telegram or ntfy without a Tailnet</h2>
 <ol>
   <li>Skip Tailnet registration during <a href="{{root}}first-boot/">first boot</a>, or leave it disabled. Keep the ESP32 powered and connected to your LAN.</li>
-  <li>Save the NAS or PC by name and MAC address in <strong>Automation → Wake-on-LAN</strong>.</li>
+  <li>Save the NAS or PC by name and MAC address in <strong>Devices &amp; Recovery → Wake-on-LAN</strong>.</li>
   <li>In <strong>Devices &amp; Recovery</strong>, select the saved device. Choose <strong>Local uplink subnet only</strong>, enter its LAN address or hostname and a TCP port that answers when it is up. Set <strong>Recovery timeout</strong> (5–600 seconds) and <strong>Maximum checks</strong> (at least 2 for <code>recover</code>). You can also verify a separate service port. Enable <strong>Notify manual results and new outages</strong>, then save the device profile.</li>
   <li>In <strong>Automation → Notifications</strong>, configure Telegram or ntfy and set <strong>Remote commands</strong> to <strong>Info, Wake-on-LAN and verified recovery</strong>. Leave <strong>Poll commands only while Tailscale is down</strong> off for this setup. Save and run <strong>Send test</strong>.</li>
 </ol>
@@ -26,10 +26,15 @@ order: 4
     <tr><th scope="row"><code>wol NAS</code></th><td>Sends the Wake-on-LAN packet.</td><td>Confirmation that the packet was sent, or a send error.</td></tr>
     <tr><th scope="row"><code>recover NAS</code></th><td>Checks first, sends Wake-on-LAN if needed and waits for the configured check to pass.</td><td>An acknowledgement, then the result if notifications are enabled for NAS.</td></tr>
     <tr><th scope="row"><code>check NAS</code></th><td>Checks the saved address and configured port.</td><td>An acknowledgement, then the reachability result if notifications are enabled for NAS.</td></tr>
+    <tr><th scope="row"><code>probe NAS_Web</code></th><td>Tests a saved IPv4 address and TCP port.</td><td>An acknowledgement, then the reachability result.</td></tr>
+    <tr><th scope="row"><code>checks</code></th><td>Lists the saved TCP checks without running them.</td><td>The latest result for each saved check.</td></tr>
     <tr><th scope="row"><code>info</code></th><td>Reads the gateway's operational status. Enable the channel's <strong>Allow info command</strong> option.</td><td>Gateway status and device counts.</td></tr>
   </tbody>
 </table>
 <p>Replace <code>NAS</code> with the saved name. Use <code>check</code> for one device at a time. A new manual job for the same device has a one-minute cooldown. <strong>Reachable</strong> means the configured port answered. <strong>Not reachable</strong> means it did not answer within the time or attempt limit. <strong>Inconclusive</strong> means the gateway could not establish reachability. A port check cannot prove that the device is powered off.</p>
+
+<h2 id="saved-tcp">Check a saved TCP service</h2>
+<p>Under <strong>Devices &amp; Recovery → Health &amp; Resources → Saved TCP checks</strong>, add a name, IPv4 address and TCP port. Keep the interval at 0 for manual checks or choose 30–3600 seconds for a schedule. Enable outage notifications to learn when a previously reachable port stops responding. The checks do not need a MAC address.</p>
 
 <h2 id="over-tailnet">Use the Web UI over Tailscale</h2>
 
@@ -48,7 +53,7 @@ order: 4
 
 <h3>Procedure</h3>
 <ol>
-  <li>Add the device in <strong>Automation → Wake-on-LAN</strong> (name and MAC address).</li>
+  <li>Add the device in <strong>Devices &amp; Recovery → Wake-on-LAN</strong> (name and MAC address).</li>
   <li>Open <strong>Devices &amp; Recovery</strong>, choose the target, check port, optional service port and timeout.</li>
   <li>Use <strong>Check now</strong> to observe, or <strong>Recover with WoL</strong> to precheck, wake if needed, wait and check again.</li>
 </ol>

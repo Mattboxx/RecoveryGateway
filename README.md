@@ -69,11 +69,11 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.20
+## What's new in Firmware 3.0.21
 
-- First boot offers **Start with Wake-on-LAN** and **Continue without Tailscale**.
-- The Telegram and ntfy settings include a command reference for sending a
-  wake packet, checking a saved device and verifying recovery.
+- Save up to four named IPv4 and TCP port checks for manual or periodic testing.
+- Use `probe NAME` and `checks` in Telegram or ntfy, including without Tailscale.
+- The standalone Wake-on-LAN setup introduced in 3.0.20 remains available.
 
 [Install the current firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
 · [Full changelog](CHANGELOG.md)
