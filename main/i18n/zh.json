@@ -347,7 +347,6 @@
  "Connect the uplink first, then add its subnet to the advertised routes manually.": "请先连接上行，然后手动将其子网添加到通告路由。",
  "Connect to the Internet.": "连接到互联网。",
  "Connect to your broker for state and authorized commands.": "连接到你的代理以获取状态和授权命令。",
- "Connect your Tailnet.": "连接你的 Tailnet。",
  "Connected": "已连接",
  "Connected clients": "已连接的客户端",
  "Connected to the Tailscale/Headscale control server": "已连接到 Tailscale/Headscale 控制服务器",
@@ -2046,5 +2045,13 @@
  "Waits for Tailscale": "等待 Tailscale",
  "(waits for Tailscale)": "（等待 Tailscale）",
  "In recovery mode, the access point stays available whenever there is no Ethernet or WiFi LAN.": "在恢复模式下，只要没有以太网或 Wi-Fi 局域网，接入点就保持可用。",
- "Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.": "其他 tailnet 设备可以使用网关的互联网连接。调制解调器启用时，这部分流量会计入你的移动数据套餐。"
+ "Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.": "其他 tailnet 设备可以使用网关的互联网连接。调制解调器启用时，这部分流量会计入你的移动数据套餐。",
+ "Connect Tailscale now?": "现在连接 Tailscale 吗？",
+ "Tailscale lets you reach this network and your Tailnet services from anywhere. You can also connect it later from the dashboard.": "Tailscale 让你可以从任何地方访问此网络和你的 Tailnet 服务。你也可以稍后在仪表板中连接。",
+ "Yes, connect now": "是，现在连接",
+ "You need an auth key from the Tailscale or Headscale admin console.": "你需要从 Tailscale 或 Headscale 管理控制台获取认证密钥。",
+ "Not now": "暂不",
+ "Wake-on-LAN, device checks, Telegram, ntfy and Home Assistant work without Tailscale. You pick them in the next step.": "Wake-on-LAN、设备检查、Telegram、ntfy 和 Home Assistant 无需 Tailscale 即可使用。你将在下一步中选择它们。",
+ "Choose whether to connect Tailscale now.": "请选择是否现在连接 Tailscale。",
+ "Enter the auth key, or choose Not now.": "请输入认证密钥，或选择“暂不”。"
 }

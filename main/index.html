@@ -1514,6 +1514,7 @@
      * the fixed overlay alone then no longer covers it. */
     body.auth-open { overflow: hidden; }
     body.auth-open > .nav, body.auth-open > .page-container { visibility: hidden; }
+    body.fb-open > .nav, body.fb-open > .page-container { display: none; }
 
     .auth-overlay {
       position: fixed;
@@ -2222,13 +2223,13 @@
       </section>
 
       <section class="fb-step" data-step="3" hidden>
-        <p><b>Tailnet connection is optional.</b> Wake and check devices from Telegram or ntfy over your Internet connection.</p>
-        <div class="btn-row">
-          <button class="btn btn-secondary" id="fb-wol-only" type="button">Start with Wake-on-LAN</button>
-          <button class="btn btn-secondary" id="fb-skip-tailnet" type="button">Continue without Tailscale</button>
+        <h2 class="fb-h" id="fb-ts-title" tabindex="-1">Connect Tailscale now?</h2>
+        <p class="form-hint">Tailscale lets you reach this network and your Tailnet services from anywhere. You can also connect it later from the dashboard.</p>
+        <div role="radiogroup" aria-labelledby="fb-ts-title">
+          <label class="fb-opt"><input type="radio" name="fb-ts" id="fb-ts-now" value="now"><span><b>Yes, connect now</b><small>You need an auth key from the Tailscale or Headscale admin console.</small></span></label>
+          <label class="fb-opt"><input type="radio" name="fb-ts" id="fb-ts-later" value="later"><span><b>Not now</b><small>Wake-on-LAN, device checks, Telegram, ntfy and Home Assistant work without Tailscale. You pick them in the next step.</small></span></label>
         </div>
-        <p class="form-hint">You can add other roles now and connect Tailscale or Headscale later from the dashboard.</p>
-        <p><b>Connect your Tailnet.</b></p>
+        <div id="fb-ts-box" hidden>
         <div class="fb-row" role="radiogroup" aria-label="Control server">
           <label class="fb-radio"><input type="radio" name="fb-ctl" value="ts" checked> Tailscale</label>
           <label class="fb-radio"><input type="radio" name="fb-ctl" value="hs"> Headscale (own server)</label>
@@ -2245,6 +2246,7 @@
         <div class="form-group">
           <label class="form-label" for="fb-host">Device name in the tailnet</label>
           <input class="input" id="fb-host" maxlength="63" value="tailnet-gateway" spellcheck="false">
+        </div>
         </div>
       </section>
 
@@ -12360,12 +12362,13 @@
         $('fb-next').hidden = st.finished;
         err('');
         validate();
-        var focus = { 1: 'fb-pw', 2: 'fb-ssid', 3: 'fb-skip-tailnet', 4: 'fb-roles-title' }[step];
+        var focus = { 1: 'fb-pw', 2: 'fb-ssid', 3: 'fb-ts-title', 4: 'fb-roles-title' }[step];
+        $('firstBoot').scrollTop = 0;
         /* Never steal focus from a field the user already chose in this step.
          * The choices start from their title, on phones too. */
         if (focus) setTimeout(function () {
           var sec = document.querySelector('#firstBoot .fb-step[data-step="' + step + '"]'), a = document.activeElement, f = $(focus);
-          if (st.step === step && !(sec && a && sec.contains(a))) { f.focus({ preventScroll: step === 4 }); if (step === 4) f.scrollIntoView({ block: 'start' }); }
+          if (st.step === step && !(sec && a && sec.contains(a))) { f.focus({ preventScroll: true }); if (step === 4) f.scrollIntoView({ block: 'start' }); }
         }, 30);
         if (step === 4) {
           /* "Continue without Tailscale" turned off sharing the gateway Wi-Fi;
@@ -12425,7 +12428,11 @@
         if (pw && pw.length < 8) return 'Wi-Fi password must be 8 to 63 characters.';
         return '';
       }
+      function tsChoice() { var r = document.querySelector('input[name="fb-ts"]:checked'); return r ? r.value : ''; }
       function tailnetProblem() {
+        if (!tsChoice()) return 'Choose whether to connect Tailscale now.';
+        if (tsChoice() === 'later') return '';
+        if (!$('fb-key').value.trim()) return 'Enter the auth key, or choose Not now.';
         var key = $('fb-key').value.trim(), hs = document.querySelector('input[name="fb-ctl"]:checked').value === 'hs';
         var server = $('fb-server').value.trim(), host = $('fb-host').value.trim();
         if (key && (key.length < 10 || /\s/.test(key))) return 'The auth key looks incomplete.';
@@ -12758,32 +12765,29 @@
         var on = Array.prototype.map.call(document.querySelectorAll('#fb-roles input:checked'), function (i) { return i.value; });
         return shown ? on : ['lan-tailnet', 'subnet-router', 'iot-ap', 'wol', 'home-assistant', 'monitoring', 'advanced'].filter(function (r) { return on.indexOf(r) >= 0; });
       }
-      function skipTailnet(wol) {
+      /* "Not now": nothing of a key typed before is kept or sent. */
+      function skipTailnet() {
         $('fb-key').value = '';
         $('fb-server').value = '';
         $('fb-host').value = 'tailnet-gateway';
         document.querySelector('input[name="fb-ctl"][value="ts"]').checked = true;
         $('fb-server-row').hidden = true;
         $('fb-share-ap').checked = false; st.apOff = true; delete st.auto['fb-share-ap'];
-        /* Same as ticking the choice by hand, preset included. */
-        var w = document.querySelector('#fb-roles input[value="wol"]');
-        if (wol && !w.checked) { w.checked = true; preset('wol', true); }
-        show(4);
       }
       function next() {
         var p = validate(); if (p) { err(p); return; }
         if (st.step === 5) { finish(); return; }
+        if (st.step === 3 && tsChoice() === 'later') skipTailnet();
         show(st.step + 1);
       }
       function start() {
         document.getElementById('authSetup').style.display = 'none';
         document.getElementById('authLogin').style.display = 'none';
         $('firstBoot').style.display = 'flex';
-        document.body.classList.add('auth-open');
+        document.body.classList.add('auth-open', 'fb-open');
         $('fbForm').addEventListener('submit', function (e) { e.preventDefault(); next(); });
         $('fb-back').addEventListener('click', function () { if (st.step > 1) show(st.step - 1); });
-        $('fb-wol-only').addEventListener('click', function () { skipTailnet(true); });
-        $('fb-skip-tailnet').addEventListener('click', function () { skipTailnet(false); });
+        document.querySelectorAll('input[name="fb-ts"]').forEach(function (r) { r.addEventListener('change', function () { $('fb-ts-box').hidden = tsChoice() !== 'now'; validate(); }); });
         $('fb-retry').addEventListener('click', begin);
         $('fb-code-btn').addEventListener('click', claimCode);
         $('fb-scan').addEventListener('click', scan);

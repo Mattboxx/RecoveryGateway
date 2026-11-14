@@ -341,7 +341,6 @@
  "Connect the uplink first, then add its subnet to the advertised routes manually.": "Zuerst den Uplink verbinden, dann sein Subnetz manuell zu den angekündigten Routen hinzufügen.",
  "Connect to the Internet.": "Mit dem Internet verbinden.",
  "Connect to your broker for state and authorized commands.": "Mit deinem Broker für Status und autorisierte Befehle verbinden.",
- "Connect your Tailnet.": "Verbinden Sie Ihr Tailnet.",
  "Connected": "Verbunden",
  "Connected clients": "Verbundene Clients",
  "Connected to the Tailscale/Headscale control server": "Mit dem Tailscale/Headscale-Steuerserver verbunden",
@@ -1999,5 +1998,13 @@
  "Waits for Tailscale": "Wartet auf Tailscale",
  "(waits for Tailscale)": "(wartet auf Tailscale)",
  "In recovery mode, the access point stays available whenever there is no Ethernet or WiFi LAN.": "Im Wiederherstellungsmodus bleibt der Access Point verfügbar, solange kein Ethernet- oder WLAN-LAN vorhanden ist.",
- "Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.": "Andere Tailnet-Geräte können die Internetverbindung des Gateways nutzen. Ist das Modem aktiv, zählt dieser Datenverkehr zu Ihrem Mobilfunktarif."
+ "Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.": "Andere Tailnet-Geräte können die Internetverbindung des Gateways nutzen. Ist das Modem aktiv, zählt dieser Datenverkehr zu Ihrem Mobilfunktarif.",
+ "Connect Tailscale now?": "Tailscale jetzt verbinden?",
+ "Tailscale lets you reach this network and your Tailnet services from anywhere. You can also connect it later from the dashboard.": "Mit Tailscale erreichen Sie dieses Netzwerk und Ihre Tailnet-Dienste von überall. Sie können es auch später im Dashboard verbinden.",
+ "Yes, connect now": "Ja, jetzt verbinden",
+ "You need an auth key from the Tailscale or Headscale admin console.": "Sie benötigen einen Auth-Schlüssel aus der Admin-Konsole von Tailscale oder Headscale.",
+ "Not now": "Nicht jetzt",
+ "Wake-on-LAN, device checks, Telegram, ntfy and Home Assistant work without Tailscale. You pick them in the next step.": "Wake-on-LAN, Geräteprüfungen, Telegram, ntfy und Home Assistant funktionieren ohne Tailscale. Sie wählen sie im nächsten Schritt.",
+ "Choose whether to connect Tailscale now.": "Wählen Sie, ob Tailscale jetzt verbunden werden soll.",
+ "Enter the auth key, or choose Not now.": "Geben Sie den Auth-Schlüssel ein oder wählen Sie Nicht jetzt."
 }
