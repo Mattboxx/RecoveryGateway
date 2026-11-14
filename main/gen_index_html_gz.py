@@ -66,7 +66,7 @@ def _minify_script(block):
 # Keep strings, escapes and URLs intact. Preserve spaces before colons
 # because they can be descendant combinators before pseudo-classes.
 _CSS_BOUNDARY = re.compile(
-    r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|url\((?:\\.|[^)])*\)|\\.)"""
+    r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|url\((?:\\.|[^)\\])*\)|\\.)"""
     r'|\s*(;\s*}|[{};,])\s*|(:)[ \t]+',
     re.I,
 )
