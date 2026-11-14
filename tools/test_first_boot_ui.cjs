@@ -171,6 +171,29 @@ async function uplinkFlows(context) {
   await page.close();
 }
 
+/* One-click recovery starts locally, leaving other roles available. */
+async function standaloneRecoveryFlow(context) {
+  const { page, g } = await paired(context);
+  await page.check('input[name="fb-up"][value="ethernet"]');
+  await page.click('#fb-next');
+  await page.waitForSelector('#fb-wol-only', { state: 'visible' });
+  await page.fill('#fb-key', SECRETS.key);
+  await page.click('#fb-wol-only');
+  await page.waitForSelector('#fb-apname', { state: 'visible' });
+  assert.deepEqual(await page.locator('#fb-roles input:checked').evaluateAll(roles => roles.map(role => role.value)), ['wol']);
+  assert.ok(!(await page.isChecked('#fb-share-ap')));
+  assert.ok(await page.isVisible('#fb-roles input[value="home-assistant"]'));
+  await page.click('#fb-next');
+  assert.match(await page.textContent('#fb-summary'), /TailnetDisabled/);
+  await page.click('#fb-next');
+  await page.waitForSelector('#fb-done-wol', { state: 'visible' });
+  assert.deepEqual(g.finish.roles, ['wol']);
+  assert.equal(g.finish.tailnet.auth_key, '', 'The optional local setup never submits the previous key');
+  assert.equal(g.finish.share_ap || g.finish.share_lan || g.finish.exit_node, false);
+  assert.doesNotMatch(await page.textContent('#fb-done-open'), /tailnet by its name/);
+  await page.close();
+}
+
 async function flow(browser, [width, height, locale], failures, full) {
   const touch = width < 768;
   const context = await browser.newContext({ viewport: { width, height }, hasTouch: touch, isMobile: touch, locale, timezoneId: 'Europe/Rome' });
@@ -308,6 +331,7 @@ async function flow(browser, [width, height, locale], failures, full) {
     if (errors.length) failures.push(`${where}: script errors ${[...new Set(errors)].slice(0, 3).join(' | ')}`);
     if (!full) return;
     await uplinkFlows(context);
+    await standaloneRecoveryFlow(context);
     // Setup-code pairing with one wrong code, on a fresh page.
     const p2 = await context.newPage(); const g2 = mockGateway(); await p2.route('http://esp32.test/**', g2.handle);
     await p2.goto('http://esp32.test/'); await p2.waitForSelector('#firstBoot', { state: 'visible' });
