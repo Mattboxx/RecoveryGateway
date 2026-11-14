@@ -1,6 +1,8 @@
 # Maintainer continuation
 
-## Active candidate — 3.0.22-beta.1 first-boot choices by goal
+## Released — 3.0.22 first-boot choices by goal
+
+- 2026-11-14: PR #31 merged to Main as `9ec3231`; GitHub release `v3.0.22` (Latest) with 10 assets, every digest re-downloaded and matched `SHA256SUMS.txt`; Pages deployed and the live `firmware/3.0.22/firmware.bin` matches 6cea151c915f6e9f04981980c31be647440ea5ad9eb89ce77efb60d544860119. Board A was not updated; hardware evidence is the owner's first boot of the equivalent beta.2 on board B.
 
 - Source `60cc662` on `feat/setup-goal-choices-20261114` (from `release/3.0.21-final`). Step 4 of the first-boot wizard groups the functions by goal, marks Tailscale dependencies, shows a live summary and undoes presets on untick. Field ids, role values, defaults and the finish request are unchanged.
 - Image and ELF are in ignored `build/development-3.0.22-beta.1/60cc662/` with `SHA256SUMS` (BIN daaa15c86a4c71efbf3eae4c763cc29f8e2b5fc5239b82b657258c1039d8275b). The owner approved the preview and the build. Flash, OTA, push and publication still need explicit owner authorization.
