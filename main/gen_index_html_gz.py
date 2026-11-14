@@ -4,7 +4,7 @@ firmware. Invoked from main/CMakeLists.txt.
 
 Steps (all deterministic, standard library only):
 1. Conservative minification, segment-aware: HTML comments and blank or
-   indentation-only whitespace in markup, comments in <style>, and
+   indentation-only whitespace in markup, CSS comments and spacing, and
    comment-only lines in <script>. Code, strings and <pre>/<textarea>
    content are never rewritten. The browser suite runs against this output
    (`--html`) so a minifier mistake fails the tests, not the device.
@@ -63,9 +63,25 @@ def _minify_script(block):
     return open_tag + '\n' + '\n'.join(out) + '\n' + close
 
 
+# Keep strings, escapes and URLs intact. Preserve spaces before colons
+# because they can be descendant combinators before pseudo-classes.
+_CSS_BOUNDARY = re.compile(
+    r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|url\((?:\\.|[^)])*\)|\\.)"""
+    r'|\s*(;\s*}|[{};,])\s*|(:)[ \t]+',
+    re.I,
+)
+
+
 def _minify_style(block):
     block = re.sub(r'/\*.*?\*/', '', block, flags=re.S)
-    return _trim_lines(block)
+
+    def compact(match):
+        protected, boundary, colon = match.groups()
+        if boundary and boundary.startswith(';') and boundary.endswith('}'):
+            return '}'
+        return protected or boundary or colon
+
+    return _CSS_BOUNDARY.sub(compact, _trim_lines(block))
 
 
 def minify(text):
