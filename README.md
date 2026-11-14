@@ -69,14 +69,13 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.22
+## What's new in Firmware 3.0.23
 
-- First boot groups the functions by goal and shows which ones need Tailscale.
-  Wake-on-LAN and device checks come first and work without it.
-- A live summary shows what each choice turns on now and what to set up later.
-- Tailscale is one clear question: connect now, or not now.
-- Choose the gateway's `.local` name during setup. The gateway Wi-Fi is named
-  after its mode and can be left open only if you explicitly choose that.
+- **Network → Gateway Wi-Fi** can make the gateway's own Wi-Fi an open network
+  and close it again with a password, as first boot can.
+- On phones and tablets the idle timer stays inside the top bar.
+- The clearer first boot of 3.0.22 is included: functions grouped by goal,
+  one Tailscale question and the `.local` name.
 
 [Install the current firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
 · [Full changelog](CHANGELOG.md)
