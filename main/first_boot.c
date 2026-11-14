@@ -445,7 +445,7 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     const char *ap_ssid = str_of(cmd, "ap_ssid"), *ap_pw = str_of(cmd, "ap_password");
     const char *key = str_of(tn, "auth_key"), *server = str_of(tn, "login_server"), *host = str_of(tn, "hostname");
     const cJSON *up = cJSON_GetObjectItem(cmd, "uplink");
-    const char *type = str_of(up, "type"), *tz = str_of(cmd, "tz");
+    const char *type = str_of(up, "type"), *tz = str_of(cmd, "tz"), *lan = str_of(cmd, "lan_name");
     if (!type) type = "wifi";                                /* 3.0 pages */
     bool has_wifi = ssid && *ssid, eth_up = !strcmp(type, "ethernet"), cell_up = !strcmp(type, "cellular");
     const char *reason = fb_check_admin_password(admin, ssid);
@@ -503,6 +503,7 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     if (!reason) reason = fb_check_auth_key(key);
     if (!reason) reason = fb_check_login_server(server);
     if (!reason) reason = fb_check_hostname(host);
+    if (!reason) reason = fb_check_lan_name(lan);
     if (!reason && ap_pw && admin && !strcmp(ap_pw, admin)) reason = "use a different password for the access point";
     if (reason) return send_error(req, "400 Bad Request", "invalid", reason);
     if (has_wifi && !wifi_setup_test_matches(ssid, wpw ? wpw : "")) {
@@ -533,6 +534,8 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     if (e == ESP_OK && join) e = nvs_param_set_str("ts_authkey", key);
     if (e == ESP_OK && join) e = nvs_param_set_str("ts_login", server ? server : "");
     if (e == ESP_OK && join && host && *host) e = nvs_param_set_str("ts_hostname", host);
+    /* Optional: without it the board keeps its own <name>.local. */
+    if (e == ESP_OK && lan && *lan) e = nvs_param_set_str("hostname", lan);
     if (e == ESP_OK) e = nvs_param_set_int("ts_adv_ap", share_ap ? 1 : 0);
     if (e == ESP_OK) e = nvs_param_set_str("ts_routes", cidr);
     if (e == ESP_OK && eth_up) e = eth_uplink_set_config(&eth, why, sizeof why);

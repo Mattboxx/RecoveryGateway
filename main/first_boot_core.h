@@ -110,6 +110,7 @@ const char *fb_check_ap_password(const char *pw);
 const char *fb_check_auth_key(const char *key);
 const char *fb_check_login_server(const char *url);
 const char *fb_check_hostname(const char *name);
+const char *fb_check_lan_name(const char *name);
 /* Internet connection chosen in setup: "wifi", "ethernet" or "cellular".
  * Wi-Fi needs a network; with only a SIM the gateway is reached through
  * the tailnet, so an auth key is needed. NULL = acceptable. */

@@ -277,6 +277,15 @@ const char *fb_check_hostname(const char *name)
     return NULL;
 }
 
+/* Name on the home network (<name>.local, and the DHCP hostname). Empty keeps
+ * the board's own name; otherwise the rule of lan_name.c (LAN_NAME_MAX 32). */
+const char *fb_check_lan_name(const char *name)
+{
+    if (!name || !*name) return NULL;
+    if (strlen(name) > 32) return "home network name must be at most 32 characters";
+    return fb_check_hostname(name) ? "home network name may use a-z, 0-9 and '-' (not at the start or end)" : NULL;
+}
+
 int fb_hex_decode(const char *hex, uint8_t *out, size_t out_len)
 {
     if (!hex || strlen(hex) != out_len * 2) return -1;

@@ -8,8 +8,8 @@
  *   NODE_PATH=<playwright> node tools/preview_first_boot.cjs [--port 8767] [--shots <dir>]
  *
  * Cases (?case=...): wol (Not now for Tailscale, then Wake-on-LAN; default),
- * skip (Not now for Tailscale, nothing chosen), tailnet (with a key), tailscale (stops on the Tailscale
- * question), ethernet (cable, no
+ * skip (Not now for Tailscale, nothing chosen), tailnet (with a key), internet (stops after the Wi-Fi
+ * test, at the .local name), tailscale (stops on the Tailscale question), ethernet (cable, no
  * Tailscale), manual (whole wizard by hand). --shots saves desktop and phone
  * screenshots of the wol case and exits. */
 const http = require('node:http');
@@ -32,7 +32,7 @@ const PREVIEW = `
 </style>
 <div id="pv-cover" data-no-i18n>Opening the choice of functions with synthetic data…</div>
 <div id="pv-bar" data-no-i18n><b>Preview, synthetic data</b>
-  <a href="?case=tailscale">Tailscale step</a><a href="?case=wol">Only Wake-on-LAN, no Tailscale</a><a href="?case=skip">Without Tailscale</a>
+  <a href="?case=internet">Internet step</a><a href="?case=tailscale">Tailscale step</a><a href="?case=wol">Only Wake-on-LAN, no Tailscale</a><a href="?case=skip">Without Tailscale</a>
   <a href="?case=tailnet">With a Tailscale key</a><a href="?case=ethernet">Ethernet, no Tailscale</a><a href="?case=manual">Whole wizard</a></div>
 <script>
 (function () {
@@ -49,7 +49,9 @@ const PREVIEW = `
     await until(function () { return shown('fb-test') || shown('fb-eth-box'); });
     if (c === 'ethernet') document.querySelector('input[name="fb-up"][value="ethernet"]').click();
     else { set('fb-ssid', 'HomeNetwork'); set('fb-wpw', 'synthetic-wifi-pass'); $('fb-test').click(); await until(function () { return $('fb-tested-ip').value; }); }
-    await until(function () { return !$('fb-next').disabled; }); $('fb-next').click();
+    await until(function () { return !$('fb-next').disabled; });
+    if (c === 'internet') { $('pv-cover').remove(); $('fb-lan').scrollIntoView({ block: 'center' }); return; }
+    $('fb-next').click();
     await until(function () { return shown('fb-ts-later'); });
     if (c === 'tailscale') { $('pv-cover').remove(); return; }
     $(c === 'tailnet' ? 'fb-ts-now' : 'fb-ts-later').click();
@@ -115,6 +117,18 @@ server.listen(port, '127.0.0.1', async () => {
       await p.waitForSelector('#pv-cover', { state: 'detached' });
       await p.waitForTimeout(300);
       await p.screenshot({ path: path.join(shots, `first-boot-tailscale-${name}.png`) });
+      await p.goto(base + '?case=internet');
+      await p.waitForSelector('#pv-cover', { state: 'detached' });
+      await p.waitForTimeout(300);
+      await p.screenshot({ path: path.join(shots, `first-boot-internet-${name}.png`) });
+      await p.goto(base + '?case=wol');
+      await p.waitForSelector('#pv-cover', { state: 'detached' });
+      await p.evaluate(() => { document.getElementById('fb-net').open = true; document.getElementById('fb-net').scrollIntoView({ block: 'start' }); });
+      await p.waitForTimeout(200);
+      await p.screenshot({ path: path.join(shots, `first-boot-wifi-box-${name}.png`) });
+      await p.evaluate(() => { document.querySelector('#fb-roles input[value="iot-ap"]').click(); document.querySelector('.fb-box').scrollIntoView({ block: 'start' }); });
+      await p.waitForTimeout(200);
+      await p.screenshot({ path: path.join(shots, `first-boot-wifi-box-iot-${name}.png`) });
       await ctx.close();
     }
   } finally { await browser.close(); server.close(); }

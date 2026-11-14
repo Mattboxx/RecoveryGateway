@@ -1641,6 +1641,17 @@
     .fb-picked .fb-summary { margin: var(--sp-1) 0 0; }
     .fb-picked em { color: var(--warning); }
     .fb-box legend { font-weight: var(--weight-semibold); padding: 0 var(--sp-1); }
+    .fb-more { border: 1px solid var(--border); border-radius: var(--radius-md); margin: var(--sp-3) 0; background: var(--bg-elevated); }
+    .fb-more > summary { list-style: none; display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; padding: var(--sp-3); cursor: pointer; }
+    .fb-more > summary::-webkit-details-marker { display: none; }
+    .fb-more > summary > span:first-child { flex: 1; min-width: 0; }
+    .fb-more > summary small { display: block; color: var(--fg-muted); font-size: var(--text-sm); margin-top: 2px; }
+    .fb-more > summary::after { content: ""; flex: none; width: 0.55rem; height: 0.55rem; margin: 0 var(--sp-1) 0.2rem;
+      border: solid var(--accent); border-width: 0 2px 2px 0; transform: rotate(45deg); transition: transform 160ms ease; }
+    .fb-more[open] > summary::after { transform: rotate(-135deg); margin-bottom: -0.2rem; }
+    .fb-more[open] > summary { border-bottom: 1px solid var(--border); }
+    .fb-more > :not(summary) { margin: var(--sp-2) var(--sp-3); }
+    .fb-more .badge:empty { display: none; }
     .fb-meter { height: 6px; border-radius: 3px; background: var(--border); margin-top: var(--sp-2); overflow: hidden; }
     .fb-meter span { display: block; height: 100%; width: 0; background: var(--danger); transition: width 160ms ease; }
     .fb-summary { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: var(--sp-1) var(--sp-3); margin: 0 0 var(--sp-3); }
@@ -2220,6 +2231,11 @@
         </div>
         <p class="form-hint">During the test this setup Wi-Fi may drop for a moment; your device reconnects by itself and this page continues.</p>
         </div>
+        <div class="form-group" id="fb-lan-row">
+          <label class="form-label" for="fb-lan">Name on your home network</label>
+          <div class="fb-row"><input class="input mono" id="fb-lan" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false"><span class="mono" data-no-i18n>.local</span></div>
+          <span class="auth-hint">After the restart, devices on your home network open the gateway at http://name.local/. Keep the suggested name, which is unique to this board, or choose one that no other device on the network uses.</span>
+        </div>
       </section>
 
       <section class="fb-step" data-step="3" hidden>
@@ -2270,30 +2286,30 @@
           <label class="fb-opt"><input type="checkbox" value="advanced"><span><b>Advanced configuration</b><small>Show every setting on every page.</small></span></label>
         </div>
         <div class="fb-picked" id="fb-picked" aria-live="polite"></div>
-        <details class="fb-details" id="fb-net"><summary>Network options</summary>
+        <details class="fb-more" id="fb-net"><summary><span><b>Network options</b><small>Share networks with the Tailnet, exit node.</small></span><span class="badge badge-neutral" id="fb-net-n"></span></summary>
         <label class="fb-opt" id="fb-share-lan-row"><input type="checkbox" id="fb-share-lan"><span><b>Share my home network with the tailnet</b> <span class="badge badge-info">Needs Tailscale</span><small>Advertises the home LAN as a subnet route; approve it in the admin console. Needs a successful Wi-Fi test.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-share-ap" checked><span><b>Share the gateway's own Wi-Fi network</b> <span class="badge badge-info">Needs Tailscale</span><small>Devices connected to the gateway's Wi-Fi can reach the tailnet and be reached from it.</small></span></label>
         <label class="fb-opt" id="fb-exit-row"><input type="checkbox" id="fb-exit"><span><b>Offer this gateway as an exit node</b> <span class="badge badge-info">Needs Tailscale</span><small>Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.</small></span></label>
-        <label class="fb-opt"><input type="checkbox" id="fb-ap-always"><span><b>Keep the gateway's own Wi-Fi always on</b><small>In recovery mode, the access point stays available whenever there is no Ethernet or WiFi LAN.</small></span></label>
         </details>
-        <details class="fb-details" id="fb-extras"><summary>Extras</summary>
+        <details class="fb-more" id="fb-extras"><summary><span><b>Extras</b><small>History, trends, settings copies, Tailnet names.</small></span><span class="badge badge-neutral" id="fb-extras-n"></span></summary>
         <label class="fb-opt"><input type="checkbox" id="fb-x-history"><span><b>Keep an event history</b><small>Starts, crashes, updates, uplink and tailnet changes, kept in the gateway's flash.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-x-trends"><span><b>Record memory and traffic trends</b><small>Graphs on the Status page: 6 hours in detail, about 45 days in summary.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-x-snapshots"><span><b>Save a settings copy before each update</b><small>Go back to the previous settings from System → Backup &amp; reset → Settings copies.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-x-names"><span><b>Tailnet names for devices on the gateway's Wi-Fi</b> <span class="badge badge-info">Needs Tailscale</span><small>They can use names like nas or nas.tail1234.ts.net instead of 100.x addresses.</small></span></label>
         <p class="auth-hint">Telegram, email and dynamic DNS need your accounts: set them up later under Automation and Network.</p>
         </details>
-        <fieldset class="fb-box"><legend>Emergency Wi-Fi</legend>
-          <p class="form-hint"><span id="fb-ap-on">Always on: you and your IoT devices can connect to it at any time.</span><span id="fb-ap-off">It turns on only when the gateway cannot reach your home network, so you can still open this page and fix the settings.</span></p>
+        <fieldset class="fb-box"><legend><span id="fb-ap-off-t">Emergency Wi-Fi</span><span id="fb-ap-on-t">Gateway Wi-Fi</span></legend>
+          <p class="form-hint"><span id="fb-ap-on">Always on: your IoT devices connect to it. If the home network fails, it stays the same network, and you can join it to fix the settings.</span><span id="fb-ap-off">Off while the gateway is connected to your home network (Wi-Fi or cable). When that connection is lost for about a minute, it turns on so you can open this page and fix the settings.</span></p>
+          <label class="fb-opt"><input type="checkbox" id="fb-ap-always"><span><b>Keep the gateway's own Wi-Fi always on</b><small>Needed for IoT devices that connect to the gateway.</small></span></label>
           <div class="form-group">
             <label class="form-label" for="fb-apname">Gateway Wi-Fi name</label>
             <input class="input" id="fb-apname" maxlength="32" spellcheck="false">
           </div>
           <div class="form-group">
             <label class="form-label" for="fb-appw">Gateway Wi-Fi password</label>
-            <div class="fb-row"><input class="input" id="fb-appw" maxlength="63" autocomplete="off" spellcheck="false">
+            <div class="fb-row"><input class="input" id="fb-appw" maxlength="63" autocomplete="off" spellcheck="false" placeholder="Required">
               <button class="btn btn-secondary btn-sm" id="fb-appw-gen" type="button">Generate</button></div>
-            <span class="auth-hint">At least 8 characters and different from the admin password. Write it down: you need it when the home Wi-Fi is unavailable.</span>
+            <span class="auth-hint">At least 8 characters and different from the admin password. Write it down: you need it to join this network.</span>
           </div>
         </fieldset>
       </section>
@@ -12419,8 +12435,11 @@
           var c = pinProblem(pins('fb-cell-', ['tx', 'rx', 'pwrkey']), ['pwrkey']); if (c) return c;
           if (!$('fb-data-ack').checked) return 'Confirm that the gateway may use mobile data.';
         }
+        if (lanName() && !/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(lanName())) return 'The home network name may use a-z, 0-9 and - (not at the start or end), up to 32 characters.';
         return wifiWanted() ? wifiProblem() : '';
       }
+      /* <name>.local on the home network; none without one (SIM only). */
+      function lanName() { return uplink() === 'cellular' && !wifiWanted() ? '' : $('fb-lan').value.trim(); }
       function wifiProblem() {
         var ssid = $('fb-ssid').value, pw = $('fb-wpw').value;
         if (!ssid) return 'Choose a Wi-Fi network.';
@@ -12510,10 +12529,10 @@
       function paired(s) {
         st.defaults = s || {};
         if (!$('fb-apname').value) $('fb-apname').value = st.defaults.default_ap_ssid || 'ESP32-Tailnet';
+        if (!$('fb-lan').value) $('fb-lan').value = st.defaults.lan_name || '';
         var ups = st.defaults.uplinks || ['wifi'];
         $('fb-up-eth').hidden = ups.indexOf('ethernet') < 0;
         $('fb-up-cell').hidden = ups.indexOf('cellular') < 0;
-        if (!$('fb-appw').value) generateApPassword();
         status('Paired. Only this browser can continue the setup.');
         show(1);
       }
@@ -12623,7 +12642,7 @@
       /* Live summary of the choices; returns what waits for Tailscale. */
       function picked() {
         var box = $('fb-picked'), ts = joining(), wait = [], seen = {}, ul, dl;
-        var opts = Array.prototype.filter.call(document.querySelectorAll('#fb-net input, #fb-extras input'), function (i) { return i.checked; });
+        var opts = Array.prototype.filter.call(document.querySelectorAll('#fb-net input, #fb-extras input, #fb-ap-always'), function (i) { return i.checked; });
         function el(tag, text, parent, cls) { var e = document.createElement(tag); if (text) e.textContent = text; if (cls) e.className = cls; (parent || box).appendChild(e); return e; }
         function needs(label) { return !ts && label.querySelector('.badge-info'); }
         function list(title, items) {
@@ -12639,7 +12658,8 @@
           });
         }
         $('fb-ts-on').hidden = !ts; $('fb-ts-off').hidden = ts;
-        $('fb-ap-on').hidden = !$('fb-ap-always').checked; $('fb-ap-off').hidden = $('fb-ap-always').checked;
+        ['', '-t'].forEach(function (x) { $('fb-ap-on' + x).hidden = !$('fb-ap-always').checked; $('fb-ap-off' + x).hidden = $('fb-ap-always').checked; });
+        ['fb-net', 'fb-extras'].forEach(function (id) { var n = document.querySelectorAll('#' + id + ' input:checked').length; $(id + '-n').textContent = n ? '✓ ' + n : ''; });
         box.textContent = '';
         el('strong', 'Your choices');
         if (!roles().length) el('div', 'Nothing selected: the gateway starts with the basics, and you can add functions later from the dashboard.', box, 'form-hint');
@@ -12665,7 +12685,7 @@
         row(dl, 'Internet connection', T(UP[up]) + (up !== 'wifi' && wifiWanted() ? ' + ' + T('Wi-Fi') : ''));
         if (wifiWanted()) row(dl, 'Home Wi-Fi', $('fb-ssid').value + (st.wifiOk ? ' (' + T('tested') + ')' : ' (' + T('not tested') + ')'));
         if (up === 'cellular') row(dl, 'APN', $('fb-apn').value.trim() + (wifiWanted() ? ' · ' + T('backup when the Wi-Fi is out of range') : ''));
-        var lan = st.defaults.lan_name ? 'http://' + st.defaults.lan_name + '.local/' : '';
+        var lan = lanName() || st.defaults.lan_name ? 'http://' + (lanName() || st.defaults.lan_name) + '.local/' : '';
         row(dl, 'Address after the restart', up === 'cellular' && !wifiWanted() ? (lan || T('Connect to the gateway access point'))
           : st.wifiIp && up === 'wifi' ? 'http://' + st.wifiIp + '/' + (lan ? '  ·  ' + lan : '') : (lan || T('Test the Wi-Fi to see it')));
         var tz = browserTz();
@@ -12697,6 +12717,7 @@
               { apn: $('fb-apn').value.trim(), pin: $('fb-simpin').value, roaming: $('fb-roam').checked, data_ack: $('fb-data-ack').checked }) : undefined },
           tz: browserTz().rule,
           ap_ssid: $('fb-apname').value, ap_password: $('fb-appw').value, ap_recovery_only: !$('fb-ap-always').checked,
+          lan_name: lanName() === st.defaults.lan_name ? '' : lanName(),
           tailnet: { auth_key: $('fb-key').value.trim(), login_server: hs ? $('fb-server').value.trim() : '', hostname: $('fb-host').value.trim() },
           share_lan: $('fb-share-lan').checked && up === 'wifi', share_ap: $('fb-share-ap').checked, exit_node: $('fb-exit').checked,
           roles: roles(), advanced_ui: roles().indexOf('advanced') >= 0,
@@ -12739,6 +12760,7 @@
         $('fb-wifi-backup-row').hidden = up === 'wifi';
         $('fb-wifi-backup-note').textContent = T(up === 'ethernet' ? 'As a backup when the cable is unplugged.' : 'Used whenever it is in range; the SIM takes over when it is not.');
         $('fb-wifi-box').hidden = !wifiWanted();
+        $('fb-lan-row').hidden = uplink() === 'cellular' && !wifiWanted();
         /* The home network can be shared at setup only after a Wi-Fi test;
          * on Ethernet it can be added from the Tailscale page later. */
         $('fb-share-lan-row').hidden = up !== 'wifi';
@@ -12812,6 +12834,7 @@
         /* Summaries copy names from the page: redraw them in a newly chosen language. */
         document.addEventListener('i18n-applied', function () { if (st.step === 4) picked(); else if (st.step === 5 && !st.finished) summary(); });
         $('fb-ssid').addEventListener('input', function () { resetWifiTest(); validate(); });
+        $('fb-lan').addEventListener('input', function () { var v = this.value.toLowerCase(); if (v !== this.value) this.value = v; validate(); });
         document.querySelectorAll('input[name="fb-up"]').forEach(function (r) { r.addEventListener('change', shapeUplink); });
         $('fb-wifi-backup').addEventListener('change', shapeUplink);
         ['fb-apn', 'fb-simpin', 'fb-roam', 'fb-data-ack', 'fb-eth-sclk', 'fb-eth-mosi', 'fb-eth-miso', 'fb-eth-cs', 'fb-eth-intr', 'fb-eth-rst',
