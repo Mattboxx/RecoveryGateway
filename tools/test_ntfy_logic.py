@@ -70,6 +70,11 @@ static int wol_count(void){return 0;}
 static bool wol_get(int i,wol_device_t *d){(void)i;(void)d;return false;}
 static void wol_format_mac(const uint8_t mac[6],char out[18]){(void)mac;strcpy(out,"00:00:00:00:00:01");}
 static int homelab_ops_command(const char *s,bool wake,ops_recovery_origin_t origin){(void)s;(void)wake;assert(origin==OPS_RECOVERY_NTFY);return ESP_FAIL;}
+#define ESP_ERR_NOT_FOUND -8
+static bool recovery_permission;
+static bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin){return origin==OPS_RECOVERY_NTFY&&recovery_permission;}
+static void saved_tcp_summary(char *out,size_t cap){snprintf(out,cap,"printer: reachable");}
+static int saved_tcp_request(const char *name,ops_recovery_origin_t origin){assert(origin==OPS_RECOVERY_NTFY);return !strcmp(name,"printer")?ESP_OK:ESP_ERR_NOT_FOUND;}
 static const char *esp_err_to_name(esp_err_t e) { (void)e; return "fixture error"; }
 '''
 boot_fixture = r'''
@@ -85,6 +90,12 @@ static void ota_remote_get_state(ota_remote_state_t *s){strcpy(s->latest_version
 '''
 tests = r'''
 int main(void) {
+    char reply[160]; const char *title;
+    assert(remote_command_run("probe printer",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_ERROR);
+    recovery_permission=true;
+    assert(remote_command_run("probe printer",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_OK);
+    assert(remote_command_run("probe 192.0.2.15:443",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_ERROR);
+    assert(remote_command_run("checks",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_OK&&strstr(reply,"printer: reachable"));
     ntfy_integration_config_t c={.info_enabled=true};
     info_result=ESP_FAIL; handle_command(&c," info\n");
     assert(s_status.command_errors==1 && s_status.commands_received==0);

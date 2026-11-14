@@ -10,6 +10,7 @@
 #include "nvs_params.h"
 #include "nvs.h"
 #include "esp_timer.h"
+#include "esp_attr.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -21,6 +22,7 @@
 #include "ml_policy.h"
 #include <stddef.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -70,6 +72,39 @@ static bool health_valid(const health_config_t *c){
     if(c->tailnet_target[0]&&inet_pton(AF_INET,c->tailnet_target,&a)==1 && (ntohl(a.s_addr)&0xffc00000u)!=0x64400000u)return false;
     return true;
 }
+EXT_RAM_BSS_ATTR static saved_tcp_target_t saved_targets[SAVED_TCP_MAX];
+EXT_RAM_BSS_ATTR static health_result saved_results[SAVED_TCP_MAX];
+static uint32_t saved_generation;
+static uint64_t saved_next, saved_manual_after;
+static int saved_pending = -1;
+static ops_recovery_origin_t saved_origin;
+static unsigned saved_cursor;
+static bool saved_running;
+
+static bool saved_valid(const saved_tcp_target_t targets[SAVED_TCP_MAX])
+{
+    if (!targets) return false;
+    for (unsigned i=0; i<SAVED_TCP_MAX; ++i) {
+        const saved_tcp_target_t *t=&targets[i];
+        if (!memchr(t->name,0,sizeof t->name) || !memchr(t->address,0,sizeof t->address)) return false;
+        if (!t->name[0]) {
+            if (t->address[0] || t->port || t->interval_s || t->notify) return false;
+            continue;
+        }
+        struct in_addr addr;
+        if (!t->port || t->notify>1 || (t->interval_s && (t->interval_s<30 || t->interval_s>3600))
+                || inet_pton(AF_INET,t->address,&addr)!=1) return false;
+        uint32_t ip=ntohl(addr.s_addr);
+        unsigned octet=ip>>24;
+        if (!octet || octet==127 || octet>=224 || (ip&0xffff0000u)==0xa9fe0000u) return false;
+        for (const char *c=t->name;*c;++c)
+            if (!((*c>='a'&&*c<='z')||(*c>='A'&&*c<='Z')||(*c>='0'&&*c<='9')||*c=='-'||*c=='_')) return false;
+        for (unsigned j=0;j<i;++j)
+            if (!strcasecmp(t->name,targets[j].name)) return false;
+    }
+    return true;
+}
+
 void health_monitor_init(void){
     portENTER_CRITICAL(&health_init_lock);
     if(!health_lock)health_lock=xSemaphoreCreateMutexStatic(&health_lock_storage);
@@ -80,11 +115,23 @@ void health_monitor_init(void){
     if(nvs_open(NVS_NAMESPACE,NVS_READONLY,&nvs)==ESP_OK){
         if(nvs_get_blob(nvs,"ops_health",&s,&size)==ESP_OK&&size==sizeof s&&s.magic==HEALTH_MAGIC
            &&s.version==1&&s.checksum==health_checksum(&s)&&health_valid(&s.config))configuration=s.config;
+        size=sizeof saved_targets;
+        if(nvs_get_blob(nvs,"ops_tcp_v1",saved_targets,&size)!=ESP_OK || size!=sizeof saved_targets || !saved_valid(saved_targets))
+            memset(saved_targets,0,sizeof saved_targets);
         nvs_close(nvs);
     }
     health_loaded=true;HUNLOCK();
 }
 bool health_monitor_enabled(void){health_monitor_init();HLOCK();bool enabled=configuration.enabled;HUNLOCK();return enabled;}
+bool saved_tcp_schedule_enabled(void)
+{
+    health_monitor_init();
+    HLOCK();
+    bool enabled=false;
+    for (unsigned i=0;i<SAVED_TCP_MAX;++i) enabled=enabled || saved_targets[i].interval_s;
+    HUNLOCK();
+    return enabled;
+}
 static esp_err_t health_save_locked(const health_config_t *config){
     health_store_t s={.magic=HEALTH_MAGIC,.version=1,.config=*config};s.checksum=health_checksum(&s);
     nvs_handle_t nvs;esp_err_t err=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&nvs);
@@ -104,6 +151,89 @@ esp_err_t health_monitor_set_enabled(bool enabled){
     HLOCK();health_config_t c=configuration;c.enabled=enabled;
     esp_err_t err=health_save_locked(&c);HUNLOCK();return err;
 }
+esp_err_t saved_tcp_set(const saved_tcp_target_t targets[SAVED_TCP_MAX])
+{
+    if (!saved_valid(targets)) return ESP_ERR_INVALID_ARG;
+    health_monitor_init();
+    for (unsigned i=0;i<SAVED_TCP_MAX;++i) {
+        if (!targets[i].interval_s) continue;
+        esp_err_t err=homelab_ops_start_optional_worker();
+        if (err!=ESP_OK) return err;
+        break;
+    }
+    HLOCK();
+    nvs_handle_t nvs;
+    esp_err_t err=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&nvs);
+    if (err==ESP_OK) {
+        err=nvs_set_blob(nvs,"ops_tcp_v1",targets,sizeof saved_targets);
+        if (err==ESP_OK) err=nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+    if (err==ESP_OK) {
+        memcpy(saved_targets,targets,sizeof saved_targets);
+        memset(saved_results,0,sizeof saved_results);
+        saved_pending=-1;
+        saved_next=0;
+        saved_generation++;
+    }
+    HUNLOCK();
+    return err;
+}
+
+esp_err_t saved_tcp_request(const char *name, ops_recovery_origin_t origin)
+{
+    if (!name || !*name || strlen(name)>=sizeof saved_targets[0].name) return ESP_ERR_INVALID_ARG;
+    if (!homelab_ops_recovery_allowed(origin)) return ESP_ERR_NOT_SUPPORTED;
+    health_monitor_init();
+    HLOCK();
+    bool exists=false;
+    for (unsigned i=0;i<SAVED_TCP_MAX;++i)
+        if (saved_targets[i].name[0] && !strcasecmp(name,saved_targets[i].name)) {exists=true;break;}
+    HUNLOCK();
+    if (!exists) return ESP_ERR_NOT_FOUND;
+    esp_err_t err=homelab_ops_start_optional_worker();
+    if (err!=ESP_OK) return err;
+    HLOCK();
+    if (saved_pending>=0 || saved_running) err=ESP_ERR_INVALID_STATE;
+    else if (health_now()<saved_manual_after) err=ESP_ERR_TIMEOUT;
+    else {
+        err=ESP_ERR_NOT_FOUND;
+        for (unsigned i=0;i<SAVED_TCP_MAX;++i) {
+            if (!saved_targets[i].name[0] || strcasecmp(name,saved_targets[i].name)) continue;
+            saved_pending=(int)i;
+            saved_origin=origin;
+            saved_manual_after=health_now()+5000;
+            err=ESP_OK;
+            break;
+        }
+    }
+    HUNLOCK();
+    return err;
+}
+
+static const char *saved_state(const health_result *r)
+{
+    if (!r->observed) return "not checked";
+    return r->outcome>0 ? "reachable" : r->outcome==0 ? "not reachable" : "inconclusive";
+}
+
+void saved_tcp_summary(char *out,size_t capacity)
+{
+    if (!out || !capacity) return;
+    health_monitor_init();
+    HLOCK();
+    size_t used=0;
+    out[0]='\0';
+    for (unsigned i=0;i<SAVED_TCP_MAX;++i) {
+        if (!saved_targets[i].name[0]) continue;
+        int n=snprintf(out+used,capacity-used,"%s%s: %s",used?"\n":"",saved_targets[i].name,saved_state(&saved_results[i]));
+        if (n<0 || (size_t)n>=capacity-used) break;
+        used+=(size_t)n;
+    }
+    if (!out[0]) snprintf(out,capacity,"No saved TCP checks.");
+    HUNLOCK();
+}
+
 static bool health_configured(const health_config_t *c,unsigned role){
     return role==0?c->gateway_port!=0:role==1?c->dns_name[0]!=0:role==2?c->internet_ip[0]!=0:c->tailnet_target[0]!=0;
 }
@@ -115,12 +245,82 @@ static int health_tcp(uint32_t nbo,uint16_t port){
     int flags=fcntl(fd,F_GETFL,0);if(flags<0||fcntl(fd,F_SETFL,flags|O_NONBLOCK)<0){close(fd);return -1;}
     struct sockaddr_in a={.sin_family=AF_INET,.sin_port=htons(port),.sin_addr={.s_addr=nbo}};
     int result=connect(fd,(struct sockaddr*)&a,sizeof a);
-    if(result<0&&errno!=EINPROGRESS){close(fd);return 0;}
+    if(result==0){close(fd);return 1;}
+    if(errno!=EINPROGRESS){int err=errno;close(fd);return err==ECONNREFUSED||err==ETIMEDOUT?0:-1;}
     fd_set writable;FD_ZERO(&writable);FD_SET(fd,&writable);struct timeval timeout={.tv_sec=1};
     int ready=select(fd+1,NULL,&writable,NULL,&timeout),error=0;socklen_t size=sizeof error;
-    bool ok=ready>0&&getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&size)==0&&!error;
-    close(fd);return ready<0?-1:ok?1:0;
+    int outcome=ready==0 ? 0 : -1;
+    if (ready>0 && getsockopt(fd,SOL_SOCKET,SO_ERROR,&error,&size)==0)
+        outcome=!error ? 1 : error==ECONNREFUSED || error==ETIMEDOUT ? 0 : -1;
+    close(fd);
+    return outcome;
 }
+/* The shared ops worker executes at most one extra TCP check per turn. */
+static void saved_tcp_poll(void)
+{
+    uint64_t now=health_now();
+    HLOCK();
+    int index=saved_pending;
+    bool manual=index>=0;
+    if (!manual && now>=saved_next) {
+        for (unsigned i=0;i<SAVED_TCP_MAX;++i) {
+            unsigned candidate=(saved_cursor+i)%SAVED_TCP_MAX;
+            if (saved_targets[candidate].interval_s && now>=saved_results[candidate].due) {
+                index=(int)candidate;
+                saved_cursor=(candidate+1)%SAVED_TCP_MAX;
+                break;
+            }
+        }
+    }
+    if (index<0) { HUNLOCK(); return; }
+    ops_recovery_origin_t origin=saved_origin;
+    saved_pending=-1;
+    saved_running=true;
+    saved_next=now+5000;
+    saved_tcp_target_t t=saved_targets[index];
+    uint32_t generation=saved_generation;
+    HUNLOCK();
+
+    struct in_addr a;
+    esp_netif_ip_info_t uplink={0};
+    int result=-1;
+    if ((!manual || homelab_ops_recovery_allowed(origin)) && inet_pton(AF_INET,t.address,&a)==1 && homelab_ops_admit()) {
+        uint32_t ip=ntohl(a.s_addr);
+        bool tailnet=(ip&0xffc00000u)==0x64400000u;
+        if (tailnet) {
+            ml_policy_status_t policy;
+            ml_policy_get_status(&policy);
+            if (tailscale_is_connected() && policy.authority_ready)
+                result=health_tcp(a.s_addr,t.port);
+        } else if (uplink_address(uplink_internet_netif(),&uplink)) {
+            result=health_tcp(a.s_addr,t.port);
+        }
+    }
+    uint64_t finished=health_now();
+    bool allowed=!manual || homelab_ops_recovery_allowed(origin);
+    bool notify=false;
+    HLOCK();
+    saved_running=false;
+    if (allowed && generation==saved_generation) {
+        health_result *r=&saved_results[index];
+        bool new_failure=!manual && r->state==H_OK && result==0;
+        r->outcome=result;
+        r->observed=finished;
+        r->latency=(uint32_t)(finished-now);
+        if (!manual) {
+            if (result>=0) r->state=result>0?H_OK:H_DOWN;
+            r->due=finished+(uint64_t)t.interval_s*1000;
+        }
+        notify=(manual && origin!=OPS_RECOVERY_LOCAL) || (t.notify && (manual || new_failure));
+    }
+    HUNLOCK();
+    if (notify) {
+        char message[100];
+        snprintf(message,sizeof message,"TCP check %s: %s.",t.name,result>0?"reachable":result==0?"not reachable":"inconclusive");
+        (void)ntfy_integration_queue_event(message);
+    }
+}
+
 /* Positive is a specific check, negative infrastructure/unknown is not a
  * definitive service failure. NXDOMAIN is inconclusive, not "Internet down". */
 static int health_probe(const health_config_t *c,unsigned role){
@@ -184,7 +384,7 @@ void health_monitor_poll(void){
             if(health_configured(&c,r)&&now>=observations[r].due){role=(int)r;health_cursor=(r+1)%4;break;}}
         health_next=now+(uint64_t)c.interval_s*1000;
     }
-    HUNLOCK();if(role<0)return;
+    HUNLOCK();if(role<0){saved_tcp_poll();return;}
     int result=homelab_ops_admit()?health_probe(&c,(unsigned)role):-2;uint64_t finished=health_now();bool notify=false,changed=false;
     HLOCK();if(configuration.enabled&&health_generation==generation){
         health_state previous=observations[role].state;
@@ -193,6 +393,7 @@ void health_monitor_poll(void){
     }HUNLOCK();
     if(notify){char message[160];snprintf(message,sizeof message,"Configured %s check is down after repeated failures. This is not proof of a whole-network outage.",health_roles[role]);(void)ntfy_integration_queue_event(message);}
     if(changed)mqtt_integration_publish_now();
+    saved_tcp_poll();
 }
 void health_monitor_codes(uint8_t out[4]){
     health_monitor_init();HLOCK();health_config_t c=configuration;health_result r[4];memcpy(r,observations,sizeof r);HUNLOCK();
@@ -229,6 +430,25 @@ cJSON *health_monitor_snapshot(bool detailed){
         cJSON_AddStringToObject(item,"reason",!c.enabled?"Active checks are disabled":!configured?"No target/service is configured":health_reason(&r[i]));
         cJSON_AddStringToObject(item,"next_step",health_next_step(&r[i]));
         cJSON_AddItemToArray(checks,item);
+    }
+    if (detailed) {
+        cJSON *saved=cJSON_AddArrayToObject(root,"saved_tcp");
+        HLOCK();
+        for (unsigned i=0;saved && i<SAVED_TCP_MAX;++i) {
+            const saved_tcp_target_t *target=&saved_targets[i];
+            if (!target->name[0]) continue;
+            cJSON *item=cJSON_CreateObject();
+            if (!item) break;
+            cJSON_AddStringToObject(item,"name",target->name);
+            cJSON_AddStringToObject(item,"address",target->address);
+            cJSON_AddNumberToObject(item,"port",target->port);
+            cJSON_AddNumberToObject(item,"interval_s",target->interval_s);
+            cJSON_AddBoolToObject(item,"notify",target->notify);
+            cJSON_AddStringToObject(item,"state",saved_state(&saved_results[i]));
+            cJSON_AddNumberToObject(item,"observed_ms",saved_results[i].observed);
+            cJSON_AddItemToArray(saved,item);
+        }
+        HUNLOCK();
     }
     return root;
 }

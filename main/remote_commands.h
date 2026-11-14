@@ -7,6 +7,7 @@
  *   info                         operational state (info_enabled)
  *   wol NAME | wol MAC           Wake-on-LAN; an unsaved MAC needs allow_direct_mac
  *   recover NAME|MAC, check ...  bounded recovery job / reachability check
+ *   probe NAME, checks           run a saved TCP check / list last results
  * Edges are trimmed; commands of 128 characters or more are ignored.
  * Implemented in ntfy_integration.c. */
 

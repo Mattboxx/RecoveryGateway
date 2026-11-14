@@ -46,6 +46,7 @@
 #include "ota_remote.h"
 #include "wol.h"
 #include "homelab_ops.h"
+#include "health_monitor.h"
 #include "service_lease.h"
 #include "service_retry.h"
 #include "ntfy_events.h"
@@ -589,6 +590,23 @@ remote_cmd_kind_t remote_command_run(const char *message, bool info_enabled, boo
     message = command;
     if (strcasecmp(message, "info") == 0) return info_enabled ? REMOTE_CMD_INFO : REMOTE_CMD_ERROR;
     esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (!strcasecmp(message,"checks") || !strncasecmp(message,"probe ",6)) {
+        bool list=!strcasecmp(message,"checks");
+        if (title) *title="ESP32 TCP checks";
+        if (!homelab_ops_recovery_allowed(origin)) {
+            if (reply) strlcpy(reply,"Enable verified recovery to use saved TCP checks.",cap);
+            return REMOTE_CMD_ERROR;
+        }
+        if (list) {
+            saved_tcp_summary(reply,cap);
+            return REMOTE_CMD_OK;
+        }
+        err=saved_tcp_request(message+6,origin);
+        if (reply) strlcpy(reply,err==ESP_OK?"TCP check queued. The result will follow.":
+                           err==ESP_ERR_NOT_FOUND?"No saved TCP check with that name.":
+                           "TCP check busy or unavailable. Try again shortly.",cap);
+        return err==ESP_OK ? REMOTE_CMD_OK : REMOTE_CMD_ERROR;
+    }
     if (strncasecmp(message,"recover ",8)==0 || strncasecmp(message,"check ",6)==0) {
         bool wake=strncasecmp(message,"recover ",8)==0;
         const char *selector=message+(wake?8:6);uint8_t mac[6];

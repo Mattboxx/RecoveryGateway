@@ -41,6 +41,8 @@ async function fixture(browser, options = {}) {
     } else if (url.pathname === '/api/operations') {
       if(route.request().method()==='POST') {
         state.savedOperation=route.request().postDataJSON();body={ok:true};
+        if(state.savedOperation.action==='tcp-save')state.savedTcp=state.savedOperation.targets.map(target=>({...target,state:'not checked',observed_ms:0}));
+        if(state.savedOperation.action==='tcp-check')state.savedTcp=state.savedTcp.map(target=>target.name===state.savedOperation.name?{...target,state:'reachable',observed_ms:1000}:target);
         if(state.savedOperation.action==='settings'){
           const {action,...settings}=state.savedOperation;
           state.operationsBody={...state.operationsBody,...settings};
@@ -55,7 +57,7 @@ async function fixture(browser, options = {}) {
       body=state.capabilityBody || {schema:2,features:[{id:'smart-recovery',compiled:true,hardware_supported:true,configured:true,active:false,verified:false,experimental:true,evidence:'Fixture: no hardware qualification'}]};
     } else if (url.pathname === '/api/health') {
       if(state.healthFailures){state.healthFailures--;status=503;}
-      body=state.healthBody || {enabled:false,notify:false,interval_s:60,failure_threshold:3,gateway_port:0,dns_name:'',internet_ip:'',internet_port:0,tailnet_target:'',tailnet_port:0,checks:[]};
+      body=state.healthBody || {enabled:false,notify:false,interval_s:60,failure_threshold:3,gateway_port:0,dns_name:'',internet_ip:'',internet_port:0,tailnet_target:'',tailnet_port:0,checks:[],saved_tcp:state.savedTcp||[]};
     } else if (url.pathname === '/api/service-leases') {
       body=state.leasesBody || [];
     } else if (url.pathname === '/api/mqtt') {
@@ -945,6 +947,19 @@ async function main() {
     assert.equal(f.state.savedNtfy.commands_enabled,false);
     assert.equal(f.state.savedNtfy.allow_recovery,false);
     assert.deepEqual(f.errors,[]);await f.context.close();count++;
+    f=await fixture(browser,{page:'operations'});
+    await f.page.getByText('Saved TCP checks',{exact:true}).click();
+    await f.page.locator('#saved-tcp-add').click();
+    await f.page.locator('#saved-tcp-list [name=name]').fill('NAS_Web');
+    await f.page.locator('#saved-tcp-list [name=address]').fill('192.0.2.25');
+    await f.page.locator('#saved-tcp-list [name=port]').fill('443');
+    await f.page.locator('#saved-tcp-save').click();
+    const tcpRun=f.page.getByRole('button',{name:'Test saved port'});
+    await tcpRun.click();
+    await f.page.waitForFunction(()=>document.getElementById('saved-tcp-status').textContent==='NAS_Web: reachable');
+    assert.deepEqual(f.state.savedOperation,{action:'tcp-check',name:'NAS_Web'});
+    assert.deepEqual(f.errors,[]);await f.context.close();count++;
+
     // A running check is followed live: badges and the job line update without
     // a reload, unsaved edits stay, and polling stops when the job ends.
     const liveDevice={index:0,mac:'02:00:00:00:00:01',name:'Fixture',target:'',monitor:false,notify:false,host_port:22,service_port:0,timeout_s:60,interval_s:60,max_checks:10,kind:0,scope:0,state:'idle',latency_ms:0};
@@ -1455,7 +1470,7 @@ async function main() {
     assert.equal(f.state.savedNotify.telegram.chat, '42'); assert.equal(f.state.savedNotify.telegram.events, 'all');
     assert.equal(f.state.savedNotify.telegram.notify_startup, true, 'startup can be saved independently');
     assert.equal(f.state.savedNotify.telegram.notify_poweron, true);
-    await f.page.locator('#nt-tg-card summary').click();
+    await f.page.locator('#nt-tg-card .form-group:has(#nt-tg-chat) summary').click();
     assert.ok(await f.page.locator('#nt-tg-card details a[href="https://t.me/userinfobot"]').isVisible());
     assert.equal(f.state.savedNotify.email, undefined, 'saving Telegram sends nothing about email');
     assert.equal(await f.page.locator('#nt-mail-badge').textContent(), 'Off');

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "remote_commands.h"
 #include "cJSON.h"
 typedef struct {
     uint8_t enabled,notify,failure_threshold,reserved;
@@ -21,3 +22,14 @@ cJSON *health_monitor_snapshot(bool detailed);
  * 2 unverified, 3 ok, 4 degraded, 5 down, 6 unknown, 7 resource-deferred,
  * 8 stale. Same derivation as the snapshot; no targets or identifiers. */
 void health_monitor_codes(uint8_t out[4]);
+
+#define SAVED_TCP_MAX 4
+typedef struct {
+    char name[21], address[16];
+    uint16_t port, interval_s; /* zero interval: manual only */
+    uint8_t notify;
+} saved_tcp_target_t;
+bool saved_tcp_schedule_enabled(void);
+esp_err_t saved_tcp_set(const saved_tcp_target_t targets[SAVED_TCP_MAX]);
+esp_err_t saved_tcp_request(const char *name, ops_recovery_origin_t origin);
+void saved_tcp_summary(char *out, size_t capacity);

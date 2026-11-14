@@ -3759,6 +3759,16 @@
           <div class="form-group"><label class="form-label" for="health-tailnet-port">Tailnet service TCP port</label><input class="input" type="number" id="health-tailnet-port" min="0" max="65535" placeholder="e.g. 5000"></div>
         </div><button class="btn btn-primary" id="health-save" disabled>Save connectivity checks</button>
         <p id="health-status" role="status">Not loaded</p><pre class="mono" id="health-checks" style="white-space:pre-wrap"></pre>
+        <details class="fb-details">
+          <summary>Saved TCP checks</summary>
+          <p>Save up to four IPv4 addresses and TCP ports. Set an interval of 0 for on-demand checks only. Scheduled alerts are sent when a previously reachable port stops responding.</p>
+          <div id="saved-tcp-list"></div>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="saved-tcp-add" type="button" disabled>Add TCP check</button>
+            <button class="btn btn-primary" id="saved-tcp-save" type="button" disabled>Save TCP checks</button>
+          </div>
+          <p id="saved-tcp-status" class="form-hint" role="status"></p>
+        </details>
       </div></div>
       <div class="card mb-4" data-capability="smart-recovery"><div class="card-header"><span class="card-title">Device registry</span></div><div class="card-body">
         <p class="form-hint">Add or edit MAC addresses in the Wake-on-LAN card above. Profiles remain linked to the saved MAC, not its row number. Checks use IPv4 DNS or cached Tailnet names. TCP connection success proves the selected port answered, not application health.</p>
@@ -3881,6 +3891,8 @@
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
                 <li><code class="mono" data-no-i18n>check NAS</code> — check reachability without waking the device.</li>
+                <li><code class="mono" data-no-i18n>probe NAME</code> — test a saved TCP address and port.</li>
+                <li><code class="mono" data-no-i18n>checks</code> — list saved TCP checks and their last results.</li>
                 <li><code class="mono" data-no-i18n>info</code> — show gateway status when allowed.</li>
               </ul>
               <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
@@ -3929,6 +3941,8 @@
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
                 <li><code class="mono" data-no-i18n>check NAS</code> — check reachability without waking the device.</li>
+                <li><code class="mono" data-no-i18n>probe NAME</code> — test a saved TCP address and port.</li>
+                <li><code class="mono" data-no-i18n>checks</code> — list saved TCP checks and their last results.</li>
                 <li><code class="mono" data-no-i18n>info</code> — show gateway status when allowed.</li>
               </ul>
               <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
@@ -8285,6 +8299,91 @@
     document.getElementById('leases-refresh').addEventListener('click',function(){
       if(!s_ops_busy) loadExpiryNotifications();
     });
+    var savedTcpDirty=false, savedTcpReady=false, savedTcpSaving=false;
+    function savedTcpControls() {
+      document.getElementById('saved-tcp-add').disabled=!savedTcpReady||savedTcpSaving||document.querySelectorAll('#saved-tcp-list fieldset').length>=4;
+      document.getElementById('saved-tcp-save').disabled=!savedTcpReady||savedTcpSaving||!savedTcpDirty;
+    }
+    function savedTcpChanged() {
+      savedTcpDirty=true;
+      document.querySelectorAll('#saved-tcp-list .saved-tcp-run').forEach(function(button){button.disabled=true;});
+      savedTcpControls();
+    }
+    function savedTcpRow(target) {
+      var row=document.createElement('fieldset');
+      row.className='form-group';
+      var legend=document.createElement('legend');
+      legend.textContent=target.name||(window.I18N?I18N.t('New TCP check'):'New TCP check');
+      row.appendChild(legend);
+      var fields=[
+        ['name','Check name','text',target.name||'',{maxLength:20,pattern:'[a-zA-Z0-9_\\-]+'}],
+        ['address','IPv4 address','text',target.address||'',{maxLength:15}],
+        ['port','TCP port','number',target.port||'',{min:1,max:65535}],
+        ['interval_s','Test interval (seconds)','number',target.interval_s||0,{min:0,max:3600}],
+        ['notify','Notify new outages','checkbox',!!target.notify,{}]
+      ];
+      fields.forEach(function(f){
+        var label=document.createElement('label'), title=document.createElement('span'), input=document.createElement('input');
+        label.className='form-group';title.className='form-label';title.textContent=f[1];
+        input.name=f[0];input.type=f[2];input.className=f[2]==='checkbox'?'':'input';
+        if(f[2]==='checkbox')input.checked=f[3];else {input.value=f[3];input.required=true;}
+        Object.assign(input,f[4]);input.addEventListener('input',savedTcpChanged);
+        label.append(title,input);row.appendChild(label);
+      });
+      var actions=document.createElement('div');actions.className='btn-row';
+      var remove=document.createElement('button'),run=document.createElement('button');
+      remove.type=run.type='button';remove.className=run.className='btn btn-secondary';
+      remove.textContent='Remove';run.textContent='Test saved port';run.classList.add('saved-tcp-run');
+      remove.onclick=function(){row.remove();savedTcpChanged();};
+      run.disabled=savedTcpDirty||!target.name;
+      run.onclick=async function(){
+        var status=document.getElementById('saved-tcp-status');
+        try{
+          run.disabled=true;
+          var response=await apiFetch('/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'tcp-check',name:target.name})});
+          var result=await response.json();
+          if(!response.ok||!result.ok)throw new Error(result.error||'Check could not be queued');
+          status.textContent='TCP check queued';
+          for(var i=0;i<30;i++){
+            await new Promise(function(resolve){setTimeout(resolve,700);});
+            var current=await fetch('/api/health',{cache:'no-store'}).then(function(res){if(!res.ok)throw new Error('Check unavailable');return res.json();});
+            var latest=current.saved_tcp.find(function(item){return item.name===target.name;});
+            if(!latest)throw new Error('Saved check changed');
+            if(latest.observed_ms!==target.observed_ms){
+              status.textContent=latest.name+': '+latest.state;
+              if(!savedTcpDirty)await loadHealth();
+              return;
+            }
+          }
+          status.textContent='Check still queued. Refresh to see the result.';
+        }catch(e){status.textContent=e.message;}
+        finally{if(!savedTcpDirty)run.disabled=false;}
+      };
+      var result=document.createElement('span');result.className='form-hint';result.textContent=target.state||'';
+      actions.append(run,remove,result);row.appendChild(actions);
+      document.getElementById('saved-tcp-list').appendChild(row);
+      return row;
+    }
+    document.getElementById('saved-tcp-add').onclick=function(){savedTcpRow({}).querySelector('input').focus();savedTcpChanged();};
+    document.getElementById('saved-tcp-save').onclick=async function(){
+      var status=document.getElementById('saved-tcp-status');
+      try{
+        var targets=Array.from(document.querySelectorAll('#saved-tcp-list fieldset')).map(function(row){
+          var target={};
+          for(const input of row.querySelectorAll('input')){
+            if(!input.reportValidity())throw new Error('Check the highlighted field');
+            target[input.name]=input.type==='checkbox'?input.checked:input.type==='number'?Number(input.value):input.value.trim();
+          }
+          return target;
+        });
+        savedTcpSaving=true;savedTcpControls();
+        var response=await apiFetch('/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'tcp-save',targets:targets})});
+        var result=await response.json();
+        if(!response.ok||!result.ok)throw new Error(result.error||'Could not save TCP checks');
+        savedTcpDirty=false;status.textContent='TCP checks saved';await loadHealth();
+      }catch(e){status.textContent=e.message;}
+      finally{savedTcpSaving=false;savedTcpControls();}
+    };
     async function loadHealth(){
       var sequence=++s_health_sequence;
       try{var response=await fetch('/api/health',{cache:'no-store'});if(!response.ok)throw new Error('Connectivity checks unavailable');
@@ -8293,11 +8392,17 @@
           ||!['interval_s','failure_threshold','gateway_port','internet_port','tailnet_port'].every(function(k){return Number.isInteger(data[k])&&data[k]>=0;})
           ||!['dns_name','internet_ip','tailnet_target'].every(function(k){return typeof data[k]==='string';})
           ||!data.checks.every(function(c){return c&&typeof c.role==='string'&&typeof c.state==='string'&&Number.isFinite(c.observed_uptime_ms)&&Number.isInteger(c.consecutive_failures);}))throw new Error('Incomplete connectivity response');
+        savedTcpReady=Array.isArray(data.saved_tcp);
+        if (savedTcpReady && !savedTcpDirty) {
+          document.getElementById('saved-tcp-list').replaceChildren();
+          data.saved_tcp.forEach(savedTcpRow);
+        }
+        savedTcpControls();
         s_health_state=data;document.getElementById('health-enabled').checked=data.enabled;document.getElementById('health-notify').checked=data.notify;
         [['interval_s','health-interval'],['failure_threshold','health-threshold'],['gateway_port','health-gateway-port'],['dns_name','health-dns'],['internet_ip','health-internet'],['internet_port','health-internet-port'],['tailnet_target','health-tailnet'],['tailnet_port','health-tailnet-port']].forEach(function(p){document.getElementById(p[1]).value=/_port$/.test(p[0])&&data[p[0]]===0?'':data[p[0]];});
         document.getElementById('health-status').textContent=(data.enabled?'Configured checks enabled':'Active checks disabled')+' · WiFi association: '+(data.wifi_associated===true?'yes':'not observed')+' · uplink address: '+(data.uplink_address_available===true?'available':'not observed')+' · control: '+(data.control_connected===true?'connected':'not connected')+' · policy authority: '+(data.policy_authority_ready===true?'ready (not a service grant)':'not ready')+' · global tunnel: not verified';
         document.getElementById('health-checks').textContent=data.checks.map(function(c){return c.role+': '+c.state+' · failures '+c.consecutive_failures+' · observed at '+Math.round(c.observed_uptime_ms/1000)+' s uptime\n'+(typeof c.reason==='string'?c.reason:'Evidence unavailable')+'\nNext: '+(typeof c.next_step==='string'?c.next_step:'Inspect diagnostics');}).join('\n\n');
-      }catch(e){if(sequence===s_health_sequence){s_health_state=null;document.getElementById('health-status').textContent=e.message+' — refresh before saving';}}
+      }catch(e){if(sequence===s_health_sequence){s_health_state=null;savedTcpReady=false;savedTcpControls();document.getElementById('health-status').textContent=e.message+' — refresh before saving';}}
       finally{if(sequence===s_health_sequence)opsControls();}
     }
     document.getElementById('health-save').onclick=function(){try{if(!s_health_state)return;opsAction({action:'health',enabled:document.getElementById('health-enabled').checked,notify:document.getElementById('health-notify').checked,interval_s:opsNumber('health-interval'),failure_threshold:opsNumber('health-threshold'),gateway_port:opsPort('health-gateway-port'),dns_name:document.getElementById('health-dns').value,internet_ip:document.getElementById('health-internet').value,internet_port:opsPort('health-internet-port'),tailnet_target:document.getElementById('health-tailnet').value,tailnet_port:opsPort('health-tailnet-port')});}catch(e){document.getElementById('health-status').textContent=e.message;}};
