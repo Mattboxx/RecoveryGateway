@@ -1626,6 +1626,20 @@
       border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; }
     .fb-opt input { margin-top: 0.2rem; width: 1.15rem; height: 1.15rem; flex: none; accent-color: var(--accent); }
     .fb-opt small { display: block; color: var(--fg-muted); margin-top: var(--sp-1); font-size: var(--text-sm); }
+    .fb-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-muted); }
+    .fb-opt .badge { margin-left: var(--sp-1); }
+    .fb-opt .fb-later { display: none; }
+    .fb-h { font-size: var(--text-lg); margin: 0 0 var(--sp-1); scroll-margin-top: var(--sp-3); }
+    .fb-h:focus { outline: none; }
+    .fb-goal { font-size: var(--text-md); margin: var(--sp-4) 0 var(--sp-1); }
+    .fb-goal + .form-hint { margin: 0 0 var(--sp-2); }
+    .fb-note { padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--info-border); background: var(--info-muted); border-radius: var(--radius-md); }
+    .fb-picked, .fb-box { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--sp-3); margin: var(--sp-3) 0; }
+    .fb-picked ul { list-style: none; padding: 0; margin: var(--sp-2) 0 0; }
+    .fb-picked li { padding: var(--sp-2) 0; border-top: 1px solid var(--border); }
+    .fb-picked .fb-summary { margin: var(--sp-1) 0 0; }
+    .fb-picked em { color: var(--warning); }
+    .fb-box legend { font-weight: var(--weight-semibold); padding: 0 var(--sp-1); }
     .fb-meter { height: 6px; border-radius: 3px; background: var(--border); margin-top: var(--sp-2); overflow: hidden; }
     .fb-meter span { display: block; height: 100%; width: 0; background: var(--danger); transition: width 160ms ease; }
     .fb-summary { display: grid; grid-template-columns: minmax(7rem, auto) 1fr; gap: var(--sp-1) var(--sp-3); margin: 0 0 var(--sp-3); }
@@ -2235,39 +2249,51 @@
       </section>
 
       <section class="fb-step" data-step="4" hidden>
-        <p><b>Choose your gateway role.</b> Pick one or more; everything can be changed later.</p>
-        <div class="fb-roles" id="fb-roles" role="group" aria-label="Gateway roles">
-          <label class="fb-opt"><input type="checkbox" value="lan-tailnet"><span><b>Connect a device to your Tailnet</b><small>A LAN device without Tailscale uses one Tailnet service through the gateway.</small></span></label>
-          <label class="fb-opt"><input type="checkbox" value="subnet-router"><span><b>Connect a network</b><small>Reach this home network from your Tailnet (subnet route).</small></span></label>
-          <label class="fb-opt"><input type="checkbox" value="iot-ap"><span><b>IoT Gateway</b><small>Sensors and switches join the gateway's own Wi-Fi.</small></span></label>
-          <label class="fb-opt"><input type="checkbox" value="wol"><span><b>Wake or recover a NAS/PC</b><small>Wake and verify devices locally or through Telegram or ntfy. Tailscale is optional.</small></span></label>
-          <label class="fb-opt"><input type="checkbox" value="home-assistant"><span><b>Home Assistant &amp; Automation</b><small>MQTT state and controls through Discovery.</small></span></label>
-          <label class="fb-opt"><input type="checkbox" value="monitoring"><span><b>Monitor and get alerts</b><small>Event history, trends and settings copies; notifications by Telegram, email or ntfy afterwards.</small></span></label>
+        <h2 class="fb-h" id="fb-roles-title" tabindex="-1">What will you use the gateway for?</h2>
+        <p class="form-hint">Pick one or more; everything can be changed later.</p>
+        <p class="fb-note"><span id="fb-ts-on">Tailscale connects after the restart with the key you entered.</span><span id="fb-ts-off">You are continuing without Tailscale. Choices that need it are saved and start working once you connect it on the Tailscale page.</span></p>
+        <div class="fb-roles" id="fb-roles" role="group" aria-labelledby="fb-roles-title">
+          <h3 class="fb-goal">Wake and check devices</h3>
+          <p class="form-hint">Works without Tailscale: from this page, or from Telegram or ntfy once you set them up.</p>
+          <label class="fb-opt"><input type="checkbox" value="wol"><span><b>Wake a NAS or PC</b> <span class="badge badge-success">No Tailscale needed</span><small>Send Wake-on-LAN, then check that the device and its service answer.</small><small class="fb-later">Save the device in Devices &amp; Recovery; for Telegram or ntfy, set them up in Automation → Notifications.</small></span></label>
+          <h3 class="fb-goal">Remote access</h3>
+          <p class="form-hint">Two different directions: pick the one you need, or both.</p>
+          <label class="fb-opt"><input type="checkbox" value="subnet-router"><span><b>Reach this network from your Tailnet</b> <span class="badge badge-info">Needs Tailscale</span><small>Tailnet → home LAN: from your phone or laptop, open the NAS, cameras or router of this network.</small><small class="fb-later">Approve the route in the Tailscale admin console. On Ethernet or SIM, first turn the route on in the Tailscale page.</small></span></label>
+          <label class="fb-opt"><input type="checkbox" value="lan-tailnet"><span><b>Let a LAN device use one Tailnet service</b> <span class="badge badge-info">Needs Tailscale</span><small>Home LAN → Tailnet: a device without Tailscale (TV, printer, old PC) reaches one service in your Tailnet.</small><small class="fb-later">Add the device and the service in Network → Services.</small></span></label>
+          <h3 class="fb-goal">Smart home and IoT</h3>
+          <label class="fb-opt"><input type="checkbox" value="iot-ap"><span><b>Wi-Fi for IoT devices</b> <span class="badge badge-neutral">Tailscale optional</span><small>Sensors and switches join the gateway's own Wi-Fi, apart from your home network.</small><small class="fb-later">Connect the IoT devices to the emergency Wi-Fi below.</small></span></label>
+          <label class="fb-opt"><input type="checkbox" value="home-assistant"><span><b>Home Assistant &amp; Automation</b> <span class="badge badge-success">No Tailscale needed</span><small>Gateway state and controls in Home Assistant through MQTT Discovery.</small><small class="fb-later">Enter your MQTT broker in Automation → Home Assistant.</small></span></label>
+          <h3 class="fb-goal">Monitoring and settings view</h3>
+          <label class="fb-opt"><input type="checkbox" value="monitoring"><span><b>Monitor and get alerts</b> <span class="badge badge-success">No Tailscale needed</span><small>Event history, trends and settings copies; alerts by Telegram, email or ntfy afterwards.</small><small class="fb-later">For alerts, set up Telegram, email or ntfy in Automation → Notifications.</small></span></label>
           <label class="fb-opt"><input type="checkbox" value="advanced"><span><b>Advanced configuration</b><small>Show every setting on every page.</small></span></label>
         </div>
-        <details class="fb-details"><summary>Network options</summary>
-        <label class="fb-opt" id="fb-share-lan-row"><input type="checkbox" id="fb-share-lan"><span><b>Share my home network with the tailnet</b><small>Advertises the home LAN as a subnet route; approve it in the admin console. Needs a successful Wi-Fi test.</small></span></label>
-        <label class="fb-opt"><input type="checkbox" id="fb-share-ap" checked><span><b>Share the gateway's own Wi-Fi network</b><small>Devices connected to the gateway's Wi-Fi can reach the tailnet and be reached from it.</small></span></label>
-        <label class="fb-opt" id="fb-exit-row"><input type="checkbox" id="fb-exit"><span><b>Offer this gateway as an exit node</b><small>Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.</small></span></label>
+        <div class="fb-picked" id="fb-picked" aria-live="polite"></div>
+        <details class="fb-details" id="fb-net"><summary>Network options</summary>
+        <label class="fb-opt" id="fb-share-lan-row"><input type="checkbox" id="fb-share-lan"><span><b>Share my home network with the tailnet</b> <span class="badge badge-info">Needs Tailscale</span><small>Advertises the home LAN as a subnet route; approve it in the admin console. Needs a successful Wi-Fi test.</small></span></label>
+        <label class="fb-opt"><input type="checkbox" id="fb-share-ap" checked><span><b>Share the gateway's own Wi-Fi network</b> <span class="badge badge-info">Needs Tailscale</span><small>Devices connected to the gateway's Wi-Fi can reach the tailnet and be reached from it.</small></span></label>
+        <label class="fb-opt" id="fb-exit-row"><input type="checkbox" id="fb-exit"><span><b>Offer this gateway as an exit node</b> <span class="badge badge-info">Needs Tailscale</span><small>Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-ap-always"><span><b>Keep the gateway's own Wi-Fi always on</b><small>In recovery mode, the access point stays available whenever there is no Ethernet or WiFi LAN.</small></span></label>
         </details>
-        <details class="fb-details" id="fb-extras"><summary>Extras (all off unless you tick them)</summary>
+        <details class="fb-details" id="fb-extras"><summary>Extras</summary>
         <label class="fb-opt"><input type="checkbox" id="fb-x-history"><span><b>Keep an event history</b><small>Starts, crashes, updates, uplink and tailnet changes, kept in the gateway's flash.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-x-trends"><span><b>Record memory and traffic trends</b><small>Graphs on the Status page: 6 hours in detail, about 45 days in summary.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-x-snapshots"><span><b>Save a settings copy before each update</b><small>Go back to the previous settings from System → Backup &amp; reset → Settings copies.</small></span></label>
-        <label class="fb-opt"><input type="checkbox" id="fb-x-names"><span><b>Tailnet names for devices on the gateway's Wi-Fi</b><small>They can use names like nas or nas.tail1234.ts.net instead of 100.x addresses.</small></span></label>
+        <label class="fb-opt"><input type="checkbox" id="fb-x-names"><span><b>Tailnet names for devices on the gateway's Wi-Fi</b> <span class="badge badge-info">Needs Tailscale</span><small>They can use names like nas or nas.tail1234.ts.net instead of 100.x addresses.</small></span></label>
         <p class="auth-hint">Telegram, email and dynamic DNS need your accounts: set them up later under Automation and Network.</p>
         </details>
-        <div class="form-group">
-          <label class="form-label" for="fb-apname">Gateway Wi-Fi name</label>
-          <input class="input" id="fb-apname" maxlength="32" spellcheck="false">
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="fb-appw">Gateway Wi-Fi password</label>
-          <div class="fb-row"><input class="input" id="fb-appw" maxlength="63" autocomplete="off" spellcheck="false">
-            <button class="btn btn-secondary btn-sm" id="fb-appw-gen" type="button">Generate</button></div>
-          <span class="auth-hint">At least 8 characters and different from the admin password. Write it down: you need it when the home Wi-Fi is unavailable.</span>
-        </div>
+        <fieldset class="fb-box"><legend>Emergency Wi-Fi</legend>
+          <p class="form-hint"><span id="fb-ap-on">Always on: you and your IoT devices can connect to it at any time.</span><span id="fb-ap-off">It turns on only when the gateway cannot reach your home network, so you can still open this page and fix the settings.</span></p>
+          <div class="form-group">
+            <label class="form-label" for="fb-apname">Gateway Wi-Fi name</label>
+            <input class="input" id="fb-apname" maxlength="32" spellcheck="false">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="fb-appw">Gateway Wi-Fi password</label>
+            <div class="fb-row"><input class="input" id="fb-appw" maxlength="63" autocomplete="off" spellcheck="false">
+              <button class="btn btn-secondary btn-sm" id="fb-appw-gen" type="button">Generate</button></div>
+            <span class="auth-hint">At least 8 characters and different from the admin password. Write it down: you need it when the home Wi-Fi is unavailable.</span>
+          </div>
+        </fieldset>
       </section>
 
       <section class="fb-step" data-step="5" hidden>
@@ -4614,7 +4640,7 @@
         while((n=w.nextNode())){if(n.nodeType===3)text(n);else if(n.tagName!=='SCRIPT'&&n.tagName!=='STYLE')attrs(n);}
       }
       function apply(){busy=true;try{walk(document.body);document.title=tr('ESP32 Tailnet Gateway');}finally{busy=false;}
-        document.documentElement.classList.remove('i18n-wait');}
+        document.documentElement.classList.remove('i18n-wait');document.dispatchEvent(new Event('i18n-applied'));}
       var observer=new MutationObserver(function(list){if(busy||!map&&lang==='en')return;busy=true;try{
         list.forEach(function(m){if(m.type==='characterData')text(m.target);else if(m.type==='attributes')attrs(m.target);else m.addedNodes.forEach(walk);});
       }finally{busy=false;}});
@@ -12305,7 +12331,7 @@
 
     /* First-boot setup wizard, in the visitor's language like the dashboard. */
     var FirstBoot = (function () {
-      var st = { step: 0, sid: '', key: null, seq: 0, kp: null, poll: null, wifiOk: false, wifiIp: '', wifiPrefix: 0, testing: false, finished: false, defaults: {} };
+      var st = { step: 0, sid: '', key: null, seq: 0, kp: null, poll: null, wifiOk: false, wifiIp: '', wifiPrefix: 0, testing: false, finished: false, defaults: {}, auto: {}, touched: {} };
       function $(id) { return document.getElementById(id); }
       function T(s) { return window.I18N ? I18N.t(s) : s; }
       function err(msg) { var e = $('fb-error'); e.textContent = msg ? T(msg) : ''; e.classList.toggle('visible', !!msg); }
@@ -12334,12 +12360,19 @@
         $('fb-next').hidden = st.finished;
         err('');
         validate();
-        var focus = { 1: 'fb-pw', 2: 'fb-ssid', 3: 'fb-skip-tailnet', 4: 'fb-apname' }[step];
-        /* Never steal focus from a field the user already chose in this step. */
+        var focus = { 1: 'fb-pw', 2: 'fb-ssid', 3: 'fb-skip-tailnet', 4: 'fb-roles-title' }[step];
+        /* Never steal focus from a field the user already chose in this step.
+         * The choices start from their title, on phones too. */
         if (focus) setTimeout(function () {
-          var sec = document.querySelector('#firstBoot .fb-step[data-step="' + step + '"]'), a = document.activeElement;
-          if (st.step === step && !(sec && a && sec.contains(a))) $(focus).focus();
+          var sec = document.querySelector('#firstBoot .fb-step[data-step="' + step + '"]'), a = document.activeElement, f = $(focus);
+          if (st.step === step && !(sec && a && sec.contains(a))) { f.focus({ preventScroll: step === 4 }); if (step === 4) f.scrollIntoView({ block: 'start' }); }
         }, 30);
+        if (step === 4) {
+          /* "Continue without Tailscale" turned off sharing the gateway Wi-Fi;
+           * a key entered afterwards restores that default. */
+          if (st.apOff && joining()) { if (!st.touched['fb-share-ap']) $('fb-share-ap').checked = true; st.apOff = false; }
+          picked();
+        }
         if (step === 5) summary();
       }
       function strength(pw) {
@@ -12564,6 +12597,59 @@
           })();
         }).catch(function () { done('The test could not start.'); });
       }
+      /* Step 4: what each choice turns on at once. Unticking a choice turns
+       * off only what it turned on, unless another choice still wants it or
+       * the user changed it by hand. Names, badges and the steps for after
+       * the restart come from the choices themselves. */
+      var PRESET = { wol: 'fb-x-history', 'subnet-router': 'fb-share-lan', 'iot-ap': 'fb-share-ap fb-ap-always fb-x-names', monitoring: 'fb-x-history fb-x-trends fb-x-snapshots' };
+      function joining() { return !!$('fb-key').value.trim(); }
+      function choice(r) { return document.querySelector('#fb-roles input[value="' + r + '"]').parentNode; }
+      function name(label) { return label.querySelector('b').textContent; }
+      function preset(role, on) {
+        (PRESET[role] || '').split(' ').forEach(function (id) {
+          if (!id || id === 'fb-share-lan' && uplink() !== 'wifi') return;
+          var by = st.auto[id] || [], box = $(id);
+          if (on) { if (by.length) { if (by.indexOf(role) < 0) by.push(role); } else if (!box.checked) { box.checked = true; st.auto[id] = [role]; } }
+          else if (by.length) { by = st.auto[id] = by.filter(function (r) { return r !== role; }); if (!by.length) { box.checked = false; delete st.auto[id]; } }
+        });
+      }
+      /* Live summary of the choices; returns what waits for Tailscale. */
+      function picked() {
+        var box = $('fb-picked'), ts = joining(), wait = [], seen = {}, ul, dl;
+        var opts = Array.prototype.filter.call(document.querySelectorAll('#fb-net input, #fb-extras input'), function (i) { return i.checked; });
+        function el(tag, text, parent, cls) { var e = document.createElement(tag); if (text) e.textContent = text; if (cls) e.className = cls; (parent || box).appendChild(e); return e; }
+        function needs(label) { return !ts && label.querySelector('.badge-info'); }
+        function list(title, items) {
+          if (!items.length) return;
+          el('dt', title, dl); var dd = el('dd', '', dl);
+          items.forEach(function (x, i) {
+            if (i) dd.appendChild(document.createTextNode(', '));
+            if (typeof x === 'string') return el('span', x, dd);
+            var n = name(x.parentNode); el('span', n, dd);
+            if (!needs(x.parentNode)) return;
+            dd.appendChild(document.createTextNode(' '));
+            el('em', '(waits for Tailscale)', dd); wait.push(n);
+          });
+        }
+        $('fb-ts-on').hidden = !ts; $('fb-ts-off').hidden = ts;
+        $('fb-ap-on').hidden = !$('fb-ap-always').checked; $('fb-ap-off').hidden = $('fb-ap-always').checked;
+        box.textContent = '';
+        el('strong', 'Your choices');
+        if (!roles().length) el('div', 'Nothing selected: the gateway starts with the basics, and you can add functions later from the dashboard.', box, 'form-hint');
+        ul = el('ul');
+        roles(1).forEach(function (r) {
+          var c = choice(r), li = el('li', '', ul), badge = c.querySelector('.badge'), later = c.querySelector('.fb-later');
+          el('b', name(c), li); li.appendChild(document.createTextNode(' '));
+          if (needs(c)) { el('span', 'Waits for Tailscale', li, 'badge badge-warning'); wait.push(name(c)); }
+          else if (badge) li.appendChild(badge.cloneNode(true));
+          dl = el('dl', '', li, 'fb-summary');
+          list('Turned on now', opts.filter(function (i) { return (PRESET[r] || '').indexOf(i.id) >= 0 && (seen[i.id] = 1); }));
+          if (later) list('After the restart', [later.textContent]);
+        });
+        dl = el('dl', '', box, 'fb-summary');
+        list('Also turned on', opts.filter(function (i) { return !seen[i.id]; }));
+        return wait;
+      }
       function row(dl, k, v) { var dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = T(k); dd.textContent = v; dd.setAttribute('data-no-i18n', ''); dl.appendChild(dt); dl.appendChild(dd); }
       function summary() {
         var dl = $('fb-summary'); dl.textContent = '';
@@ -12584,8 +12670,9 @@
         row(dl, 'Share gateway Wi-Fi', $('fb-share-ap').checked ? yes : no);
         row(dl, 'Exit node', $('fb-exit').checked ? yes : no);
         row(dl, 'Gateway Wi-Fi', $('fb-apname').value + ' · ' + ($('fb-ap-always').checked ? T('always on') : T('when the local LAN is unavailable')));
-        var names = roles().map(function (r) { return T(document.querySelector('#fb-roles input[value="' + r + '"]').parentNode.querySelector('b').textContent); });
+        var names = roles().map(function (r) { return T(name(choice(r))); }), wait = picked();
         row(dl, 'Gateway role', names.join(', ') || T('Decide later'));
+        if (wait.length) row(dl, 'Waits for Tailscale', wait.join(', '));
         var extras = [['fb-x-history', 'Event history'], ['fb-x-trends', 'Trends'], ['fb-x-snapshots', 'Settings copy before updates'], ['fb-x-names', 'Tailnet names']]
           .filter(function (x) { return $(x[0]).checked; }).map(function (x) { return T(x[1]); });
         row(dl, 'Extras', extras.join(', ') || T('None'));
@@ -12648,7 +12735,7 @@
         /* The home network can be shared at setup only after a Wi-Fi test;
          * on Ethernet it can be added from the Tailscale page later. */
         $('fb-share-lan-row').hidden = up !== 'wifi';
-        if (up !== 'wifi') $('fb-share-lan').checked = false;
+        if (up !== 'wifi') { $('fb-share-lan').checked = false; delete st.auto['fb-share-lan']; }
         $('fb-done-reconnect').textContent = T(up === 'cellular' && !wifiWanted()
           ? 'Connect to the gateway access point' : 'Reconnect this device to your home network.');
         validate();
@@ -12666,15 +12753,21 @@
         }
         return {rule: '', label: ''};
       }
-      function roles() { return Array.prototype.map.call(document.querySelectorAll('#fb-roles input:checked'), function (i) { return i.value; }); }
+      /* Shown grouped by goal, sent in the order the firmware has always received. */
+      function roles(shown) {
+        var on = Array.prototype.map.call(document.querySelectorAll('#fb-roles input:checked'), function (i) { return i.value; });
+        return shown ? on : ['lan-tailnet', 'subnet-router', 'iot-ap', 'wol', 'home-assistant', 'monitoring', 'advanced'].filter(function (r) { return on.indexOf(r) >= 0; });
+      }
       function skipTailnet(wol) {
         $('fb-key').value = '';
         $('fb-server').value = '';
         $('fb-host').value = 'tailnet-gateway';
         document.querySelector('input[name="fb-ctl"][value="ts"]').checked = true;
         $('fb-server-row').hidden = true;
-        $('fb-share-ap').checked = false;
-        if (wol) document.querySelector('#fb-roles input[value="wol"]').checked = true;
+        $('fb-share-ap').checked = false; st.apOff = true; delete st.auto['fb-share-ap'];
+        /* Same as ticking the choice by hand, preset included. */
+        var w = document.querySelector('#fb-roles input[value="wol"]');
+        if (wol && !w.checked) { w.checked = true; preset('wol', true); }
         show(4);
       }
       function next() {
@@ -12706,15 +12799,14 @@
         });
         $('fb-appw-gen').addEventListener('click', generateApPassword);
         $('fb-show').addEventListener('change', function () { var ty = this.checked ? 'text' : 'password'; $('fb-pw').type = ty; $('fb-pw2').type = ty; });
-        document.querySelectorAll('#fb-roles input').forEach(function (r) { r.addEventListener('change', function () {
-          if (!this.checked) return;
-          if (this.value === 'subnet-router' && uplink() === 'wifi') $('fb-share-lan').checked = true;
-          if (this.value === 'iot-ap') { $('fb-share-ap').checked = true; $('fb-ap-always').checked = true; $('fb-x-names').checked = true; }
-          if (this.value === 'wol') $('fb-x-history').checked = true;
-          if (this.value === 'monitoring') ['fb-x-history', 'fb-x-trends', 'fb-x-snapshots'].forEach(function (id) { $(id).checked = true; });
-          if (this.value === 'iot-ap' || this.value === 'wol' || this.value === 'monitoring') $('fb-extras').open = true;
-          validate();
-        }); });
+        /* A choice never opens a section or moves the page: the summary below shows what it changed. */
+        document.querySelectorAll('#fb-roles input').forEach(function (r) { r.addEventListener('change', function () { preset(this.value, this.checked); validate(); }); });
+        document.querySelector('#firstBoot .fb-step[data-step="4"]').addEventListener('change', function (e) {
+          if (e.target.id) { delete st.auto[e.target.id]; st.touched[e.target.id] = 1; }
+          picked();
+        });
+        /* Summaries copy names from the page: redraw them in a newly chosen language. */
+        document.addEventListener('i18n-applied', function () { if (st.step === 4) picked(); else if (st.step === 5 && !st.finished) summary(); });
         $('fb-ssid').addEventListener('input', function () { resetWifiTest(); validate(); });
         document.querySelectorAll('input[name="fb-up"]').forEach(function (r) { r.addEventListener('change', shapeUplink); });
         $('fb-wifi-backup').addEventListener('change', shapeUplink);

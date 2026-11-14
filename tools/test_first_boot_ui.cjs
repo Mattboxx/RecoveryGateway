@@ -171,6 +171,70 @@ async function uplinkFlows(context) {
   await page.close();
 }
 
+/* Step 4 opens on the title of the choices, at the top of the view on every width. */
+async function choicesStart(page) {
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'fb-roles-title');
+  const r = await page.evaluate(() => { const o = document.getElementById('firstBoot'); return { top: document.getElementById('fb-roles-title').getBoundingClientRect().top, end: o.scrollTop + o.clientHeight >= o.scrollHeight - 1 }; });
+  assert.ok(r.top >= 0 && (r.top < 40 || r.end), 'step 4 starts from the title of the choices, not from a field below: ' + r.top);
+}
+
+/* Step 4 without Tailscale: presets undone by unticking (but not what another
+ * choice or the user still wants), no section opened and no page jump on a
+ * click, the live and final summaries, and the default restored when a key
+ * is entered after all. Sent roles keep the firmware's order. */
+async function choicesFlow(context) {
+  const { page, g } = await paired(context);
+  await page.check('input[name="fb-up"][value="ethernet"]');
+  await page.click('#fb-next'); await page.waitForSelector('#fb-skip-tailnet', { state: 'visible' });
+  await page.click('#fb-skip-tailnet');
+  await choicesStart(page);
+  const tick = v => page.evaluate(v => { const o = document.getElementById('firstBoot'), y = o.scrollTop; document.querySelector(v.startsWith('#') ? v : `#fb-roles input[value="${v}"]`).click(); return o.scrollTop - y; }, v);
+  const on = () => page.evaluate(() => [...document.querySelectorAll('#fb-net input, #fb-extras input')].filter(i => i.checked).map(i => i.id));
+  const sum = async () => (await page.innerText('#fb-picked')).replace(/\s+/g, ' ');
+  assert.match(await sum(), /Nothing selected/);
+  assert.ok(await page.isVisible('#fb-ts-off') && !(await page.isVisible('#fb-ts-on')), 'says that Tailscale was skipped');
+  assert.deepEqual(await on(), [], 'without Tailscale every network option and extra starts off');
+  for (const v of ['monitoring', 'wol', 'iot-ap']) assert.equal(await tick(v), 0, 'a choice does not move the page');
+  assert.equal(await page.evaluate(() => document.getElementById('fb-net').open || document.getElementById('fb-extras').open), false, 'a choice opens no section');
+  assert.deepEqual(await on(), ['fb-share-ap', 'fb-ap-always', 'fb-x-history', 'fb-x-trends', 'fb-x-snapshots', 'fb-x-names']);
+  let s = await sum();
+  assert.match(s, /Wake a NAS or PC No Tailscale needed Turned on now Keep an event history After the restart Save the device/);
+  assert.match(s, /Wi-Fi for IoT devices Tailscale optional Turned on now Share the gateway's own Wi-Fi network \(waits for Tailscale\), Keep the gateway's own Wi-Fi always on/);
+  assert.ok(await page.isVisible('#fb-ap-on'), 'IoT: the emergency Wi-Fi is always on');
+  await tick('monitoring');
+  assert.deepEqual(await on(), ['fb-share-ap', 'fb-ap-always', 'fb-x-history', 'fb-x-names'], 'unticking keeps what another choice still wants');
+  await tick('#fb-x-history'); await tick('wol');
+  assert.deepEqual(await on(), ['fb-share-ap', 'fb-ap-always', 'fb-x-names'], 'an option changed by hand stays as the user left it');
+  await tick('iot-ap');
+  assert.deepEqual(await on(), [], 'unticking every choice undoes its presets');
+  assert.ok(await page.isVisible('#fb-ap-off'));
+  await tick('subnet-router'); await tick('wol');
+  s = await sum();
+  assert.match(s, /Reach this network from your Tailnet Waits for Tailscale .*On Ethernet or SIM/);
+  assert.deepEqual(await on(), ['fb-x-history'], 'no home-network route at setup on Ethernet');
+  await page.click('#fb-next'); await page.waitForSelector('#fb-summary dt');
+  assert.match(await page.textContent('#fb-summary'), /Waits for TailscaleReach this network from your Tailnet/);
+  await page.click('#fb-back'); await tick('subnet-router');
+  await page.click('#fb-next'); await page.waitForSelector('#fb-summary dt');
+  assert.doesNotMatch(await page.textContent('#fb-summary'), /Waits for Tailscale/, 'Wake-on-LAN alone waits for nothing');
+  await page.click('#fb-back'); await page.click('#fb-back');
+  await page.fill('#fb-key', SECRETS.key); await page.click('#fb-next'); await choicesStart(page);
+  assert.equal(await page.isChecked('#fb-share-ap'), true, 'a key entered after skipping restores the default');
+  assert.ok(await page.isVisible('#fb-ts-on'));
+  await tick('lan-tailnet');
+  assert.match(await sum(), /Let a LAN device use one Tailnet service Needs Tailscale .*Also turned on Share the gateway's own Wi-Fi network$/);
+  /* A language chosen on this step redraws the summary, names included. */
+  await page.selectOption('#fb-lang', 'it');
+  await page.waitForFunction(() => /Le tue scelte[\s\S]*Accendi un NAS o un PC[\s\S]*Dopo il riavvio/.test(document.getElementById('fb-picked').innerText));
+  await page.selectOption('#fb-lang', 'en');
+  await page.waitForFunction(() => /Your choices[\s\S]*Wake a NAS or PC[\s\S]*After the restart/.test(document.getElementById('fb-picked').innerText));
+  await page.click('#fb-next'); await page.click('#fb-next'); await page.waitForSelector('#fb-done', { state: 'visible' });
+  assert.deepEqual(g.finish.roles, ['lan-tailnet', 'wol'], 'roles in the order the firmware always received');
+  assert.deepEqual(g.finish.extras, { history: true, trends: false, snapshots: false, tailnet_names: false });
+  assert.equal(g.finish.share_ap, true); assert.equal(g.finish.ap_recovery_only, true);
+  await page.close();
+}
+
 /* One-click recovery starts locally, leaving other roles available. */
 async function standaloneRecoveryFlow(context) {
   const { page, g } = await paired(context);
@@ -181,6 +245,8 @@ async function standaloneRecoveryFlow(context) {
   await page.click('#fb-wol-only');
   await page.waitForSelector('#fb-apname', { state: 'visible' });
   assert.deepEqual(await page.locator('#fb-roles input:checked').evaluateAll(roles => roles.map(role => role.value)), ['wol']);
+  assert.equal(await page.isChecked('#fb-x-history'), true, 'the one-click start applies the same preset as ticking the choice');
+  assert.match(await page.textContent('#fb-picked'), /Wake a NAS or PC/);
   assert.ok(!(await page.isChecked('#fb-share-ap')));
   assert.ok(await page.isVisible('#fb-roles input[value="home-assistant"]'));
   await page.click('#fb-next');
@@ -284,6 +350,7 @@ async function flow(browser, [width, height, locale], failures, full) {
     await check(3);
     await page.click('#fb-next');
     await page.waitForSelector('#fb-apname', { state: 'visible' });
+    await choicesStart(page);
     assert.equal(await page.inputValue('#fb-apname'), 'ESP32-Tailnet-1A2B');
     const apPw = await page.inputValue('#fb-appw');
     assert.match(apPw, /^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}-[A-Za-z0-9]{4}$/);
@@ -299,6 +366,7 @@ async function flow(browser, [width, height, locale], failures, full) {
     assert.equal(await page.isChecked('#fb-x-trends') && await page.isChecked('#fb-x-snapshots'), true, 'Monitor and get alerts selects trends and settings copies');
     assert.equal(await page.isChecked('#fb-x-names'), false, 'tailnet names only for the IoT role or by hand');
     await page.check('#fb-roles input[value="advanced"]');
+    assert.equal(await page.evaluate(() => document.getElementById('fb-net').open || document.getElementById('fb-extras').open), false, 'a choice opens no section');
     await check(4);
     await page.click('#fb-next');
     await page.waitForSelector('#fb-summary dt');
@@ -332,6 +400,7 @@ async function flow(browser, [width, height, locale], failures, full) {
     if (!full) return;
     await uplinkFlows(context);
     await standaloneRecoveryFlow(context);
+    await choicesFlow(context);
     // Setup-code pairing with one wrong code, on a fresh page.
     const p2 = await context.newPage(); const g2 = mockGateway(); await p2.route('http://esp32.test/**', g2.handle);
     await p2.goto('http://esp32.test/'); await p2.waitForSelector('#firstBoot', { state: 'visible' });
@@ -360,7 +429,8 @@ async function flow(browser, [width, height, locale], failures, full) {
   } finally { await context.close(); }
 }
 
-(async () => {
+module.exports = { mockGateway, html, SECRETS };
+if (require.main === module) (async () => {
   const browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome' });
   const failures = [];
   const runs = [[390, 844, 'en-US', true], [1440, 900, 'en-US', true]].concat(

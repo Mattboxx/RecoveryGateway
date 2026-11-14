@@ -6,6 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.22-beta.1] - 2026-11-14
+
+### Changed
+
+- First boot groups the choice of functions by goal, marks which ones need Tailscale and summarizes what each choice turns on now and what to set up after the restart. Wake-on-LAN and device checks are listed first and work without Tailscale.
+- The emergency Wi-Fi name and password have their own box that explains when the network is used. Network options and extras stay closed until opened, and the step opens on its title.
+
+### Fixed
+
+- Unticking a first-boot choice turns off only the options it had turned on. Starting with Wake-on-LAN applies the same preset as ticking it, and entering a Tailscale key after skipping restores sharing of the gateway Wi-Fi.
+
 ## [3.0.21] - 2026-11-14
 
 ### Added
