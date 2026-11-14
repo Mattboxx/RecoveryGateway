@@ -2208,7 +2208,13 @@
       </section>
 
       <section class="fb-step" data-step="3" hidden>
-        <p><b>Connect your Tailnet.</b> Join now, or leave the key empty and do it later from the dashboard.</p>
+        <p><b>Tailnet connection is optional.</b> Wake and check devices from Telegram or ntfy over your Internet connection.</p>
+        <div class="btn-row">
+          <button class="btn btn-secondary" id="fb-wol-only" type="button">Start with Wake-on-LAN</button>
+          <button class="btn btn-secondary" id="fb-skip-tailnet" type="button">Continue without Tailscale</button>
+        </div>
+        <p class="form-hint">You can add other roles now and connect Tailscale or Headscale later from the dashboard.</p>
+        <p><b>Connect your Tailnet.</b></p>
         <div class="fb-row" role="radiogroup" aria-label="Control server">
           <label class="fb-radio"><input type="radio" name="fb-ctl" value="ts" checked> Tailscale</label>
           <label class="fb-radio"><input type="radio" name="fb-ctl" value="hs"> Headscale (own server)</label>
@@ -2234,7 +2240,7 @@
           <label class="fb-opt"><input type="checkbox" value="lan-tailnet"><span><b>Connect a device to your Tailnet</b><small>A LAN device without Tailscale uses one Tailnet service through the gateway.</small></span></label>
           <label class="fb-opt"><input type="checkbox" value="subnet-router"><span><b>Connect a network</b><small>Reach this home network from your Tailnet (subnet route).</small></span></label>
           <label class="fb-opt"><input type="checkbox" value="iot-ap"><span><b>IoT Gateway</b><small>Sensors and switches join the gateway's own Wi-Fi.</small></span></label>
-          <label class="fb-opt"><input type="checkbox" value="wol"><span><b>Wake or recover a NAS/PC</b><small>Wake-on-LAN and recovery checks.</small></span></label>
+          <label class="fb-opt"><input type="checkbox" value="wol"><span><b>Wake or recover a NAS/PC</b><small>Wake and verify devices locally or through Telegram or ntfy. Tailscale is optional.</small></span></label>
           <label class="fb-opt"><input type="checkbox" value="home-assistant"><span><b>Home Assistant &amp; Automation</b><small>MQTT state and controls through Discovery.</small></span></label>
           <label class="fb-opt"><input type="checkbox" value="monitoring"><span><b>Monitor and get alerts</b><small>Event history, trends and settings copies; notifications by Telegram, email or ntfy afterwards.</small></span></label>
           <label class="fb-opt"><input type="checkbox" value="advanced"><span><b>Advanced configuration</b><small>Show every setting on every page.</small></span></label>
@@ -2276,6 +2282,7 @@
             <li id="fb-done-open">Open the gateway from the tailnet by its name, or find its address in your router.</li>
             <li id="fb-done-name" hidden>Only this gateway answers to <b class="mono" id="fb-done-host" data-no-i18n></b>: the name ends with the same code as its setup Wi-Fi. Phones and computers that support <span class="mono">.local</span> names open it even if the router changes the address.</li>
             <li>Sign in with your new admin password.</li>
+            <li id="fb-done-wol" hidden>For remote Wake-on-LAN, save a device in Devices &amp; Recovery, then configure Telegram or ntfy under Automation.</li>
           </ol>
           <p class="form-hint">If the home Wi-Fi is unavailable, the gateway opens its own protected Wi-Fi so you can fix the settings.</p>
         </div>
@@ -3869,6 +3876,16 @@
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-poweron-events"><span class="feature-switch-track" aria-hidden="true"></span><span>Blackout: notify when power returns</span></label><span class="form-hint">Reports a power-on reset, not a crash or software restart. First power-up and reconnecting the cable can look the same. Sent when the uplink is available; outage duration is unknown.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-alerts"><span class="feature-switch-track" aria-hidden="true"></span><span>Alert when internet works but Tailscale stays down</span></label><div class="feature-inline-dependent" id="ntfy-alert-settings"><label class="form-label" for="ntfy-delay" style="margin-top:0.5rem;">Failure delay (seconds)</label><input class="input mono" type="number" id="ntfy-delay" min="15" max="3600" value="120"></div></div>
             <div class="form-group"><label class="form-label" for="ntfy-commands">Remote commands</label><select class="input" id="ntfy-commands"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="ntfy-command-settings"><label class="form-label" for="ntfy-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="ntfy-poll" min="5" max="300" value="15"></div></div>
+            <details class="form-hint"><summary>Command reference</summary>
+              <ul>
+                <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
+                <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
+                <li><code class="mono" data-no-i18n>check NAS</code> — check reachability without waking the device.</li>
+                <li><code class="mono" data-no-i18n>info</code> — show gateway status when allowed.</li>
+              </ul>
+              <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
+              <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
+            </details>
           </div>
           <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-down-only"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
           <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
@@ -3906,7 +3923,17 @@
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-startup"><span class="feature-switch-track" aria-hidden="true"></span><span>Other restarts</span></label><span class="form-hint">Software, update and other normal starts. Crash, watchdog and brownout errors keep their separate warning/error path.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-poweron"><span class="feature-switch-track" aria-hidden="true"></span><span>Blackout: notify when power returns</span></label><span class="form-hint">Reports a power-on reset, separate from a crash. First power-up or reconnecting the cable can look the same. Sent after power returns and the network is available; outage duration is unknown.</span></div>
             <h4 style="font-size:var(--text-sm); margin:1rem 0 0.35rem 0;">Remote commands</h4>
-            <p class="form-hint" style="margin-top:0;">Send <code class="mono">info</code>, <code class="mono">wol NAME</code>, <code class="mono">recover NAME</code> or <code class="mono">check NAME</code> to your bot (with or without a leading <code class="mono">/</code>). Only messages from the chat above are executed; commands sent before they were switched on, or more than 10 minutes old, are ignored.</p>
+            <p class="form-hint">Send commands to your configured bot, with or without a leading slash. Commands older than 10 minutes are ignored.</p>
+            <details class="form-hint"><summary>Command reference</summary>
+              <ul>
+                <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
+                <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
+                <li><code class="mono" data-no-i18n>check NAS</code> — check reachability without waking the device.</li>
+                <li><code class="mono" data-no-i18n>info</code> — show gateway status when allowed.</li>
+              </ul>
+              <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
+              <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
+            </details>
             <div class="form-group"><label class="form-label" for="nt-tg-cmd">Remote commands</label><select class="input" id="nt-tg-cmd"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="nt-tg-cmd-settings"><label class="form-label" for="nt-tg-cmd-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="nt-tg-cmd-poll" min="5" max="300" value="15"></div></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-down"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
@@ -6965,7 +6992,7 @@
        risks:['Advertised routes expose those networks to every tailnet identity your policy allows.','Routes still need approval in the admin console; the device cannot verify approval.'],sections:['tailscale']},
       {id:'exit-node',capability:'exit-node',title:'Exit node',goal:'Offer this device as an Internet exit for tailnet clients, or use one.',page:'tailscale',focus:['ts-advertise-exit','ts-exit-node'],checks:[WZ_TS],exposure:true,
        risks:['Clients using this exit node send all their Internet traffic through your uplink.','Advertising requires approval in the admin console.'],sections:['tailscale']},
-      {id:'wol',capability:'wol',title:'Wake-on-LAN',goal:'Save a device by MAC address so it can be woken locally or remotely.',page:'operations',focus:['wol-add-btn'],checks:[WZ_LOCAL],
+      {id:'wol',capability:'wol',title:'Wake-on-LAN',goal:'Save a device by MAC address. Use Telegram or ntfy to wake and check it without a Tailnet.',page:'operations',focus:['wol-add-btn'],checks:[WZ_LOCAL],
        risks:['A sent magic packet never proves the device powered on.'],sections:['wol'],
        verify:function(){return wzGet('/api/wol').then(function(d){return (d.devices||[]).length+' saved device(s).';});}},
       {id:'smart-recovery',capability:'smart-recovery',title:'Smart Recovery',goal:'Wake a device and verify its host and service with bounded checks.',page:'operations',focus:['ops-devices','ops-monitoring'],checks:[WZ_WOL,WZ_PSRAM],
@@ -12202,7 +12229,7 @@
         $('fb-next').hidden = st.finished;
         err('');
         validate();
-        var focus = { 1: 'fb-pw', 2: 'fb-ssid', 3: 'fb-key', 4: 'fb-apname' }[step];
+        var focus = { 1: 'fb-pw', 2: 'fb-ssid', 3: 'fb-skip-tailnet', 4: 'fb-apname' }[step];
         /* Never steal focus from a field the user already chose in this step. */
         if (focus) setTimeout(function () {
           var sec = document.querySelector('#firstBoot .fb-step[data-step="' + step + '"]'), a = document.activeElement;
@@ -12445,8 +12472,9 @@
           : st.wifiIp && up === 'wifi' ? 'http://' + st.wifiIp + '/' + (lan ? '  ·  ' + lan : '') : (lan || T('Test the Wi-Fi to see it')));
         var tz = browserTz();
         row(dl, 'Time zone', tz.label || T('UTC (change it later in System)'));
-        row(dl, 'Tailnet', $('fb-key').value.trim() ? (document.querySelector('input[name="fb-ctl"]:checked').value === 'hs' ? $('fb-server').value.trim() : 'Tailscale') : T('Join later'));
-        row(dl, 'Device name in the tailnet', $('fb-host').value.trim() || 'tailnet-gateway');
+        var joining = $('fb-key').value.trim();
+        row(dl, 'Tailnet', joining ? (document.querySelector('input[name="fb-ctl"]:checked').value === 'hs' ? $('fb-server').value.trim() : 'Tailscale') : T('Disabled'));
+        if (joining) row(dl, 'Device name in the tailnet', $('fb-host').value.trim() || 'tailnet-gateway');
         row(dl, 'Share home network', $('fb-share-lan').checked ? yes : no);
         row(dl, 'Share gateway Wi-Fi', $('fb-share-ap').checked ? yes : no);
         row(dl, 'Exit node', $('fb-exit').checked ? yes : no);
@@ -12479,25 +12507,29 @@
           st.finished = true; st.key = null;
           ['fb-pw', 'fb-pw2', 'fb-wpw', 'fb-key', 'fb-simpin'].forEach(function (id) { $(id).value = ''; });
           $('fb-review').hidden = true; $('fb-done').hidden = false; show(5);
-          doneLinks(d.lan_name || st.defaults.lan_name || '', d.uplink || up);
+          doneLinks(d.lan_name || st.defaults.lan_name || '', d.uplink || up, !!cmd.tailnet.auth_key);
+          $('fb-done-wol').hidden = cmd.roles.indexOf('wol') < 0;
         }).catch(function () { $('fb-next').disabled = false; });
       }
       /* Where to find the gateway after the restart: the address the Wi-Fi
        * test received (routers normally keep it) and the per-board .local
        * name. Built as nodes: no markup from the device is interpreted. */
-      function doneLinks(name, up) {
+      function doneLinks(name, up, joinedTailnet) {
         var li = $('fb-done-open'), urls = [];
         var useAP = up === 'cellular' && !wifiWanted();
         if (st.wifiIp && up === 'wifi') urls.push('http://' + st.wifiIp + '/');
         if (name) urls.push('http://' + name + '.local/');
-        if (!urls.length) return;
+        if (!urls.length) {
+          if (!joinedTailnet) li.textContent = T('Find the gateway address in your router.');
+          return;
+        }
         li.textContent = T(useAP ? 'On the gateway access point, open ' : 'On your local network, open ');
         urls.forEach(function (u, i) {
           if (i) li.appendChild(document.createTextNode(T(' or ')));
           var a = document.createElement('a'); a.href = u; a.textContent = u; a.className = 'mono'; a.setAttribute('data-no-i18n', '');
           li.appendChild(a);
         });
-        li.appendChild(document.createTextNode(T(', or reach it from the tailnet by its name.')));
+        li.appendChild(document.createTextNode(joinedTailnet ? T(', or reach it from the tailnet by its name.') : '.'));
         if (name) { $('fb-done-host').textContent = name + '.local'; $('fb-done-name').hidden = false; }
       }
       /* The connection shapes the rest: which fields show, and safe defaults. */
@@ -12530,6 +12562,16 @@
         return {rule: '', label: ''};
       }
       function roles() { return Array.prototype.map.call(document.querySelectorAll('#fb-roles input:checked'), function (i) { return i.value; }); }
+      function skipTailnet(wol) {
+        $('fb-key').value = '';
+        $('fb-server').value = '';
+        $('fb-host').value = 'tailnet-gateway';
+        document.querySelector('input[name="fb-ctl"][value="ts"]').checked = true;
+        $('fb-server-row').hidden = true;
+        $('fb-share-ap').checked = false;
+        if (wol) document.querySelector('#fb-roles input[value="wol"]').checked = true;
+        show(4);
+      }
       function next() {
         var p = validate(); if (p) { err(p); return; }
         if (st.step === 5) { finish(); return; }
@@ -12542,6 +12584,8 @@
         document.body.classList.add('auth-open');
         $('fbForm').addEventListener('submit', function (e) { e.preventDefault(); next(); });
         $('fb-back').addEventListener('click', function () { if (st.step > 1) show(st.step - 1); });
+        $('fb-wol-only').addEventListener('click', function () { skipTailnet(true); });
+        $('fb-skip-tailnet').addEventListener('click', function () { skipTailnet(false); });
         $('fb-retry').addEventListener('click', begin);
         $('fb-code-btn').addEventListener('click', claimCode);
         $('fb-scan').addEventListener('click', scan);

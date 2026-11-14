@@ -69,18 +69,13 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.19
+## What's new in Firmware 3.0.20
 
-- **OTA recovery** keeps a new image pending during startup and reserves the
-  restart task before accepting a manual upload.
-- **Scheduled Recovery checks** skip disabled devices and distinguish local
-  probe errors from a failed target check.
-- **ntfy** queues and retries operational results, preserving pending results
-  when unrelated preferences are saved.
-- **Networking** improves Wi-Fi queue handling under load and avoids redundant
-  mDNS probing when the uplink address is unchanged.
+- First boot offers **Start with Wake-on-LAN** and **Continue without Tailscale**.
+- The Telegram and ntfy settings include a command reference for sending a
+  wake packet, checking a saved device and verifying recovery.
 
-[Install Firmware 3.0.19](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
+[Install the current firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
 · [Full changelog](CHANGELOG.md)
 
 <a id="7-download-firmware"></a>
