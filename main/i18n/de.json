@@ -2005,7 +2005,6 @@
  "Enter the auth key, or choose Not now.": "Geben Sie den Auth-Schlüssel ein oder wählen Sie Nicht jetzt.",
  "Share networks with the Tailnet, exit node.": "Netzwerke mit dem Tailnet teilen, Exit-Node.",
  "History, trends, settings copies, Tailnet names.": "Verlauf, Trends, Einstellungskopien, Tailnet-Namen.",
- "Always on: your IoT devices connect to it. If the home network fails, it stays the same network, and you can join it to fix the settings.": "Immer an: Ihre IoT-Geräte verbinden sich damit. Fällt das Heimnetz aus, bleibt es dasselbe Netzwerk, und Sie können sich damit verbinden, um die Einstellungen zu korrigieren.",
  "Off while the gateway is connected to your home network (Wi-Fi or cable). When that connection is lost for about a minute, it turns on so you can open this page and fix the settings.": "Aus, solange das Gateway mit Ihrem Heimnetz verbunden ist (WLAN oder Kabel). Fehlt diese Verbindung etwa eine Minute lang, schaltet es sich ein, damit Sie diese Seite öffnen und die Einstellungen korrigieren können.",
  "Needed for IoT devices that connect to the gateway.": "Nötig für IoT-Geräte, die sich mit dem Gateway verbinden.",
  "Name on your home network": "Name im Heimnetz",
@@ -2016,5 +2015,17 @@
  "Test the current Wi-Fi settings to continue.": "Testen Sie die aktuellen WLAN-Einstellungen, um fortzufahren.",
  "On a mobile-only setup, connect to the gateway access point for local administration. A Tailscale key adds remote access.": "Bei reinem Mobilfunkbetrieb verbinden Sie sich für die lokale Verwaltung mit dem Access Point des Gateways. Ein Tailscale-Schlüssel ergänzt den Fernzugriff.",
  "Required": "Erforderlich",
- "At least 8 characters and different from the admin password. Write it down: you need it to join this network.": "Mindestens 8 Zeichen und anders als das Admin-Passwort. Notieren Sie es: Sie brauchen es, um sich mit diesem Netzwerk zu verbinden."
+ "At least 8 characters and different from the admin password. Write it down: you need it to join this network.": "Mindestens 8 Zeichen und anders als das Admin-Passwort. Notieren Sie es: Sie brauchen es, um sich mit diesem Netzwerk zu verbinden.",
+ "Access point for IoT devices": "Access Point für IoT-Geräte",
+ "Always on: your IoT devices connect to this network. It is also the one to join to fix the settings if the home network fails; there is no separate emergency Wi-Fi.": "Immer an: Ihre IoT-Geräte verbinden sich mit diesem Netzwerk. Mit ihm verbinden Sie sich auch, um die Einstellungen zu korrigieren, wenn das Heimnetz ausfällt; ein separates Notfall-WLAN gibt es nicht.",
+ "Needed for IoT devices that connect to the gateway. Off: it turns on only in an emergency.": "Nötig für IoT-Geräte, die sich mit dem Gateway verbinden. Aus: Es schaltet sich nur im Notfall ein.",
+ "No password (open network)": "Kein Passwort (offenes Netzwerk)",
+ "Anyone nearby can join it and, through the gateway, reach your home network and, with sharing on, your Tailnet. Choose it only if you accept that risk.": "Jeder in der Nähe kann sich verbinden und über das Gateway Ihr Heimnetz und, bei aktiver Freigabe, Ihr Tailnet erreichen. Wählen Sie dies nur, wenn Sie dieses Risiko akzeptieren.",
+ "open, no password": "offen, ohne Passwort",
+ "Open network without a password, as chosen at setup: anyone nearby can join it. Set a password here to protect it.": "Offenes Netzwerk ohne Passwort, wie bei der Einrichtung gewählt: Jeder in der Nähe kann sich verbinden. Legen Sie hier ein Passwort fest, um es zu schützen.",
+ "always on": "immer an",
+ "when the local LAN is unavailable": "wenn das Heimnetz nicht verfügbar ist",
+ "tested": "getestet",
+ "not tested": "nicht getestet",
+ "No": "Nein"
 }

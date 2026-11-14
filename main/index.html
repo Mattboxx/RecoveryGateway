@@ -2290,6 +2290,7 @@
         <label class="fb-opt" id="fb-share-lan-row"><input type="checkbox" id="fb-share-lan"><span><b>Share my home network with the tailnet</b> <span class="badge badge-info">Needs Tailscale</span><small>Advertises the home LAN as a subnet route; approve it in the admin console. Needs a successful Wi-Fi test.</small></span></label>
         <label class="fb-opt"><input type="checkbox" id="fb-share-ap" checked><span><b>Share the gateway's own Wi-Fi network</b> <span class="badge badge-info">Needs Tailscale</span><small>Devices connected to the gateway's Wi-Fi can reach the tailnet and be reached from it.</small></span></label>
         <label class="fb-opt" id="fb-exit-row"><input type="checkbox" id="fb-exit"><span><b>Offer this gateway as an exit node</b> <span class="badge badge-info">Needs Tailscale</span><small>Other tailnet devices can use the gateway's Internet connection. When the modem is active, this traffic counts toward your mobile data plan.</small></span></label>
+        <label class="fb-opt"><input type="checkbox" id="fb-ap-always"><span><b>Keep the gateway's own Wi-Fi always on</b><small>Needed for IoT devices that connect to the gateway. Off: it turns on only in an emergency.</small></span></label>
         </details>
         <details class="fb-more" id="fb-extras"><summary><span><b>Extras</b><small>History, trends, settings copies, Tailnet names.</small></span><span class="badge badge-neutral" id="fb-extras-n"></span></summary>
         <label class="fb-opt"><input type="checkbox" id="fb-x-history"><span><b>Keep an event history</b><small>Starts, crashes, updates, uplink and tailnet changes, kept in the gateway's flash.</small></span></label>
@@ -2298,14 +2299,14 @@
         <label class="fb-opt"><input type="checkbox" id="fb-x-names"><span><b>Tailnet names for devices on the gateway's Wi-Fi</b> <span class="badge badge-info">Needs Tailscale</span><small>They can use names like nas or nas.tail1234.ts.net instead of 100.x addresses.</small></span></label>
         <p class="auth-hint">Telegram, email and dynamic DNS need your accounts: set them up later under Automation and Network.</p>
         </details>
-        <fieldset class="fb-box"><legend><span id="fb-ap-off-t">Emergency Wi-Fi</span><span id="fb-ap-on-t">Gateway Wi-Fi</span></legend>
-          <p class="form-hint"><span id="fb-ap-on">Always on: your IoT devices connect to it. If the home network fails, it stays the same network, and you can join it to fix the settings.</span><span id="fb-ap-off">Off while the gateway is connected to your home network (Wi-Fi or cable). When that connection is lost for about a minute, it turns on so you can open this page and fix the settings.</span></p>
-          <label class="fb-opt"><input type="checkbox" id="fb-ap-always"><span><b>Keep the gateway's own Wi-Fi always on</b><small>Needed for IoT devices that connect to the gateway.</small></span></label>
+        <fieldset class="fb-box"><legend><span id="fb-ap-off-t">Emergency Wi-Fi</span><span id="fb-ap-on-t">Access point for IoT devices</span></legend>
+          <p class="form-hint"><span id="fb-ap-on">Always on: your IoT devices connect to this network. It is also the one to join to fix the settings if the home network fails; there is no separate emergency Wi-Fi.</span><span id="fb-ap-off">Off while the gateway is connected to your home network (Wi-Fi or cable). When that connection is lost for about a minute, it turns on so you can open this page and fix the settings.</span></p>
           <div class="form-group">
             <label class="form-label" for="fb-apname">Gateway Wi-Fi name</label>
             <input class="input" id="fb-apname" maxlength="32" spellcheck="false">
           </div>
-          <div class="form-group">
+          <label class="fb-opt"><input type="checkbox" id="fb-ap-open"><span><b>No password (open network)</b><small>Anyone nearby can join it and, through the gateway, reach your home network and, with sharing on, your Tailnet. Choose it only if you accept that risk.</small></span></label>
+          <div class="form-group" id="fb-appw-row">
             <label class="form-label" for="fb-appw">Gateway Wi-Fi password</label>
             <div class="fb-row"><input class="input" id="fb-appw" maxlength="63" autocomplete="off" spellcheck="false" placeholder="Required">
               <button class="btn btn-secondary btn-sm" id="fb-appw-gen" type="button">Generate</button></div>
@@ -2945,6 +2946,7 @@
               <label class="form-label" for="net-ap-pw">AP Password</label>
               <input class="input" type="password" id="net-ap-pw" autocomplete="new-password" placeholder="Leave empty to keep current">
               <span class="form-hint" id="net-ap-default-pw" role="alert" style="color:var(--danger)" hidden>The access point still uses the firmware's shared default password. Set your own password here.</span>
+              <span class="form-hint" id="net-ap-open" role="alert" style="color:var(--warning)" hidden>Open network without a password, as chosen at setup: anyone nearby can join it. Set a password here to protect it.</span>
             </div>
           </div>
           <div class="grid grid-cols-2">
@@ -6454,6 +6456,7 @@
           document.getElementById('net-ap-ssid').value      = ap.ssid || '';
           document.getElementById('net-ap-pw').value        = '';
           document.getElementById('net-ap-default-pw').hidden = !ap.default_password;
+          document.getElementById('net-ap-open').hidden = !ap.open;
           var chEl = document.getElementById('net-ap-channel-info');
           if (chEl) {
             chEl.value = (typeof ap.channel === 'number' && ap.channel >= 1 && ap.channel <= 13)
@@ -12460,10 +12463,10 @@
         return '';
       }
       function featuresProblem() {
-        var ap = $('fb-appw').value;
+        var ap = $('fb-appw').value, open = $('fb-ap-open').checked;
         if (!$('fb-apname').value) return 'Enter a name for the gateway Wi-Fi.';
-        if (ap.length < 8 || ap.length > 63) return 'Gateway Wi-Fi password must be 8 to 63 characters.';
-        if (ap === $('fb-pw').value) return 'Use a different password for the gateway Wi-Fi.';
+        if (!open && (ap.length < 8 || ap.length > 63)) return 'Gateway Wi-Fi password must be 8 to 63 characters.';
+        if (!open && ap === $('fb-pw').value) return 'Use a different password for the gateway Wi-Fi.';
         if ($('fb-share-lan').checked && uplink() === 'wifi' && !st.wifiOk) return 'Test the Wi-Fi connection before sharing the home network.';
         return '';
       }
@@ -12658,6 +12661,7 @@
           });
         }
         $('fb-ts-on').hidden = !ts; $('fb-ts-off').hidden = ts;
+        $('fb-appw-row').hidden = $('fb-ap-open').checked;
         ['', '-t'].forEach(function (x) { $('fb-ap-on' + x).hidden = !$('fb-ap-always').checked; $('fb-ap-off' + x).hidden = $('fb-ap-always').checked; });
         ['fb-net', 'fb-extras'].forEach(function (id) { var n = document.querySelectorAll('#' + id + ' input:checked').length; $(id + '-n').textContent = n ? '✓ ' + n : ''; });
         box.textContent = '';
@@ -12696,7 +12700,7 @@
         row(dl, 'Share home network', $('fb-share-lan').checked ? yes : no);
         row(dl, 'Share gateway Wi-Fi', $('fb-share-ap').checked ? yes : no);
         row(dl, 'Exit node', $('fb-exit').checked ? yes : no);
-        row(dl, 'Gateway Wi-Fi', $('fb-apname').value + ' · ' + ($('fb-ap-always').checked ? T('always on') : T('when the local LAN is unavailable')));
+        row(dl, 'Gateway Wi-Fi', $('fb-apname').value + ' · ' + ($('fb-ap-always').checked ? T('always on') : T('when the local LAN is unavailable')) + ($('fb-ap-open').checked ? ' · ' + T('open, no password') : ''));
         var names = roles().map(function (r) { return T(name(choice(r))); }), wait = picked();
         row(dl, 'Gateway role', names.join(', ') || T('Decide later'));
         if (wait.length) row(dl, 'Waits for Tailscale', wait.join(', '));
@@ -12716,7 +12720,7 @@
             cellular: up === 'cellular' ? Object.assign(pins('fb-cell-', ['tx', 'rx', 'pwrkey']),
               { apn: $('fb-apn').value.trim(), pin: $('fb-simpin').value, roaming: $('fb-roam').checked, data_ack: $('fb-data-ack').checked }) : undefined },
           tz: browserTz().rule,
-          ap_ssid: $('fb-apname').value, ap_password: $('fb-appw').value, ap_recovery_only: !$('fb-ap-always').checked,
+          ap_ssid: $('fb-apname').value, ap_password: $('fb-ap-open').checked ? '' : $('fb-appw').value, ap_open: $('fb-ap-open').checked, ap_recovery_only: !$('fb-ap-always').checked,
           lan_name: lanName() === st.defaults.lan_name ? '' : lanName(),
           tailnet: { auth_key: $('fb-key').value.trim(), login_server: hs ? $('fb-server').value.trim() : '', hostname: $('fb-host').value.trim() },
           share_lan: $('fb-share-lan').checked && up === 'wifi', share_ap: $('fb-share-ap').checked, exit_node: $('fb-exit').checked,
@@ -12847,7 +12851,7 @@
         } else lang.hidden = true;
         $('fb-wpw').addEventListener('input', function () { resetWifiTest(); validate(); });
         document.querySelectorAll('input[name="fb-ctl"]').forEach(function (r) { r.addEventListener('change', function () { $('fb-server-row').hidden = this.value !== 'hs'; validate(); }); });
-        ['fb-pw', 'fb-pw2', 'fb-key', 'fb-server', 'fb-host', 'fb-apname', 'fb-appw', 'fb-share-lan'].forEach(function (id) { $(id).addEventListener('input', validate); $(id).addEventListener('change', validate); });
+        ['fb-pw', 'fb-pw2', 'fb-key', 'fb-server', 'fb-host', 'fb-apname', 'fb-appw', 'fb-ap-open', 'fb-share-lan'].forEach(function (id) { $(id).addEventListener('input', validate); $(id).addEventListener('change', validate); });
         show(0);
         begin();
         scan();

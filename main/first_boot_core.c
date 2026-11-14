@@ -247,6 +247,16 @@ const char *fb_check_ap_password(const char *pw)
     return printable(pw) ? NULL : "access point password contains control characters";
 }
 
+/* The gateway's own Wi-Fi: WPA2 with its own password, or open when the
+ * user explicitly asks for it (then no password is accepted at all). */
+const char *fb_check_ap_settings(const char *pw, bool open, const char *admin)
+{
+    if (open) return pw && *pw ? "an open access point takes no password" : NULL;
+    const char *reason = fb_check_ap_password(pw);
+    if (!reason && admin && !strcmp(pw, admin)) reason = "use a different password for the access point";
+    return reason;
+}
+
 const char *fb_check_auth_key(const char *key)
 {
     if (!key || !*key) return NULL;                      /* tailnet can be joined later */

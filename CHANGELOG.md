@@ -6,6 +6,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.22-beta.2] - 2026-11-14
+
+### Added
+
+- Choose the name on the home network (`name.local`) during first boot, next to the tested address. The board's own name stays the default.
+- The gateway Wi-Fi can be an open network when the user explicitly chooses it at setup, with a warning. It keeps a password by default, and setting a password on the Network page closes it again.
+
+### Changed
+
+- The Tailscale step asks one question, connect now or not now; the key fields appear only for "connect now". The Wake-on-LAN shortcut there is gone: Wake-on-LAN is the first choice of the next step.
+- The gateway Wi-Fi box is named after its mode: emergency Wi-Fi, or access point for IoT devices when it stays on. Its password is no longer pre-generated.
+- Network options and extras look like expandable sections with a description and a count of what is on.
+
+### Fixed
+
+- Phones no longer scroll an invisible page behind the setup wizard.
+
 ## [3.0.22-beta.1] - 2026-11-14
 
 ### Changed

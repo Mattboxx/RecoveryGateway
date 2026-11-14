@@ -2052,7 +2052,6 @@
  "Enter the auth key, or choose Not now.": "请输入认证密钥，或选择“暂不”。",
  "Share networks with the Tailnet, exit node.": "与 Tailnet 共享网络、出口节点。",
  "History, trends, settings copies, Tailnet names.": "历史、趋势、设置副本、Tailnet 名称。",
- "Always on: your IoT devices connect to it. If the home network fails, it stays the same network, and you can join it to fix the settings.": "始终开启：你的物联网设备连接到它。家庭网络故障时它仍是同一个网络，你可以连接它来修正设置。",
  "Off while the gateway is connected to your home network (Wi-Fi or cable). When that connection is lost for about a minute, it turns on so you can open this page and fix the settings.": "网关连接到家庭网络（Wi-Fi 或网线）时保持关闭。该连接中断约一分钟后会开启，以便你打开此页面并修正设置。",
  "Needed for IoT devices that connect to the gateway.": "连接到网关的物联网设备需要此项。",
  "Name on your home network": "家庭网络中的名称",
@@ -2063,5 +2062,17 @@
  "Test the current Wi-Fi settings to continue.": "测试当前 Wi-Fi 设置以继续。",
  "On a mobile-only setup, connect to the gateway access point for local administration. A Tailscale key adds remote access.": "仅使用移动网络时，请连接网关的接入点进行本地管理。Tailscale 密钥可增加远程访问。",
  "Required": "必填",
- "At least 8 characters and different from the admin password. Write it down: you need it to join this network.": "至少 8 个字符，且不同于管理员密码。请记下来：连接此网络时需要它。"
+ "At least 8 characters and different from the admin password. Write it down: you need it to join this network.": "至少 8 个字符，且不同于管理员密码。请记下来：连接此网络时需要它。",
+ "Access point for IoT devices": "物联网设备接入点",
+ "Always on: your IoT devices connect to this network. It is also the one to join to fix the settings if the home network fails; there is no separate emergency Wi-Fi.": "始终开启：你的物联网设备连接到此网络。家庭网络故障时，你也通过它连接来修正设置；没有单独的应急 Wi-Fi。",
+ "Needed for IoT devices that connect to the gateway. Off: it turns on only in an emergency.": "连接到网关的物联网设备需要此项。关闭时，仅在紧急情况下开启。",
+ "No password (open network)": "无密码（开放网络）",
+ "Anyone nearby can join it and, through the gateway, reach your home network and, with sharing on, your Tailnet. Choose it only if you accept that risk.": "附近任何人都可以连接，并通过网关访问你的家庭网络；开启共享时还能访问你的 Tailnet。仅在你接受此风险时选择。",
+ "open, no password": "开放，无密码",
+ "Open network without a password, as chosen at setup: anyone nearby can join it. Set a password here to protect it.": "按设置时的选择，这是无密码的开放网络：附近任何人都可以连接。在此设置密码以保护它。",
+ "always on": "始终开启",
+ "when the local LAN is unavailable": "家庭网络不可用时",
+ "tested": "已测试",
+ "not tested": "未测试",
+ "No": "否"
 }

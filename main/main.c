@@ -749,7 +749,9 @@ esp_netif_t *wifi_init_softap(void)
     char *nvs_ssid = nvs_param_get_str("ap_ssid");
     char *nvs_pw   = nvs_param_get_str("ap_passwd");
     const char *use_ssid = (nvs_ssid && nvs_ssid[0]) ? nvs_ssid : EXAMPLE_ESP_WIFI_AP_SSID;
-    const char *use_pw   = (nvs_pw   && nvs_pw[0])   ? nvs_pw   : EXAMPLE_ESP_WIFI_AP_PASSWD;
+    uint8_t ap_open = 0;
+    nvs_param_get_u8("ap_open", &ap_open);    /* chosen in setup: no password at all */
+    const char *use_pw   = (nvs_pw   && nvs_pw[0])   ? nvs_pw   : (ap_open ? "" : EXAMPLE_ESP_WIFI_AP_PASSWD);
     /* Unconfigured device: open, recognisable setup AP (no shared default
      * password); pairing and sealed requests protect the setup itself. */
     char setup_ssid[40];

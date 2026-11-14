@@ -498,13 +498,13 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
             if (!cell_config_valid(&cell, why, sizeof why)) reason = why;
         }
     }
-    if (!reason) reason = fb_check_ap_password(ap_pw);
+    bool ap_open = bool_of(cmd, "ap_open", false);
+    if (!reason) reason = fb_check_ap_settings(ap_pw, ap_open, admin);
     if (!reason && (!ap_ssid || !*ap_ssid || strlen(ap_ssid) > 32)) reason = "access point name must be 1 to 32 bytes";
     if (!reason) reason = fb_check_auth_key(key);
     if (!reason) reason = fb_check_login_server(server);
     if (!reason) reason = fb_check_hostname(host);
     if (!reason) reason = fb_check_lan_name(lan);
-    if (!reason && ap_pw && admin && !strcmp(ap_pw, admin)) reason = "use a different password for the access point";
     if (reason) return send_error(req, "400 Bad Request", "invalid", reason);
     if (has_wifi && !wifi_setup_test_matches(ssid, wpw ? wpw : "")) {
         return send_error(req, "409 Conflict", "wifi_test_required",
@@ -518,7 +518,8 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     /* Order matters for power loss: the protected AP first, then the admin
      * password (which ends setup mode), then the rest, then the marker. */
     esp_err_t e = nvs_param_set_str("ap_ssid", ap_ssid);
-    if (e == ESP_OK) e = nvs_param_set_str("ap_passwd", ap_pw);
+    if (e == ESP_OK) e = nvs_param_set_str("ap_passwd", ap_open ? "" : ap_pw);
+    if (e == ESP_OK) e = nvs_param_set_u8("ap_open", ap_open ? 1 : 0);
     if (e == ESP_OK) e = nvs_param_set_u8("ap_auto_off", ap_recovery ? 1 : 0);
     if (e == ESP_OK) e = set_web_password_hashed(admin);
     if (e == ESP_OK && has_wifi) {
