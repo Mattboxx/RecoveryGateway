@@ -182,6 +182,22 @@ async function refresh(page) {
       assert.deepEqual(f.errors, []);
       await f.context.close();
     }
+    /* The lock button and its idle timer stay inside the top bar on desktop
+     * and on 44 px touch layouts. */
+    for (const [width, touch] of [[1440, false], [390, true], [320, true]]) {
+      const context = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: touch, isMobile: touch, locale: 'en-US' });
+      const page = await context.newPage();
+      await install(page, { '/api/auth/status': { setup_mode: false, auth_enabled: true, password_set: true, auth_required: true, authenticated: true,
+        session_timeout_s: 3600, session_remaining_s: 3599, device_name: 'Tailnet Gateway' } });
+      await page.goto('http://esp32.test/#status');
+      await page.waitForFunction(() => getComputedStyle(document.getElementById('authCountdown')).display !== 'none');
+      const r = await page.evaluate(() => {
+        const nav = document.querySelector('.nav').getBoundingClientRect();
+        return ['lockBtn', 'authCountdown'].map(id => { const b = document.getElementById(id).getBoundingClientRect(); return [id, b.top - nav.top, nav.bottom - b.bottom, b.height]; });
+      });
+      for (const [id, above, below, h] of r) assert.ok(above >= 0 && below >= 0 && h > 0, `${width}px: ${id} leaves the top bar (${above}, ${below})`);
+      await context.close();
+    }
     console.log('status signature: OK');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -1848,6 +1848,11 @@
       .card-body details > summary { min-height: 44px; padding: 10px 0; }
       .tf-check .tf-test { flex: 1 1 auto; }
       input[type="file"] { min-height: 44px; width: 100%; max-width: 100%; padding: 8px 0; font-size: 15px; }
+      /* The 44 px lock button fills the bar: the idle timer sits inside its
+       * lower edge instead of below it, so nothing leaves the top bar. */
+      .lock-stack { position: relative; }
+      .lock-stack:has(> .auth-countdown:not([style*="none"])) .btn-lock { padding-bottom: 12px; }
+      .lock-stack .auth-countdown { position: absolute; left: 0; right: 0; bottom: 3px; text-align: center; pointer-events: none; }
     }
     @media (max-width: 380px) {
       .btn-lock > span { display: none; }
@@ -2946,7 +2951,11 @@
               <label class="form-label" for="net-ap-pw">AP Password</label>
               <input class="input" type="password" id="net-ap-pw" autocomplete="new-password" placeholder="Leave empty to keep current">
               <span class="form-hint" id="net-ap-default-pw" role="alert" style="color:var(--danger)" hidden>The access point still uses the firmware's shared default password. Set your own password here.</span>
-              <span class="form-hint" id="net-ap-open" role="alert" style="color:var(--warning)" hidden>Open network without a password, as chosen at setup: anyone nearby can join it. Set a password here to protect it.</span>
+              <span class="form-hint" id="net-ap-open" role="alert" style="color:var(--warning)" hidden>Open network: anyone nearby can join it.</span>
+              <label class="feature-switch" style="margin-top:0.5rem;">
+                <input type="checkbox" id="net-ap-open-sw"><span class="feature-switch-track" aria-hidden="true"></span><span>No password (open network)</span>
+              </label>
+              <span class="form-hint">Anyone nearby can join it and, through the gateway, reach your home network and, with sharing on, your Tailnet. Choose it only if you accept that risk.</span>
             </div>
           </div>
           <div class="grid grid-cols-2">
@@ -6457,6 +6466,7 @@
           document.getElementById('net-ap-pw').value        = '';
           document.getElementById('net-ap-default-pw').hidden = !ap.default_password;
           document.getElementById('net-ap-open').hidden = !ap.open;
+          s_ap_open = !!ap.open; document.getElementById('net-ap-open-sw').checked = s_ap_open; apOpenShape();
           var chEl = document.getElementById('net-ap-channel-info');
           if (chEl) {
             chEl.value = (typeof ap.channel === 'number' && ap.channel >= 1 && ap.channel <= 13)
@@ -6811,6 +6821,18 @@
     document.getElementById('net-ap-hidden').addEventListener('change', function () {
       document.getElementById('net-ap-save').disabled = false;
     });
+    /* Open gateway Wi-Fi, as in first boot: no password field while open; a
+     * password is needed to close it again. Sent only when it changes, so
+     * other AP edits never touch the security mode. */
+    var s_ap_open = false;
+    function apOpenShape() {
+      var open = document.getElementById('net-ap-open-sw').checked, pw = document.getElementById('net-ap-pw');
+      pw.disabled = open; if (open) pw.value = '';
+      pw.placeholder = open ? 'No password (open network)' : s_ap_open ? 'Required' : 'Leave empty to keep current';
+    }
+    document.getElementById('net-ap-open-sw').addEventListener('change', function () {
+      apOpenShape(); document.getElementById('net-ap-save').disabled = false;
+    });
     document.getElementById('net-ap-uplink-enabled').addEventListener('change', function () {
       document.getElementById('net-ap-save').disabled = false;
     });
@@ -6826,6 +6848,8 @@
         showToast('error', 'IP + mask both required', 'Set both fields, or leave both empty for the default 192.168.4.1/24.', 5000);
         return;
       }
+      var openNow = document.getElementById('net-ap-open-sw').checked;
+      if (s_ap_open && !openNow && !pw) { showToast('error', 'Password required', 'Enter a password to close the open network.', 5000); return; }
       var body = {
         ap: {
           ssid: ssid, ip: ip, mask: mask, dns: dns,
@@ -6837,7 +6861,8 @@
           }
         }
       };
-      if (pw) body.ap.password = pw;
+      if (pw && !openNow) body.ap.password = pw;
+      if (openNow !== s_ap_open) body.ap.open = openNow;
       saveNetwork(this, body);
     });
 

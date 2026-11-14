@@ -108,6 +108,7 @@ const char *fb_check_admin_password(const char *pw, const char *ssid);
 const char *fb_check_wifi(const char *ssid, const char *password);
 const char *fb_check_ap_password(const char *pw);
 const char *fb_check_ap_settings(const char *pw, bool open, const char *admin);
+const char *fb_check_ap_change(bool open, const char *new_pw, bool have_stored);
 const char *fb_check_auth_key(const char *key);
 const char *fb_check_login_server(const char *url);
 const char *fb_check_hostname(const char *name);

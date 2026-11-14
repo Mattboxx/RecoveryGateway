@@ -2069,10 +2069,12 @@
  "No password (open network)": "无密码（开放网络）",
  "Anyone nearby can join it and, through the gateway, reach your home network and, with sharing on, your Tailnet. Choose it only if you accept that risk.": "附近任何人都可以连接，并通过网关访问你的家庭网络；开启共享时还能访问你的 Tailnet。仅在你接受此风险时选择。",
  "open, no password": "开放，无密码",
- "Open network without a password, as chosen at setup: anyone nearby can join it. Set a password here to protect it.": "按设置时的选择，这是无密码的开放网络：附近任何人都可以连接。在此设置密码以保护它。",
  "always on": "始终开启",
  "when the local LAN is unavailable": "家庭网络不可用时",
  "tested": "已测试",
  "not tested": "未测试",
- "No": "否"
+ "No": "否",
+ "Password required": "需要密码",
+ "Enter a password to close the open network.": "请输入密码以关闭开放网络。",
+ "Open network: anyone nearby can join it.": "开放网络：附近任何人都可以连接。"
 }
