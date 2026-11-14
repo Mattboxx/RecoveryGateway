@@ -160,7 +160,7 @@ void homelab_ops_init(void) {
             ?permissions:OPS_RECOVERY_EXPLICIT;
     initialized=true;bool monitoring=store.settings.monitoring;UNLOCK();
     health_monitor_init();
-    if(monitoring||health_monitor_enabled())(void)ensure_worker();
+    if(monitoring||health_monitor_enabled()||saved_tcp_schedule_enabled())(void)ensure_worker();
 }
 static int find_profile_locked(const uint8_t mac[6]) {
     for(int i=0;i<WOL_MAX_DEVICES;i++)if(store.devices[i].timeout_s && !memcmp(store.devices[i].mac,mac,6))return i;

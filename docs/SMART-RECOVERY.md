@@ -1,6 +1,6 @@
 # Smart Recovery
 
-Add a host in **Automation → Wake-on-LAN**, then open **Devices & Recovery**.
+Open **Devices & Recovery → Wake-on-LAN** and add the device.
 Extra profiles stay MAC-bound and preserve the original WoL storage layout.
 Choose target/scope, a known listening TCP host port, optional service port,
 timeout/check limit and optional monitoring/result notification. A NAS with SSH
@@ -40,3 +40,16 @@ and new outages** on the saved device. The profile timeout is 5–600 seconds.
 The check uses the saved port and can report reachable, not reachable or
 inconclusive.
 Full security/physical NVS/OTA/resource/fault/browser/soak validation is pending.
+
+## Saved TCP checks
+
+In **Devices & Recovery → Health & Resources → Saved TCP checks**, save
+up to four named IPv4 addresses and TCP ports. A saved check does not need a
+MAC address. An interval of 0 makes it manual only. Use 30–3600 seconds to
+schedule it, with optional notifications when a previously reachable service
+fails. The result describes TCP reachability from this gateway.
+
+Use **Test saved port** in the Web UI, or send `probe NAME` over Telegram
+or ntfy with verified recovery enabled to receive a result. Send `checks`
+to list the last outcomes. Messages accept saved names only. A check never
+sends Wake-on-LAN.

@@ -11,7 +11,9 @@ header=(ROOT/'main/health_monitor.h').read_text(encoding='utf-8')
 def function(signature):
     at=source.index(signature);return source[at:source.index('\n}',at)+2]+'\n'
 types=header[header.index('typedef struct'):header.index('void health_monitor_init')]
+types+=header[header.index('#define SAVED_TCP_MAX'):header.index('esp_err_t saved_tcp_set')]
 types+=source[source.index('#define HEALTH_MAGIC'):source.index('static SemaphoreHandle_t health_lock;')]
+types+=source[source.index('EXT_RAM_BSS_ATTR static saved_tcp_target_t saved_targets'):source.index('static bool saved_valid')]
 fixture=r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -20,17 +22,24 @@ fixture=r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "cJSON.h"
+#include "remote_commands.h"
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
 #endif
+#define EXT_RAM_BSS_ATTR
 #define HLOCK() ((void)0)
 #define HUNLOCK() ((void)0)
 #define ESP_OK 0
 #define ESP_ERR_INVALID_ARG -2
+#define ESP_ERR_INVALID_STATE -3
+#define ESP_ERR_TIMEOUT -4
+#define ESP_ERR_NOT_FOUND -5
+#define ESP_ERR_NOT_SUPPORTED -6
 #define NVS_NAMESPACE "fixture"
 #define NVS_READWRITE 1
 typedef int esp_err_t,nvs_handle_t;
@@ -58,9 +67,14 @@ static int nvs_set_blob(int h,const char *k,const void *p,size_t n){(void)h;(voi
 static int nvs_commit(int h){(void)h;return ++stage==fault?-1:0;}
 static void nvs_close(int h){(void)h;}
 static void health_monitor_init(void){}
+static bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin){return origin==OPS_RECOVERY_LOCAL;}
 static int homelab_ops_start_optional_worker(void){return worker_fail?-3:0;}
 '''
 adapters=r'''
+static bool uplink_address(void *netif,esp_netif_ip_info_t *info){(void)netif;(void)info;return true;}
+static void *uplink_internet_netif(void){return NULL;}
+static int saved_probe_result=1;
+static int health_tcp(uint32_t addr,uint16_t port){assert(addr&&port);return saved_probe_result;}
 static int health_probe(const health_config_t *c,unsigned role){assert(c&&role<4);probe_calls++;if(race_generation)health_generation++;return probe_result;}
 '''
 tests=r'''
@@ -102,6 +116,27 @@ int main(void){
     observations[0]=(health_result){.state=H_OK,.observed=fixture_now};observations[1]=(health_result){.state=H_DOWN,.observed=fixture_now};
     health_monitor_codes(codes);if(health_configured(&c,0))assert(codes[0]==3);if(health_configured(&c,1))assert(codes[1]==5);
     fixture_now+=((uint64_t)c.interval_s*16+31)*1000;health_monitor_codes(codes);if(health_configured(&c,0))assert(codes[0]==8); /* stale */
+    saved_tcp_target_t targets[SAVED_TCP_MAX]={{.name="printer",.address="192.0.2.15",.port=443,.interval_s=30,.notify=1}};
+    assert(saved_valid(targets));
+    strcpy(targets[1].name,"Printer");strcpy(targets[1].address,"192.0.2.16");targets[1].port=80;
+    assert(!saved_valid(targets));memset(&targets[1],0,sizeof targets[1]);
+    strcpy(targets[0].address,"127.0.0.1");assert(!saved_valid(targets));strcpy(targets[0].address,"192.0.2.15");
+    fault=2;stage=0;assert(saved_tcp_set(targets)!=0 && !saved_targets[0].name[0]);
+    fault=0;stage=0;assert(saved_tcp_set(targets)==0);
+    assert(saved_tcp_request("192.0.2.15:443",OPS_RECOVERY_LOCAL)==ESP_ERR_NOT_FOUND);
+    assert(saved_tcp_request("printer",OPS_RECOVERY_TELEGRAM)==ESP_ERR_NOT_SUPPORTED);
+    assert(saved_tcp_request("PRINTER",OPS_RECOVERY_LOCAL)==ESP_OK && saved_tcp_request("printer",OPS_RECOVERY_LOCAL)==ESP_ERR_INVALID_STATE);
+    unsigned before=notifications;
+    saved_tcp_poll();assert(notifications==before+1 && saved_results[0].outcome==1);
+    saved_tcp_poll();assert(saved_results[0].state!=H_OK);
+    fixture_now+=5000;saved_tcp_poll();assert(saved_results[0].state==H_OK);
+    fixture_now+=30000;saved_probe_result=0;saved_tcp_poll();assert(notifications==before+2);
+    fixture_now+=30000;saved_tcp_poll();assert(notifications==before+2);
+    char summary[160];saved_tcp_summary(summary,sizeof summary);
+    assert(strstr(summary,"printer: not reachable")&&!strstr(summary,"192.0.2.15"));
+    safe=health_monitor_snapshot(false);plain=cJSON_PrintUnformatted(safe);
+    assert(!strstr(plain,"printer")&&!strstr(plain,"192.0.2.15"));free(plain);cJSON_Delete(safe);
+    puts("PASS: saved TCP checks validation, save failure, bounded job, scheduled transition and redaction");
     puts("PASS: actual health bounds/persistence faults, worker refusal, cadence/admission/generation, failure/backoff evidence and sanitized snapshot (mock probes/platform)");
 }
 '''
@@ -109,10 +144,11 @@ with tempfile.TemporaryDirectory(prefix='health-monitor-') as folder:
     p=Path(folder);(p/'test.c').write_text(fixture+types+adapters+''.join(function(s) for s in (
         'static uint32_t health_checksum(','static bool health_name(','static bool health_public(',
         'static bool health_valid(','static esp_err_t health_save_locked(','esp_err_t health_monitor_set(',
-        'esp_err_t health_monitor_set_enabled(','static bool health_configured(','static void health_observe(',
+        'esp_err_t health_monitor_set_enabled(','static bool saved_valid(','esp_err_t saved_tcp_set(',
+        'esp_err_t saved_tcp_request(','static const char *saved_state(','void saved_tcp_summary(','static void saved_tcp_poll(','static bool health_configured(','static void health_observe(',
         'static const char *health_reason(','static const char *health_next_step(','void health_monitor_poll(','void health_monitor_codes(','cJSON *health_monitor_snapshot('))+tests)
     binary=p/('test.exe' if os.name=='nt' else 'test')
-    flags=['-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-O1','-g']
+    flags=['-I',str(ROOT/'main'),'-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-O1','-g']
     libs=['-lws2_32'] if os.name=='nt' else []
     cjson=os.environ.get('CJSON_SOURCE')
     if cjson:flags+=['-I',str(Path(cjson).parent),cjson]

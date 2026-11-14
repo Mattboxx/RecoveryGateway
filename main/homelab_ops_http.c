@@ -173,6 +173,31 @@ static esp_err_t post_ops(httpd_req_t *req) {
                 && integer(root,"minimum_largest",131072,&largest)&&integer(root,"socket_reserve",CONFIG_LWIP_MAX_SOCKETS,&reserve)){
                 s.interval_s=interval;s.minimum_internal=minimum;s.minimum_largest=largest;s.socket_reserve=reserve;err=homelab_ops_set_settings(&s);
             }
+        }else if(!strcmp(action->valuestring,"tcp-check")){
+            const cJSON *name=cJSON_GetObjectItemCaseSensitive(root,"name");
+            if(cJSON_IsString(name))err=saved_tcp_request(name->valuestring,OPS_RECOVERY_LOCAL);
+        }else if(!strcmp(action->valuestring,"tcp-save")){
+            const cJSON *list=cJSON_GetObjectItemCaseSensitive(root,"targets"), *item;
+            if(cJSON_IsArray(list) && cJSON_GetArraySize(list)<=SAVED_TCP_MAX){
+                saved_tcp_target_t targets[SAVED_TCP_MAX]={0};
+                unsigned i=0;
+                bool valid=true;
+                cJSON_ArrayForEach(item,list){
+                    const cJSON *name=cJSON_GetObjectItemCaseSensitive(item,"name");
+                    const cJSON *address=cJSON_GetObjectItemCaseSensitive(item,"address");
+                    unsigned port,interval;
+                    saved_tcp_target_t *target=&targets[i++];
+                    if(!unique(item) || !cJSON_IsString(name) || !name->valuestring[0] || strlen(name->valuestring)>=sizeof target->name
+                            || !cJSON_IsString(address) || strlen(address->valuestring)>=sizeof target->address
+                            || !integer(item,"port",65535,&port) || !integer(item,"interval_s",3600,&interval)
+                            || !boolean(item,"notify",&target->notify)){valid=false;break;}
+                    strcpy(target->name,name->valuestring);
+                    strcpy(target->address,address->valuestring);
+                    target->port=port;
+                    target->interval_s=interval;
+                }
+                if(valid)err=saved_tcp_set(targets);
+            }
         }else if(!strcmp(action->valuestring,"health")){
             health_config_t c={0};unsigned interval,threshold,gateway,internet,tailnet;
             const cJSON *dns=cJSON_GetObjectItemCaseSensitive(root,"dns_name"),*ip=cJSON_GetObjectItemCaseSensitive(root,"internet_ip"),*peer=cJSON_GetObjectItemCaseSensitive(root,"tailnet_target");
@@ -208,7 +233,7 @@ static esp_err_t post_ops(httpd_req_t *req) {
         }
     }
     cJSON_Delete(root);
-    if(err!=ESP_OK){httpd_resp_set_status(req,err==ESP_ERR_INVALID_ARG?"400 Bad Request":err==ESP_ERR_INVALID_STATE?"409 Conflict":err==ESP_ERR_TIMEOUT?"429 Too Many Requests"
+    if(err!=ESP_OK){httpd_resp_set_status(req,err==ESP_ERR_NOT_FOUND?"404 Not Found":err==ESP_ERR_INVALID_ARG?"400 Bad Request":err==ESP_ERR_INVALID_STATE?"409 Conflict":err==ESP_ERR_TIMEOUT?"429 Too Many Requests"
             :err==ESP_ERR_NO_MEM||err==ESP_ERR_NOT_ALLOWED?"503 Service Unavailable":"500 Internal Server Error");
         /* Plain reasons the page can show as they are. */
         const char *reason=err==ESP_ERR_INVALID_STATE?"Another check or recovery is running; its result appears on this page"
