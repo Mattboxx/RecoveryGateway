@@ -1848,6 +1848,11 @@
       .card-body details > summary { min-height: 44px; padding: 10px 0; }
       .tf-check .tf-test { flex: 1 1 auto; }
       input[type="file"] { min-height: 44px; width: 100%; max-width: 100%; padding: 8px 0; font-size: 15px; }
+      /* The 44 px lock button fills the bar: the idle timer sits inside its
+       * lower edge instead of below it, so nothing leaves the top bar. */
+      .lock-stack { position: relative; }
+      .lock-stack:has(> .auth-countdown:not([style*="none"])) .btn-lock { padding-bottom: 12px; }
+      .lock-stack .auth-countdown { position: absolute; left: 0; right: 0; bottom: 3px; text-align: center; pointer-events: none; }
     }
     @media (max-width: 380px) {
       .btn-lock > span { display: none; }
