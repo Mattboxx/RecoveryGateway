@@ -1,5 +1,12 @@
 # Maintainer continuation
 
+## Active candidate — 3.0.22-beta.1 first-boot choices by goal
+
+- Source `60cc662` on `feat/setup-goal-choices-20261114` (from `release/3.0.21-final`). Step 4 of the first-boot wizard groups the functions by goal, marks Tailscale dependencies, shows a live summary and undoes presets on untick. Field ids, role values, defaults and the finish request are unchanged.
+- Image and ELF are in ignored `build/development-3.0.22-beta.1/60cc662/` with `SHA256SUMS` (BIN daaa15c86a4c71efbf3eae4c763cc29f8e2b5fc5239b82b657258c1039d8275b). The owner approved the preview and the build. Flash, OTA, push and publication still need explicit owner authorization.
+- Interactive preview: `node tools/preview_first_boot.cjs` (synthetic data, mock gateway of `tools/test_first_boot_ui.cjs`).
+- Pending: a first boot on hardware (erased NVS or the test board), checking that `ui_roles`, extras and AP settings are stored as chosen; full `tools/validate_all.py` campaign.
+
 ## Active qualification — 3.0.19-beta.1 reliability fixes
 
 - Runtime source `fceb7c03a323` implements OTA boot confirmation after local admin startup, restart admission before OTA writes, fair due-device scheduling, bounded ntfy result delivery, and mDNS re-probing only on IPv4 or interface change. Later commits update host fixtures and validation records.
