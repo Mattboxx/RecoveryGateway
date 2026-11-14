@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.21] - 2026-11-14
+
+### Added
+
+- Save up to four named IPv4 and TCP port checks without a MAC address. Run them from Devices & Recovery or schedule them, with optional alerts when a previously reachable port stops responding.
+- Use `probe NAME` over Telegram or ntfy to run a saved TCP check, and `checks` to list the last results. Both commands work with Tailscale disabled.
+
 ## [3.0.20] - 2026-11-14
 
 ### Changed
