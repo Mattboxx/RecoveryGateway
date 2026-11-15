@@ -24,8 +24,10 @@ System → Backup & reset → **Restore…** applies the sections in order throu
 endpoints as the forms. Firewall lists are cleared and re-added in their
 original order. Encrypted secrets are decrypted first, so a wrong passphrase
 stops the restore before anything changes. A failing section stops with its
-name; earlier sections stay applied, so review the result. When every
-section succeeds the device restarts to apply them.
+name; earlier sections stay applied, so review the result and fix the reported step before retrying.
+An encrypted access-point password is restored together with protected mode.
+To restore a protected setting onto an open AP, include the encrypted password
+or set a new AP password first. When every section succeeds, the device restarts.
 
 Restored LAN → Tailnet rules keep their saved enabled state; review them,
 because a rule's exposure depends on today's network.
