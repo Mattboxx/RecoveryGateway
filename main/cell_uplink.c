@@ -19,7 +19,6 @@
 #if CONFIG_LWIP_PPP_SUPPORT
 #include "esp_netif_ppp.h"
 #include "freertos/stream_buffer.h"
-#include "usb/cdc_acm_host.h"
 #endif
 #include "usb_port.h"
 #include "esp_netif_net_stack.h"
@@ -423,60 +422,19 @@ static int uart_io_read(uint8_t *buf, size_t cap, uint32_t timeout_ms)
 static void uart_io_flush(void) {uart_flush_input(s_port);}
 static const cell_io_t UART_IO = {uart_io_write, uart_io_read, uart_io_flush};
 
-/* USB serial (CDC-ACM or vendor port): the CDC-ACM driver task delivers
- * received data into a PSRAM stream buffer (single writer, single reader:
- * the modem task). Detection, mode switching and USB network sticks are in
- * usb_port.c. */
+/* USB serial (CDC-ACM or vendor port) through usb_port.c, which also does
+ * detection, mode switching and USB network sticks. */
 #define CELL_USB_CFG_MAX 1024          /* configuration descriptor copy */
-#define CELL_USB_RX_BUFFER 4096
-#define CELL_USB_OUT_BUFFER 1024       /* one bulk OUT transfer (internal DMA RAM) */
-#define CELL_USB_IN_BUFFER 512
-/* Estimate, not measured with a modem: USB host objects, the 4 KB CDC driver
- * stack and the DMA transfers, above the 40 KB internal RAM floor. */
-#define CELL_USB_INTERNAL_MIN (56 * 1024)
 #define CELL_USB_PPP_TX_MS 50          /* TCP/IP thread: never block it long */
-static StreamBufferHandle_t s_usb_rx;
-static cdc_acm_dev_hdl_t s_usb_dev;    /* opened and closed by the modem task only */
-static atomic_bool s_usb_gone;
-static atomic_uint s_usb_rx_dropped;
+static bool s_usb_open;                /* a USB session is open (modem task only) */
 static uint8_t *s_usb_cfg;             /* modem task only */
 enum {CELL_NETIF_NONE, CELL_NETIF_PPP, CELL_NETIF_USBNET};
 static uint8_t s_netif_kind;           /* modem task (and init) only */
 
-static int usb_io_write(const void *data, size_t len, uint32_t timeout_ms)
-{
-    cdc_acm_dev_hdl_t dev = s_usb_dev;
-    if (!dev || atomic_load(&s_usb_gone)) return -1;
-    return cdc_acm_host_data_tx_blocking(dev, data, len, timeout_ms) == ESP_OK ? (int)len : -1;
-}
-static int usb_io_read(uint8_t *buf, size_t cap, uint32_t timeout_ms)
-{
-    if (!s_usb_dev || atomic_load(&s_usb_gone)) return -1;
-    return (int)xStreamBufferReceive(s_usb_rx, buf, cap, pdMS_TO_TICKS(timeout_ms));
-}
-static void usb_io_flush(void)
-{
-    uint8_t sink[64];
-    while (xStreamBufferReceive(s_usb_rx, sink, sizeof sink, 0) > 0) {}
-}
+static int usb_io_write(const void *data, size_t len, uint32_t timeout_ms) {return usb_port_serial_write(data, len, timeout_ms);}
+static int usb_io_read(uint8_t *buf, size_t cap, uint32_t timeout_ms) {return usb_port_serial_read(buf, cap, timeout_ms);}
+static void usb_io_flush(void) {usb_port_serial_flush();}
 static const cell_io_t USB_IO = {usb_io_write, usb_io_read, usb_io_flush};
-
-/* CDC-ACM driver task context. */
-static bool usb_rx(const uint8_t *data, size_t len, void *arg)
-{
-    (void)arg;
-    size_t sent = xStreamBufferSend(s_usb_rx, data, len, 0);
-    if (sent < len) atomic_fetch_add(&s_usb_rx_dropped, (unsigned)(len - sent));   /* PPP/TCP recover */
-    return true;
-}
-
-static void usb_event(const cdc_acm_host_dev_event_data_t *event, void *arg)
-{
-    (void)arg;
-    if (event->type != CDC_ACM_HOST_DEVICE_DISCONNECTED) return;   /* stalls end in AT/PPP timeouts */
-    atomic_store(&s_usb_gone, true);
-    atomic_store(&s_link_dead, true);
-}
 
 /* --- AT command channel (modem task only) --- */
 static char s_line[256];
@@ -656,17 +614,16 @@ static esp_err_t open_uart(void)
     return err;
 }
 
-/* USB connection: the USB host stack, the gateway's USB client and the
- * CDC-ACM driver are installed only here, only when the USB connection is
- * selected and enabled. The native USB port then stays a host port until
- * the next restart (no USB-Serial-JTAG console on it). */
-static esp_err_t open_usb(void)
+/* USB connection: the USB host stack and the gateway's USB client are
+ * installed only here, only when the USB connection is selected and enabled,
+ * and only if 40 KB of internal RAM stay free. The native USB port then stays
+ * a host port until the next restart (no USB-Serial-JTAG console on it). */
+static esp_err_t open_usb(const char **why)
 {
-    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < CELL_USB_INTERNAL_MIN) return ESP_ERR_NO_MEM;
+    *why = "no memory for the USB descriptor copy";
     s_usb_cfg = heap_caps_malloc(CELL_USB_CFG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_usb_rx = xStreamBufferCreateWithCaps(CELL_USB_RX_BUFFER, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_usb_cfg || !s_usb_rx) return ESP_ERR_NO_MEM;
-    esp_err_t err = usb_port_start(true);
+    if (!s_usb_cfg) return ESP_ERR_NO_MEM;
+    esp_err_t err = usb_port_start(why);
     if (err == ESP_OK) s_io = &USB_IO;
     return err;   /* a partial install stays until restart; the uplink is stopped */
 }
@@ -712,8 +669,8 @@ static esp_err_t ensure_netif(uint8_t kind, const char **why)
 
 static void usb_close(void)
 {
-    if (s_usb_dev) cdc_acm_host_close(s_usb_dev);
-    s_usb_dev = NULL;
+    if (s_usb_open) usb_port_net_close();
+    s_usb_open = false;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_status.usb_iface = 0xff;
     s_status.usb_how = CELL_USB_HOW_NONE;
@@ -723,21 +680,20 @@ static void usb_close(void)
 }
 
 /* Tries the planned serial interfaces in order (at most
- * CELL_USB_MAX_CANDIDATES, each with a 3 s open and three 1 s AT probes). */
-static bool usb_serial_open(const usbp_device_t *d, const cell_usb_plan_t *plan, const char **why)
+ * CELL_USB_MAX_CANDIDATES, each with three 1 s AT probes). */
+static bool usb_serial_open(const usbp_device_t *d, size_t len, const cell_usb_plan_t *plan, const char **why)
 {
-    atomic_store(&s_usb_gone, false);
+    *why = "no USB interface of the modem answered AT";
     for (int i = 0; i < plan->count; i++) {
-        const cdc_acm_host_open_config_t open = {.vid = d->vid, .pid = d->pid, .interface_idx = plan->iface[i],
-            .dev_addr = d->address, .connection_timeout_ms = 3000, .out_buffer_size = CELL_USB_OUT_BUFFER,
-            .in_buffer_size = CELL_USB_IN_BUFFER, .event_cb = usb_event, .data_cb = usb_rx};
-        cdc_acm_dev_hdl_t dev = NULL;
-        if (cdc_acm_host_open_v2(&open, &dev) != ESP_OK || !dev) continue;
-        s_usb_dev = dev;
-        (void)cdc_acm_host_set_control_line_state(dev, true, true);   /* DTR: some modems need it; vendor ports may refuse */
-        usb_io_flush();
+        usbp_net_t port;
+        if (usbp_serial_find(s_usb_cfg, len, plan->iface[i], &port) != 1) continue;
+        const char *reason = "";
+        esp_err_t err = usb_port_serial_open(d, &port, &reason);
+        if (err == ESP_ERR_NO_MEM || err == ESP_ERR_INVALID_STATE) {*why = reason; return false;}   /* no other port will do better */
+        if (err != ESP_OK) continue;
+        s_usb_open = true;
         bool answered = false;
-        for (int t = 0; t < 3 && !answered && !atomic_load(&s_usb_gone); t++) answered = at("AT", NULL, NULL, 0, 1000) == 1;
+        for (int t = 0; t < 3 && !answered && usb_port_net_alive(); t++) answered = at("AT", NULL, NULL, 0, 1000) == 1;
         if (answered) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
             s_status.usb_iface = plan->iface[i];
@@ -747,10 +703,10 @@ static bool usb_serial_open(const usbp_device_t *d, const cell_usb_plan_t *plan,
             ESP_LOGI(TAG, "USB modem %04x:%04x answers AT on interface %u", d->vid, d->pid, plan->iface[i]);
             return true;
         }
+        bool gone = !usb_port_net_alive();
         usb_close();
-        if (atomic_load(&s_usb_gone)) break;
+        if (gone) break;
     }
-    *why = "no USB interface of the modem answered AT";
     return false;
 }
 
@@ -771,7 +727,7 @@ static bool usb_wait_device(uint32_t seq, uint32_t ms, usbp_device_t *d, size_t 
  * (bounded rounds). Returns USBP_ACT_SERIAL, USBP_ACT_NETWORK or -1. */
 static int usb_attach(uint32_t wait_ms, const char **why)
 {
-    if (s_usb_dev && !atomic_load(&s_usb_gone)) return USBP_ACT_SERIAL;
+    if (s_usb_open && usb_port_net_alive()) return s_status.usb_action == USBP_ACT_NETWORK ? USBP_ACT_NETWORK : USBP_ACT_SERIAL;
     usb_close();
     usbp_device_t d = {0};
     size_t len = 0;
@@ -793,11 +749,12 @@ static int usb_attach(uint32_t wait_ms, const char **why)
         int action = usbp_action(true, s_running.usb_mode, serial, &net, &storage, d.num_configs, d.config_value);
         if (action == USBP_ACT_SERIAL) {
             if (ensure_netif(CELL_NETIF_PPP, why) != ESP_OK) return -1;
-            return usb_serial_open(&d, &plan, why) ? USBP_ACT_SERIAL : -1;
+            return usb_serial_open(&d, len, &plan, why) ? USBP_ACT_SERIAL : -1;
         }
         if (action == USBP_ACT_NETWORK) {
             if (ensure_netif(CELL_NETIF_USBNET, why) != ESP_OK) return -1;
             if (usb_port_net_open(&d, &net, s_netif, NULL, NULL, why) != ESP_OK) return -1;
+            s_usb_open = true;
             xSemaphoreTake(s_lock, portMAX_DELAY);
             s_status.usb_action = USBP_ACT_NETWORK;
             s_status.usb_net = net.kind;
@@ -872,10 +829,9 @@ static void cell_task(void *arg)
                     if (atomic_load(&s_has_ip) && s_status.state != CELL_CONNECTED) set_state(CELL_CONNECTED, "");
                     if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {apply_choice(); last_choice = xTaskGetTickCount();}
                 }
-                usb_port_net_close();
                 atomic_store(&s_has_ip, false);
-                apply_choice();
                 usb_close();
+                apply_choice();
                 set_state(CELL_BACKOFF, "USB network device disconnected; waiting for it to come back");
                 failures = 0;
                 goto retry;
@@ -945,7 +901,7 @@ static void cell_task(void *arg)
         esp_netif_action_stop(s_netif, 0, 0, 0);
         atomic_store(&s_has_ip, false);
         apply_choice();
-        bool unplugged = s_running.transport == CELL_TRANSPORT_USB && atomic_load(&s_usb_gone);
+        bool unplugged = s_running.transport == CELL_TRANSPORT_USB && !usb_port_net_alive();
         if (!unplugged) hang_up();
         set_state(CELL_BACKOFF, unplugged ? "USB modem disconnected; waiting for it to come back" : "data link ended; reconnecting");
         failures = 0;
@@ -974,15 +930,16 @@ void cell_uplink_init(void)
 #else
     s_status.compiled = true;
     if (!s_running.enabled) return;   /* nothing touched: no UART, USB host, GPIO or netif */
-    esp_err_t err = s_running.transport == CELL_TRANSPORT_USB ? open_usb() : open_uart();
+    const char *why = NULL;
+    esp_err_t err = s_running.transport == CELL_TRANSPORT_USB ? open_usb(&why) : open_uart();
     /* UART: PPP now. USB: the first device decides PPP or a USB network netif. */
     if (err == ESP_OK && s_running.transport == CELL_TRANSPORT_UART) {
         err = create_netif();   /* fails closed without the PPP ACL hooks */
         if (err == ESP_OK) s_netif_kind = CELL_NETIF_PPP;
     }
     if (err != ESP_OK) {
-        char text[80];
-        snprintf(text, sizeof text, "not started: %s", esp_err_to_name(err));
+        char text[sizeof s_status.error];
+        snprintf(text, sizeof text, "not started: %s", why && why[0] ? why : esp_err_to_name(err));
         set_state(CELL_STOPPED, text);
         return;
     }
@@ -1057,10 +1014,14 @@ void cell_uplink_get_status(cell_status_t *out)
     uint32_t net_rx_dropped = 0;
     if (s_running.transport == CELL_TRANSPORT_USB && s_running.enabled) {
         usbp_device_t d;
+        usbp_memory_t m;
         out->usb_present = usb_port_device(&d, NULL, 0, NULL);
         usb_port_counters(&net_rx_dropped, NULL, NULL, NULL);
+        usb_port_memory(&m);
+        out->usb_ram_host = m.host_bytes; out->usb_ram_session = m.session_bytes;
+        out->usb_ram_free = m.free_now; out->usb_ram_min = m.min_free;
     }
-    out->usb_rx_dropped = atomic_load(&s_usb_rx_dropped) + net_rx_dropped;
+    out->usb_rx_dropped = net_rx_dropped;
 #endif
 }
 
@@ -1171,6 +1132,13 @@ static esp_err_t get_cellular(httpd_req_t *req)
             cJSON_AddStringToObject(usb, "mode", s.usb_action < 5 ? USB_ACTION_NAMES[s.usb_action] : "none");
             cJSON_AddStringToObject(usb, "network", s.usb_net < 5 ? USB_NET_NAMES[s.usb_net] : "none");
             cJSON_AddNumberToObject(usb, "switches", s.usb_switches);
+            cJSON *ram = cJSON_AddObjectToObject(usb, "internal_ram");
+            if (ram) {
+                cJSON_AddNumberToObject(ram, "usb_host_bytes", s.usb_ram_host);
+                cJSON_AddNumberToObject(ram, "usb_session_bytes", s.usb_ram_session);
+                cJSON_AddNumberToObject(ram, "free_bytes", s.usb_ram_free);
+                cJSON_AddNumberToObject(ram, "min_free_bytes", s.usb_ram_min);
+            }
         }
     }
     cJSON_AddStringToObject(status, "qualification", "experimental: not physically validated with a modem");

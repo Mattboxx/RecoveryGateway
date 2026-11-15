@@ -472,12 +472,13 @@ void eth_uplink_start(void)
         /* Fail closed: without the ACL hooks the interface never carries traffic. */
         if (!netif_hooks_eth_ready()) {set_error("not started: firewall hooks unavailable"); return;}
         s_lwip = esp_netif_get_netif_impl(s_netif);
-        esp_err_t err = usb_port_start(false);
+        const char *why = "";
+        esp_err_t err = usb_port_start(&why);
         if (err == ESP_OK && xTaskCreatePinnedToCoreWithCaps(usb_task, "eth_usb", 4096, NULL, 5, NULL, tskNO_AFFINITY,
                                                              MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) err = ESP_ERR_NO_MEM;
         if (err != ESP_OK) {
-            char text[64];
-            snprintf(text, sizeof text, "USB start failed: %s", esp_err_to_name(err));
+            char text[sizeof s_status.error];
+            snprintf(text, sizeof text, "USB not started: %s", why[0] ? why : esp_err_to_name(err));
             set_error(text);
             return;
         }
@@ -553,7 +554,14 @@ void eth_uplink_get_status(eth_status_t *out)
     out->has_ip = atomic_load(&s_has_ip);
     out->selected = s_netif && uplink_internet_netif() == s_netif;
 #if CONFIG_SOC_USB_OTG_SUPPORTED
-    if (s_usb) {usbp_device_t d; out->usb_present = usb_port_device(&d, NULL, 0, NULL);}
+    if (s_usb) {
+        usbp_device_t d;
+        usbp_memory_t m;
+        out->usb_present = usb_port_device(&d, NULL, 0, NULL);
+        usb_port_memory(&m);
+        out->usb_ram_host = m.host_bytes; out->usb_ram_session = m.session_bytes;
+        out->usb_ram_free = m.free_now; out->usb_ram_min = m.min_free;
+    }
 #endif
 }
 
@@ -654,6 +662,13 @@ static esp_err_t get_ethernet(httpd_req_t *req)
             cJSON_AddBoolToObject(usb, "present", s.usb_present);
             cJSON_AddStringToObject(usb, "id", id);
             cJSON_AddStringToObject(usb, "network", s.usb_net < 5 ? NET[s.usb_net] : "none");
+            cJSON *ram = cJSON_AddObjectToObject(usb, "internal_ram");
+            if (ram) {
+                cJSON_AddNumberToObject(ram, "usb_host_bytes", s.usb_ram_host);
+                cJSON_AddNumberToObject(ram, "usb_session_bytes", s.usb_ram_session);
+                cJSON_AddNumberToObject(ram, "free_bytes", s.usb_ram_free);
+                cJSON_AddNumberToObject(ram, "min_free_bytes", s.usb_ram_min);
+            }
         }
     }
     cJSON_AddStringToObject(status, "qualification", "not physically validated on this candidate");

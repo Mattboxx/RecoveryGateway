@@ -136,7 +136,7 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
                                   espcoredump dns_relay snmp_agent cli task_reaper
                                   app_update spi_flash esp_partition esp_psram
                                   espressif__mqtt espressif__w5500
-                                  espressif__usb espressif__usb_host_cdc_acm
+                                  espressif__usb
                                   esp_http_client
                                   esp_eth esp_driver_spi esp_driver_gpio esp_driver_uart
                                   esp_driver_tsens

@@ -10,10 +10,10 @@ mode switching and interface discovery instead of a fixed VID/PID.
 
 `main/usb_port.c` owns the native USB port as a host for one device: the USB
 host library, the gateway's own client (detection, mode switch, configuration
-choice through the enumeration filter) and an Ethernet data path over CDC-ECM,
+choice through the enumeration filter) and one data session at a time: a
+serial AT/PPP port (CDC-ACM or vendor) or an Ethernet data path over CDC-ECM,
 CDC-NCM and RNDIS behind an esp_netif driver. The cellular uplink uses it
-(plus the CDC-ACM driver for serial AT ports, through a UART/USB channel
-abstraction under the existing AT/PPP engine); the Ethernet uplink uses it
+through a UART/USB channel abstraction under the existing AT/PPP engine; the Ethernet uplink uses it
 with the standard `ETH_DEF` netif, so selection, hooks and listeners are
 unchanged. The two cannot share the port (validated on save).
 
@@ -34,11 +34,18 @@ that use USB are written as version 2, which older firmware refuses (that
 uplink off, fail closed). First-boot setup offers the same pins/USB choice.
 
 Cost while off: no task, heap, USB stack or PHY change; measured against
-3.0.24, the image uses about 2.5 KB more internal RAM (IRAM +2192 B, mostly the
+3.0.24, the image uses about 2.8 KB more internal RAM (IRAM +2192 B, mostly the
 USB component's `IRAM_ATTR` transfer code, which moves DRAM by 2048 B; static
-DRAM +484 B of state variables). When enabled: two PSRAM-stack tasks, the
-CDC driver's 4 KB internal stack, and DMA transfers (estimated 8-12 KB), refused
-below 56/64 KB of free internal RAM. Pending: every hardware result.
+DRAM about +0.8 KB of state and longer status messages). When enabled: two
+tasks with PSRAM stacks and the USB transfers, which must be internal DMA RAM
+on the ESP32-S3 (serial session about 4 KB, network session 6-8 KB). Every
+start and session is refused when it would leave less than 40 KB of internal
+RAM, with a message that names the amounts; the measured use is reported in
+the API (`usb.internal_ram`).
+
+Beta.3 (owner's daily board, 46 KB free with its features on): Espressif's
+CDC-ACM host driver was dropped because its task needs a 4 KB internal stack;
+serial ports use the same session code as the network path.
 
 ## ADR-035 — Compromised CA keys are refused on every TLS connection (2026-11-04)
 

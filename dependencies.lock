@@ -36,30 +36,6 @@ dependencies:
     - esp32h4
     - linux
     version: 1.6.0
-  espressif/usb_host_cdc_acm:
-    component_hash: 5bc1372b46de79ccae1dd17de48e30dfa1e8ab75269c2ebf54da01370f9e42fb
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.0'
-    - name: espressif/usb
-      registry_url: https://components.espressif.com
-      require: public
-      rules:
-      - if: idf_version >=6.0
-      - if: target not in ["linux"]
-      version: ^1.0.0
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32s2
-    - esp32s3
-    - esp32p4
-    - esp32h4
-    - esp32s31
-    - linux
-    version: 2.4.1
   espressif/w5500:
     component_hash: f76a95ce7a6029cf93aa39d47067588b24263852031f11c71e5d192ad915ec07
     dependencies:
@@ -92,10 +68,9 @@ direct_dependencies:
 - espressif/cjson
 - espressif/mqtt
 - espressif/usb
-- espressif/usb_host_cdc_acm
 - espressif/w5500
 - espressif/wiznet_common
 - idf
-manifest_hash: 0b06fb654e0116f2cac74e66086e41a37a5dbf88be3995367141ee23b9414543
+manifest_hash: dcdb240f3125564dee64e853c612c30385b5f29ca8c25d517bcaaccf20b1c588
 target: esp32s3
 version: 3.0.0

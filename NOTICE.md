@@ -95,9 +95,8 @@ that historical download packages have already been republished.
 Additional ESP-IDF managed components pulled at build time keep their
 original licenses as declared in their respective `idf_component.yml` /
 `LICENSE` files under `managed_components/`. They include Espressif's USB host
-library `espressif/usb` 1.6.0 and CDC-ACM host driver
-`espressif/usb_host_cdc_acm` 2.4.1 (both Apache-2.0), pinned in
-`main/idf_component.yml` for the optional USB connection.
+library `espressif/usb` 1.6.0 (Apache-2.0), pinned in `main/idf_component.yml`
+for the optional USB connection.
 
 ## USB mode-switch messages
 

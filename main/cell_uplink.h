@@ -44,13 +44,14 @@ typedef struct {
     int16_t rssi_dbm;                     /* 0: unknown */
     uint32_t ip, connects;
     uint64_t bytes_in, bytes_out;
-    char model[32], operator_name[32], error[80];
+    char model[32], operator_name[32], error[160];
     /* USB transport (running configuration). */
     uint8_t transport, usb_iface, usb_how; /* usb_iface: 0xff none open */
     uint8_t usb_action, usb_net;          /* USBP_ACT_* in use, USBP_NET_* */
     bool usb_present;
     uint16_t usb_vid, usb_pid;
     uint32_t usb_rx_dropped, usb_switches;
+    uint32_t usb_ram_host, usb_ram_session, usb_ram_free, usb_ram_min;   /* measured internal RAM, bytes */
 } cell_status_t;
 
 /* How the USB serial interface was chosen. */

@@ -318,6 +318,59 @@ bool usbp_mac_string(const uint8_t *desc, size_t len, uint8_t mac[6])
     static const uint8_t zero[6];
     return memcmp(mac, zero, 6) != 0 && !(mac[0] & 1);       /* unicast, not all zero */
 }
+bool usbp_fits(size_t free_internal, size_t need)
+{
+    return free_internal >= need && free_internal - need >= USBP_INTERNAL_FLOOR;
+}
+
+#define USBP_IFACES 32
+int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *out)
+{
+    if (!out) return -1;
+    memset(out, 0, sizeof *out);
+    if (!cfg || len < 9 || cfg[0] < 9 || cfg[1] != 0x02) return -1;
+    size_t total = usbp_le16(cfg + 2);
+    if (total < 9 || total > len) return -1;
+    struct {bool seen; uint8_t cls, sub, proto, union_data, ep_in, ep_out, ep_int; bool has_union; uint16_t mps_in, mps_out;} f[USBP_IFACES];
+    memset(f, 0, sizeof f);
+    int cur = -1;
+    for (size_t at = cfg[0]; at < total;) {
+        uint8_t l = cfg[at];
+        if (l < 2 || at + l > total) return -1;
+        const uint8_t *d = cfg + at;
+        if (d[1] == 0x04) {
+            if (l < 9) return -1;
+            cur = d[3] == 0 && d[2] < USBP_IFACES ? d[2] : -1;
+            if (cur >= 0 && !f[cur].seen) {f[cur].seen = true; f[cur].cls = d[5]; f[cur].sub = d[6]; f[cur].proto = d[7];}
+            else if (cur >= 0) cur = -1;               /* a repeated alt 0: keep the first */
+        } else if (d[1] == 0x24 && cur >= 0) {
+            if (l >= 5 && d[2] == 0x06) {f[cur].union_data = d[4]; f[cur].has_union = true;}
+        } else if (d[1] == 0x05 && cur >= 0) {
+            if (l < 7) return -1;
+            uint8_t addr = d[2], type = d[3] & 3;
+            uint16_t mps = usbp_le16(d + 4) & 0x7ff;
+            if (type == 2 && (addr & 0x80) && !f[cur].ep_in) {f[cur].ep_in = addr; f[cur].mps_in = mps;}
+            else if (type == 2 && !(addr & 0x80) && !f[cur].ep_out) {f[cur].ep_out = addr; f[cur].mps_out = mps;}
+            else if (type == 3 && (addr & 0x80) && !f[cur].ep_int) f[cur].ep_int = addr;
+        }
+        at += l;
+    }
+    if (iface >= USBP_IFACES || !f[iface].seen) return 0;
+    if (f[iface].cls == 0x02 && f[iface].sub == 0x02 && f[iface].proto != 0xff) {   /* CDC-ACM, not RNDIS */
+        uint8_t data = f[iface].has_union ? f[iface].union_data : (uint8_t)(iface + 1);
+        if (data >= USBP_IFACES || data == iface || !f[data].seen || f[data].cls != 0x0a
+            || !f[data].ep_in || !f[data].ep_out || !f[data].mps_in || !f[data].mps_out) return 0;
+        *out = (usbp_net_t){.kind = USBP_SERIAL, .ctrl = iface, .data = data, .ep_in = f[data].ep_in, .ep_out = f[data].ep_out,
+                            .ep_notify = f[iface].ep_int, .mps_in = f[data].mps_in, .mps_out = f[data].mps_out};
+        return 1;
+    }
+    if (f[iface].cls == 0xff && f[iface].ep_in && f[iface].ep_out && f[iface].mps_in && f[iface].mps_out) {
+        *out = (usbp_net_t){.kind = USBP_SERIAL, .ctrl = iface, .data = iface, .ep_in = f[iface].ep_in, .ep_out = f[iface].ep_out,
+                            .ep_notify = f[iface].ep_int, .mps_in = f[iface].mps_in, .mps_out = f[iface].mps_out};
+        return 1;
+    }
+    return 0;
+}
 /* --- usb_port core (end) --- */
 
 #if !defined(USBP_HOST_TEST)
@@ -329,22 +382,28 @@ bool usbp_mac_string(const uint8_t *desc, size_t len, uint8_t mac[6])
 #include "esp_netif_net_stack.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/stream_buffer.h"
 #include "freertos/task.h"
-#include "usb/cdc_acm_host.h"
 #include "usb/usb_host.h"
 
 #define TAG "usb_port"
 #define USBP_CFG_MAX 1024              /* configuration descriptor copy (PSRAM) */
-#define USBP_RX_SIZE 2048              /* one bulk IN transfer: a frame or an NTB */
-#define USBP_TX_SIZE 1600
+#define USBP_NCM_RX 2048               /* NCM: the smallest NTB a device must accept */
+#define USBP_FRAME_RX 1600             /* ECM/RNDIS: one frame per transfer (25 x 64) */
+#define USBP_TX_SIZE 1664              /* a frame plus RNDIS/NCM headers (26 x 64) */
+#define USBP_SERIAL_IN 512
+#define USBP_SERIAL_OUT 1600
+#define USBP_SERIAL_RX_BUFFER 4096     /* PSRAM stream buffer */
 #define USBP_NOTIFY_SIZE 64
-/* Estimate, not measured with a device: two IN and two OUT DMA transfers,
- * the control transfer and host objects above the 40 KB internal floor. */
-#define USBP_NET_INTERNAL_MIN (64 * 1024)
+#define USBP_CTRL_SIZE (8 + 256)
+/* USB host library objects, enumeration buffers and FIFO setup before any
+ * device: an estimate, refined by the measurement in usb_port_memory(). */
+#define USBP_HOST_ESTIMATE (6 * 1024)
+#define USBP_TRANSFER_OVERHEAD 256     /* per transfer: URB and DMA descriptors (estimate) */
 
 static SemaphoreHandle_t s_lock, s_changed, s_done;   /* created by usb_port_start only */
 static usb_host_client_handle_t s_client;
-static bool s_started, s_cdc_acm;
+static bool s_started;
 static usbp_device_t s_dev;            /* under s_lock */
 static uint8_t *s_cfg;
 static size_t s_cfg_len;
@@ -356,6 +415,28 @@ static unsigned s_switched_count;
  * never freed or reused, and no new session starts until restart (bounded
  * loss instead of a leak per retry). */
 static bool s_poisoned;
+static usbp_memory_t s_mem;            /* measured internal RAM use */
+
+/* One data session at a time: a serial (AT/PPP) port or a network function.
+ * State is written by the open/close owner task; transfer callbacks run in
+ * the client task. */
+static struct {
+    usb_device_handle_t dev;
+    uint8_t kind, ctrl, data, data_alt, ep_in, ep_out, ep_notify, mac_index, n_out;
+    esp_netif_t *netif;
+    StreamBufferHandle_t rx;           /* serial only */
+    usb_transfer_t *in[2], *out[2], *notify, *ctrl_xfer;
+    atomic_bool out_busy[2], running, gone, link, link_known;
+    atomic_int inflight;
+    uint16_t seq, ncm_div, ncm_rem;
+    size_t out_max;
+    TickType_t opened;
+    bool claimed_ctrl, claimed_data, leaked;
+    usbp_link_cb_t link_cb;
+    void *ctx;
+} s_net;
+static atomic_uint s_rx_dropped, s_tx_dropped, s_rx_errors;
+static atomic_ullong s_rx_bytes, s_tx_bytes;
 
 /* --- Detection --- */
 #if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
@@ -404,25 +485,6 @@ static void device_removed(int address)
     if (changed) xSemaphoreGive(s_changed);
 }
 
-/* --- Network data path (state written by the open/close owner task;
- *     transfer callbacks run in the client task) --- */
-static struct {
-    usb_device_handle_t dev;
-    usbp_net_t fn;
-    esp_netif_t *netif;
-    usb_transfer_t *in[2], *out[2], *notify, *ctrl;
-    atomic_bool out_busy[2], running, gone, link, link_known;
-    atomic_int inflight;
-    uint16_t seq, ncm_div, ncm_rem;
-    size_t out_max;
-    TickType_t opened;
-    bool claimed_ctrl, claimed_data, leaked;
-    usbp_link_cb_t link_cb;
-    void *ctx;
-} s_net;
-static atomic_uint s_rx_dropped, s_tx_dropped, s_rx_errors;
-static atomic_ullong s_rx_bytes, s_tx_bytes;
-
 static void client_event(const usb_host_client_event_msg_t *m, void *arg)
 {
     (void)arg;
@@ -453,36 +515,48 @@ static void lib_task(void *arg)
     }
 }
 
-esp_err_t usb_port_start(bool cdc_acm)
+static size_t internal_free(void) {return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);}
+
+esp_err_t usb_port_start(const char **why)
 {
-    if (s_started) return cdc_acm && !s_cdc_acm ? ESP_ERR_INVALID_STATE : ESP_OK;
+    *why = "";
+    if (s_started) return ESP_OK;
+    size_t before = internal_free();
+    s_mem.free_at_start = (uint32_t)before;
+    if (!usbp_fits(before, USBP_HOST_ESTIMATE)) {
+        *why = "not enough internal RAM for the USB port (it keeps 40 KB free for the rest of the gateway): turn off unused features";
+        return ESP_ERR_NO_MEM;
+    }
     s_lock = xSemaphoreCreateMutex();
     s_changed = xSemaphoreCreateBinary();
     s_done = xSemaphoreCreateBinary();
     s_cfg = heap_caps_malloc(USBP_CFG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_lock || !s_changed || !s_done || !s_cfg) return ESP_ERR_NO_MEM;
+    if (!s_lock || !s_changed || !s_done || !s_cfg) {*why = "no memory for the USB port"; return ESP_ERR_NO_MEM;}
     usb_host_config_t host = {.skip_phy_setup = false, .intr_flags = ESP_INTR_FLAG_LOWMED};
 #if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
     host.enum_filter_cb = enum_filter;
 #endif
     esp_err_t err = usb_host_install(&host);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {*why = "the USB host did not start"; return err;}
     s_started = true;   /* the PHY now belongs to the OTG host until restart */
     if (xTaskCreatePinnedToCoreWithCaps(lib_task, "usb_lib", 3072, NULL, 7, NULL, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) return ESP_ERR_NO_MEM;
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {*why = "no memory for the USB task"; return ESP_ERR_NO_MEM;}
     const usb_host_client_config_t client = {.is_synchronous = false, .max_num_event_msg = 5,
                                              .async = {.client_event_callback = client_event, .callback_arg = NULL}};
-    if ((err = usb_host_client_register(&client, &s_client)) != ESP_OK) return err;
+    if ((err = usb_host_client_register(&client, &s_client)) != ESP_OK) {*why = "the USB host did not start"; return err;}
     if (xTaskCreatePinnedToCoreWithCaps(client_task, "usb_port", 4096, NULL, 7, NULL, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) return ESP_ERR_NO_MEM;
-    if (cdc_acm) {
-        /* Above the modem task (5), as the driver requires; internal stack. */
-        const cdc_acm_host_driver_config_t driver = {.driver_task_stack_size = 4096, .driver_task_priority = 6,
-                                                     .xCoreID = tskNO_AFFINITY, .new_dev_cb = NULL};
-        if ((err = cdc_acm_host_install(&driver)) != ESP_OK) return err;
-        s_cdc_acm = true;
-    }
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {*why = "no memory for the USB task"; return ESP_ERR_NO_MEM;}
+    size_t after = internal_free();
+    s_mem.host_bytes = (uint32_t)(before > after ? before - after : 0);
+    ESP_LOGI(TAG, "USB host started: %u bytes of internal RAM, %u free", (unsigned)s_mem.host_bytes, (unsigned)after);
     return ESP_OK;
+}
+
+void usb_port_memory(usbp_memory_t *out)
+{
+    *out = s_mem;
+    out->free_now = (uint32_t)internal_free();
+    out->min_free = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
 }
 
 bool usb_port_device(usbp_device_t *out, uint8_t *cfg, size_t cap, size_t *len)
@@ -613,7 +687,7 @@ bool usb_port_next_config(const usbp_device_t *d)
 #endif
 }
 
-/* --- esp_netif glue --- */
+/* --- esp_netif glue (network sessions) --- */
 typedef struct {esp_netif_driver_base_t base;} usbp_glue_t;
 static usbp_glue_t s_glue;
 
@@ -628,16 +702,16 @@ static void out_cb(usb_transfer_t *t)
 static esp_err_t glue_transmit(void *handle, void *buffer, size_t len)
 {
     (void)handle;
-    if (!atomic_load(&s_net.running) || atomic_load(&s_net.gone) || !atomic_load(&s_net.link)) {
+    if (s_net.kind == USBP_SERIAL || !atomic_load(&s_net.running) || atomic_load(&s_net.gone) || !atomic_load(&s_net.link)) {
         atomic_fetch_add(&s_tx_dropped, 1);
         return ESP_FAIL;
     }
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < s_net.n_out; i++) {
         if (atomic_exchange(&s_net.out_busy[i], true)) continue;
         usb_transfer_t *t = s_net.out[i];
         size_t cap = t->data_buffer_size < s_net.out_max ? t->data_buffer_size : s_net.out_max, n = 0;
-        if (s_net.fn.kind == USBP_NET_ECM) {if (len <= cap) {memcpy(t->data_buffer, buffer, len); n = len;}}
-        else if (s_net.fn.kind == USBP_NET_NCM) n = usbp_ncm_wrap(t->data_buffer, cap, buffer, len, s_net.seq++, s_net.ncm_div, s_net.ncm_rem);
+        if (s_net.kind == USBP_NET_ECM) {if (len <= cap) {memcpy(t->data_buffer, buffer, len); n = len;}}
+        else if (s_net.kind == USBP_NET_NCM) n = usbp_ncm_wrap(t->data_buffer, cap, buffer, len, s_net.seq++, s_net.ncm_div, s_net.ncm_rem);
         else n = usbp_rndis_wrap(t->data_buffer, cap, buffer, len);
         if (!n) {atomic_store(&s_net.out_busy[i], false); break;}
         t->num_bytes = (int)n;
@@ -705,8 +779,11 @@ static void in_cb(usb_transfer_t *t)
         size_t n = (size_t)t->actual_num_bytes;
         const uint8_t *frame;
         size_t flen;
-        if (s_net.fn.kind == USBP_NET_ECM) deliver(t->data_buffer, n);
-        else if (s_net.fn.kind == USBP_NET_NCM) {
+        if (s_net.kind == USBP_SERIAL) {
+            size_t sent = xStreamBufferSend(s_net.rx, t->data_buffer, n, 0);
+            if (sent < n) atomic_fetch_add(&s_rx_dropped, (unsigned)(n - sent));   /* PPP/TCP recover */
+        } else if (s_net.kind == USBP_NET_ECM) deliver(t->data_buffer, n);
+        else if (s_net.kind == USBP_NET_NCM) {
             usbp_ncm_rx_t it = {0};
             int r;
             while ((r = usbp_ncm_next(t->data_buffer, n, &it, &frame, &flen)) == 1) deliver(frame, flen);
@@ -732,14 +809,14 @@ static void notify_cb(usb_transfer_t *t)
     const uint8_t *n = t->data_buffer;
     /* CDC NETWORK_CONNECTION: bmRequestType 0xA1, code 0x00, wValue 1/0. */
     if (t->status == USB_TRANSFER_STATUS_COMPLETED && t->actual_num_bytes >= 8 && n[0] == 0xa1 && n[1] == 0x00
-        && s_net.fn.kind != USBP_NET_RNDIS)
+        && (s_net.kind == USBP_NET_ECM || s_net.kind == USBP_NET_NCM))
         set_link(usbp_le16(n + 2) != 0);
     resubmit(t);
 }
 
 static void free_transfers(void)
 {
-    usb_transfer_t **all[] = {&s_net.in[0], &s_net.in[1], &s_net.out[0], &s_net.out[1], &s_net.notify, &s_net.ctrl};
+    usb_transfer_t **all[] = {&s_net.in[0], &s_net.in[1], &s_net.out[0], &s_net.out[1], &s_net.notify, &s_net.ctrl_xfer};
     for (unsigned i = 0; i < sizeof all / sizeof all[0]; i++) {
         if (*all[i] && !s_net.leaked) usb_host_transfer_free(*all[i]);
         *all[i] = NULL;
@@ -761,15 +838,15 @@ static esp_err_t alloc(size_t size, usb_transfer_t **t, uint8_t ep, usb_transfer
 static bool rndis_exchange(const uint8_t *msg, size_t len, uint32_t type, uint32_t request_id, uint8_t *info_out, size_t info_cap, size_t *info_len)
 {
     esp_err_t r;
-    if (!control(s_net.ctrl, 0x21, 0x00, 0, s_net.fn.ctrl, msg, (uint16_t)len, &r)) {s_net.leaked = true; return false;}
+    if (!control(s_net.ctrl_xfer, 0x21, 0x00, 0, s_net.ctrl, msg, (uint16_t)len, &r)) {s_net.leaked = true; return false;}
     if (r != ESP_OK) return false;
     for (int i = 0; i < 20; i++) {
         vTaskDelay(pdMS_TO_TICKS(i ? 50 : 10));
-        if (!control(s_net.ctrl, 0xa1, 0x01, 0, s_net.fn.ctrl, NULL, 256, &r)) {s_net.leaked = true; return false;}
+        if (!control(s_net.ctrl_xfer, 0xa1, 0x01, 0, s_net.ctrl, NULL, 256, &r)) {s_net.leaked = true; return false;}
         if (r != ESP_OK) continue;
         const uint8_t *info;
-        size_t n = (size_t)(s_net.ctrl->actual_num_bytes > 8 ? s_net.ctrl->actual_num_bytes - 8 : 0), ilen;
-        if (!usbp_rndis_cmplt(s_net.ctrl->data_buffer + 8, n, type, request_id, &info, &ilen)) continue;
+        size_t n = (size_t)(s_net.ctrl_xfer->actual_num_bytes > 8 ? s_net.ctrl_xfer->actual_num_bytes - 8 : 0), ilen;
+        if (!usbp_rndis_cmplt(s_net.ctrl_xfer->data_buffer + 8, n, type, request_id, &info, &ilen)) continue;
         if (info_out && info && ilen <= info_cap) {memcpy(info_out, info, ilen); if (info_len) *info_len = ilen;}
         return true;
     }
@@ -779,59 +856,76 @@ static bool rndis_exchange(const uint8_t *msg, size_t len, uint32_t type, uint32
 static bool device_mac(uint8_t mac[6])
 {
     esp_err_t r;
-    if (s_net.fn.kind == USBP_NET_RNDIS) {
+    if (s_net.kind == USBP_NET_RNDIS) {
         uint8_t msg[32];
         size_t n = 0;
         return rndis_exchange(msg, usbp_rndis_query(msg, sizeof msg, 2, 0x01010101u), 0x00000004u, 2, mac, 6, &n) && n == 6
                && !(mac[0] & 1);
     }
-    if (!s_net.fn.mac_index) return false;
-    if (!control(s_net.ctrl, 0x80, 0x06, (uint16_t)(0x0300 | s_net.fn.mac_index), 0x0409, NULL, 64, &r)) {s_net.leaked = true; return false;}
-    return r == ESP_OK && s_net.ctrl->actual_num_bytes > 8
-           && usbp_mac_string(s_net.ctrl->data_buffer + 8, (size_t)s_net.ctrl->actual_num_bytes - 8, mac);
+    if (!s_net.mac_index) return false;
+    if (!control(s_net.ctrl_xfer, 0x80, 0x06, (uint16_t)(0x0300 | s_net.mac_index), 0x0409, NULL, 64, &r)) {s_net.leaked = true; return false;}
+    return r == ESP_OK && s_net.ctrl_xfer->actual_num_bytes > 8
+           && usbp_mac_string(s_net.ctrl_xfer->data_buffer + 8, (size_t)s_net.ctrl_xfer->actual_num_bytes - 8, mac);
 }
 
 static esp_err_t net_init(const char **why)
 {
     esp_err_t r;
     s_net.out_max = USBP_TX_SIZE;
-    if (s_net.fn.kind == USBP_NET_NCM) {
+    if (s_net.kind == USBP_NET_NCM) {
         /* NTB parameters while the data interface is at alternate setting 0. */
-        if (!control(s_net.ctrl, 0xa1, 0x80, 0, s_net.fn.ctrl, NULL, 28, &r)) {s_net.leaked = true; *why = "USB device stopped answering"; return ESP_FAIL;}
-        if (r != ESP_OK || s_net.ctrl->actual_num_bytes < 8 + 28) {*why = "NCM parameters unreadable"; return ESP_FAIL;}
-        const uint8_t *p = s_net.ctrl->data_buffer + 8;
+        if (!control(s_net.ctrl_xfer, 0xa1, 0x80, 0, s_net.ctrl, NULL, 28, &r)) {s_net.leaked = true; *why = "USB device stopped answering"; return ESP_FAIL;}
+        if (r != ESP_OK || s_net.ctrl_xfer->actual_num_bytes < 8 + 28) {*why = "NCM parameters unreadable"; return ESP_FAIL;}
+        const uint8_t *p = s_net.ctrl_xfer->data_buffer + 8;
         uint32_t in_max = usbp_le32(p + 4), out_max = usbp_le32(p + 16);
         s_net.ncm_div = usbp_le16(p + 20); s_net.ncm_rem = usbp_le16(p + 22);
         if (out_max && out_max < s_net.out_max) s_net.out_max = out_max;
-        if (in_max > USBP_RX_SIZE) {
+        if (in_max > USBP_NCM_RX) {
             uint8_t size[4];
-            usbp_put32(size, USBP_RX_SIZE);
-            if (!control(s_net.ctrl, 0x21, 0x86, 0, s_net.fn.ctrl, size, 4, &r)) {s_net.leaked = true; *why = "USB device stopped answering"; return ESP_FAIL;}
+            usbp_put32(size, USBP_NCM_RX);
+            if (!control(s_net.ctrl_xfer, 0x21, 0x86, 0, s_net.ctrl, size, 4, &r)) {s_net.leaked = true; *why = "USB device stopped answering"; return ESP_FAIL;}
             if (r != ESP_OK) {*why = "NCM device refused a 2 KB receive block"; return ESP_FAIL;}
         }
     }
-    if (s_net.fn.kind == USBP_NET_ECM || s_net.fn.kind == USBP_NET_NCM) {
+    if (s_net.kind == USBP_NET_ECM || s_net.kind == USBP_NET_NCM) {
         /* Directed, broadcast and all multicast: optional, failures ignored. */
-        if (!control(s_net.ctrl, 0x21, 0x43, 0x000e, s_net.fn.ctrl, NULL, 0, &r)) {s_net.leaked = true; *why = "USB device stopped answering"; return ESP_FAIL;}
+        if (!control(s_net.ctrl_xfer, 0x21, 0x43, 0x000e, s_net.ctrl, NULL, 0, &r)) {s_net.leaked = true; *why = "USB device stopped answering"; return ESP_FAIL;}
         return ESP_OK;
     }
     uint8_t msg[32];
-    if (!rndis_exchange(msg, usbp_rndis_init(msg, sizeof msg, 1, USBP_RX_SIZE), 0x00000002u, 1, NULL, 0, NULL)) {
+    if (!rndis_exchange(msg, usbp_rndis_init(msg, sizeof msg, 1, USBP_FRAME_RX), 0x00000002u, 1, NULL, 0, NULL)) {
         *why = "RNDIS device did not initialise";
         return ESP_FAIL;
     }
     return ESP_OK;
 }
 
-esp_err_t usb_port_net_open(const usbp_device_t *d, const usbp_net_t *fn, esp_netif_t *netif,
-                            usbp_link_cb_t link, void *ctx, const char **why)
+/* Internal RAM the session's transfers need (buffers plus an overhead estimate). */
+static size_t session_need(uint8_t kind, bool notify)
+{
+    size_t rx = kind == USBP_SERIAL ? USBP_SERIAL_IN : kind == USBP_NET_NCM ? USBP_NCM_RX : USBP_FRAME_RX;
+    size_t need = 2 * rx + USBP_CTRL_SIZE + (kind == USBP_SERIAL ? USBP_SERIAL_OUT : 2 * USBP_TX_SIZE)
+                  + (notify ? USBP_NOTIFY_SIZE : 0);
+    return need + 6 * USBP_TRANSFER_OVERHEAD;
+}
+
+static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_netif_t *netif,
+                              usbp_link_cb_t link, void *ctx, const char **why)
 {
     usb_port_net_close();
-    *why = "USB network device not ready";
+    *why = "USB device not ready";
     if (s_poisoned) {*why = "the USB device stopped answering: restart the gateway to retry"; return ESP_ERR_INVALID_STATE;}
-    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < USBP_NET_INTERNAL_MIN) {*why = "not enough internal memory for the USB network transfers"; return ESP_ERR_NO_MEM;}
-    memset(&s_net.fn, 0, sizeof s_net.fn);
-    s_net.fn = *fn;
+    bool serial = f->kind == USBP_SERIAL, notify = !serial && f->ep_notify;
+    size_t need = session_need(f->kind, notify), before = internal_free();
+    if (!usbp_fits(before, need)) {
+        static char text[160];
+        snprintf(text, sizeof text, "not enough internal RAM for this USB device: about %u KB needed, %u KB free, 40 KB kept for the rest of the gateway; turn off unused features",
+                 (unsigned)((need + 1023) / 1024), (unsigned)(before / 1024));
+        *why = text;
+        return ESP_ERR_NO_MEM;
+    }
+    s_net.kind = f->kind; s_net.ctrl = f->ctrl; s_net.data = f->data; s_net.data_alt = f->data_alt;
+    s_net.ep_in = f->ep_in; s_net.ep_out = f->ep_out; s_net.ep_notify = notify ? f->ep_notify : 0; s_net.mac_index = f->mac_index;
     s_net.netif = netif;
     s_net.link_cb = link;
     s_net.ctx = ctx;
@@ -842,49 +936,119 @@ esp_err_t usb_port_net_open(const usbp_device_t *d, const usbp_net_t *fn, esp_ne
     atomic_store(&s_net.inflight, 0);
     esp_err_t err = usb_host_device_open(s_client, d->address, &s_net.dev);
     if (err != ESP_OK) {s_net.dev = NULL; *why = "USB device gone"; return err;}
-    if ((err = alloc(8 + 256, &s_net.ctrl, 0, done_cb, 0)) != ESP_OK) goto fail;
-    if (fn->ctrl != fn->data) {
-        if ((err = usb_host_interface_claim(s_client, s_net.dev, fn->ctrl, 0)) != ESP_OK) {*why = "USB control interface busy"; goto fail;}
+    if ((err = alloc(USBP_CTRL_SIZE, &s_net.ctrl_xfer, 0, done_cb, 0)) != ESP_OK) goto fail;
+    if (f->ctrl != f->data) {
+        if ((err = usb_host_interface_claim(s_client, s_net.dev, f->ctrl, 0)) != ESP_OK) {*why = "USB control interface busy"; goto fail;}
         s_net.claimed_ctrl = true;
     }
-    if ((err = net_init(why)) != ESP_OK) goto fail;
-    if ((err = usb_host_interface_claim(s_client, s_net.dev, fn->data, fn->data_alt)) != ESP_OK) {*why = "USB data interface refused"; goto fail;}
+    if (!serial && (err = net_init(why)) != ESP_OK) goto fail;
+    if ((err = usb_host_interface_claim(s_client, s_net.dev, f->data, f->data_alt)) != ESP_OK) {*why = "USB data interface refused"; goto fail;}
     s_net.claimed_data = true;
-    uint8_t mac[6];
-    if (!device_mac(mac)) {
-        /* A locally administered address from this board's Ethernet MAC. */
-        esp_read_mac(mac, ESP_MAC_ETH);
-        mac[0] = (uint8_t)((mac[0] | 0x02) & ~0x01);
+    if (serial) {
+        esp_err_t r;
+        /* CDC-ACM: DTR and RTS on; many modems ignore data without DTR. */
+        if (f->ctrl != f->data && !control(s_net.ctrl_xfer, 0x21, 0x22, 0x0003, f->ctrl, NULL, 0, &r)) s_net.leaked = true;
+        if (!s_net.rx) s_net.rx = xStreamBufferCreateWithCaps(USBP_SERIAL_RX_BUFFER, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_net.rx) {*why = "no memory for the USB serial buffer"; err = ESP_ERR_NO_MEM; goto fail;}
+        uint8_t sink[64];
+        while (xStreamBufferReceive(s_net.rx, sink, sizeof sink, 0) > 0) {}
+    } else {
+        uint8_t mac[6];
+        if (!device_mac(mac)) {
+            /* A locally administered address from this board's Ethernet MAC. */
+            esp_read_mac(mac, ESP_MAC_ETH);
+            mac[0] = (uint8_t)((mac[0] | 0x02) & ~0x01);
+        }
+        if (f->kind == USBP_NET_RNDIS && !s_net.leaked) {
+            uint8_t msg[32];
+            /* Directed, multicast, broadcast. */
+            if (!rndis_exchange(msg, usbp_rndis_set(msg, sizeof msg, 3, 0x0001010eu, 0x0000000du), 0x00000005u, 3, NULL, 0, NULL)) {
+                *why = "RNDIS device refused the packet filter";
+                err = ESP_FAIL;
+                goto fail;
+            }
+        }
+        esp_netif_set_mac(netif, mac);
     }
     if (s_net.leaked) {*why = "USB device stopped answering"; err = ESP_FAIL; goto fail;}
-    if (fn->kind == USBP_NET_RNDIS) {
-        uint8_t msg[32];
-        /* Directed, multicast, broadcast. */
-        if (!rndis_exchange(msg, usbp_rndis_set(msg, sizeof msg, 3, 0x0001010eu, 0x0000000du), 0x00000005u, 3, NULL, 0, NULL)) {
-            *why = "RNDIS device refused the packet filter";
-            err = ESP_FAIL;
-            goto fail;
-        }
-    }
-    esp_netif_set_mac(netif, mac);
-    for (int i = 0; i < 2 && err == ESP_OK; i++) err = alloc(USBP_RX_SIZE, &s_net.in[i], fn->ep_in, in_cb, i);
-    for (int i = 0; i < 2 && err == ESP_OK; i++) err = alloc(USBP_TX_SIZE + 64, &s_net.out[i], fn->ep_out, out_cb, i);
-    if (err == ESP_OK && fn->ep_notify) err = alloc(USBP_NOTIFY_SIZE, &s_net.notify, fn->ep_notify, notify_cb, 0);
-    if (err != ESP_OK) {*why = "no memory for the USB network transfers"; goto fail;}
+    size_t rx = serial ? USBP_SERIAL_IN : f->kind == USBP_NET_NCM ? USBP_NCM_RX : USBP_FRAME_RX;
+    s_net.n_out = serial ? 1 : 2;
+    if (serial) s_net.out_max = USBP_SERIAL_OUT;
+    for (int i = 0; i < 2 && err == ESP_OK; i++) err = alloc(rx, &s_net.in[i], f->ep_in, in_cb, i);
+    for (int i = 0; i < s_net.n_out && err == ESP_OK; i++) err = alloc(serial ? USBP_SERIAL_OUT : USBP_TX_SIZE, &s_net.out[i], f->ep_out, out_cb, i);
+    if (err == ESP_OK && notify) err = alloc(USBP_NOTIFY_SIZE, &s_net.notify, f->ep_notify, notify_cb, 0);
+    if (err != ESP_OK) {*why = "no memory for the USB transfers"; goto fail;}
     atomic_store(&s_net.out_busy[0], false);
     atomic_store(&s_net.out_busy[1], false);
     s_net.opened = xTaskGetTickCount();
     atomic_store(&s_net.running, true);
-    esp_netif_action_start(netif, NULL, 0, NULL);
+    if (!serial) esp_netif_action_start(netif, NULL, 0, NULL);
     for (int i = 0; i < 2; i++) resubmit(s_net.in[i]);
     if (s_net.notify) resubmit(s_net.notify);
-    if (fn->kind == USBP_NET_RNDIS || !fn->ep_notify) set_link(true);
-    ESP_LOGI(TAG, "%04x:%04x %s data path on interface %u", d->vid, d->pid,
-             fn->kind == USBP_NET_ECM ? "CDC-ECM" : fn->kind == USBP_NET_NCM ? "CDC-NCM" : "RNDIS", fn->data);
+    if (!serial && (f->kind == USBP_NET_RNDIS || !notify)) set_link(true);
+    size_t after = internal_free();
+    s_mem.session_bytes = (uint32_t)(before > after ? before - after : 0);
+    ESP_LOGI(TAG, "%04x:%04x %s on interface %u: %u bytes of internal RAM, %u free", d->vid, d->pid,
+             serial ? "serial port" : f->kind == USBP_NET_ECM ? "CDC-ECM" : f->kind == USBP_NET_NCM ? "CDC-NCM" : "RNDIS",
+             f->data, (unsigned)s_mem.session_bytes, (unsigned)after);
     return ESP_OK;
 fail:
     usb_port_net_close();
     return err == ESP_OK ? ESP_FAIL : err;
+}
+
+esp_err_t usb_port_net_open(const usbp_device_t *d, const usbp_net_t *fn, esp_netif_t *netif,
+                            usbp_link_cb_t link, void *ctx, const char **why)
+{
+    if (fn->kind != USBP_NET_ECM && fn->kind != USBP_NET_NCM && fn->kind != USBP_NET_RNDIS) {*why = "not a USB network function"; return ESP_ERR_INVALID_ARG;}
+    return session_open(d, fn, netif, link, ctx, why);
+}
+
+esp_err_t usb_port_serial_open(const usbp_device_t *d, const usbp_net_t *port, const char **why)
+{
+    if (port->kind != USBP_SERIAL) {*why = "not a USB serial interface"; return ESP_ERR_INVALID_ARG;}
+    return session_open(d, port, NULL, NULL, NULL, why);
+}
+
+int usb_port_serial_write(const void *data, size_t len, uint32_t timeout_ms)
+{
+    const uint8_t *p = data;
+    size_t done = 0;
+    TickType_t end = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    while (done < len) {
+        if (s_net.kind != USBP_SERIAL || !atomic_load(&s_net.running) || atomic_load(&s_net.gone)) return -1;
+        if (atomic_exchange(&s_net.out_busy[0], true)) {
+            if ((int32_t)(end - xTaskGetTickCount()) <= 0) {atomic_fetch_add(&s_tx_dropped, 1); return -1;}
+            vTaskDelay(1);
+            continue;
+        }
+        usb_transfer_t *t = s_net.out[0];
+        size_t n = len - done < USBP_SERIAL_OUT ? len - done : USBP_SERIAL_OUT;
+        memcpy(t->data_buffer, p + done, n);
+        t->num_bytes = (int)n;
+        t->flags = 0;
+        atomic_fetch_add(&s_net.inflight, 1);
+        if (usb_host_transfer_submit(t) != ESP_OK) {
+            atomic_fetch_sub(&s_net.inflight, 1);
+            atomic_store(&s_net.out_busy[0], false);
+            return -1;
+        }
+        done += n;
+    }
+    return (int)len;
+}
+
+int usb_port_serial_read(uint8_t *buf, size_t cap, uint32_t timeout_ms)
+{
+    if (s_net.kind != USBP_SERIAL || !s_net.rx || !atomic_load(&s_net.running) || atomic_load(&s_net.gone)) return -1;
+    return (int)xStreamBufferReceive(s_net.rx, buf, cap, pdMS_TO_TICKS(timeout_ms));
+}
+
+void usb_port_serial_flush(void)
+{
+    uint8_t sink[64];
+    if (!s_net.rx) return;
+    while (xStreamBufferReceive(s_net.rx, sink, sizeof sink, 0) > 0) {}
 }
 
 bool usb_port_net_alive(void)
@@ -892,7 +1056,8 @@ bool usb_port_net_alive(void)
     if (!atomic_load(&s_net.running) || atomic_load(&s_net.gone)) return false;
     /* No NETWORK_CONNECTION notice after 5 s: assume the link is up (DHCP
      * still has to succeed before the uplink is used). */
-    if (!atomic_load(&s_net.link_known) && xTaskGetTickCount() - s_net.opened > pdMS_TO_TICKS(5000)) set_link(true);
+    if (s_net.kind != USBP_SERIAL && !atomic_load(&s_net.link_known) && xTaskGetTickCount() - s_net.opened > pdMS_TO_TICKS(5000))
+        set_link(true);
     return true;
 }
 
@@ -900,7 +1065,7 @@ void usb_port_net_close(void)
 {
     bool was_running = atomic_exchange(&s_net.running, false);
     if (!s_net.dev) {free_transfers(); return;}
-    uint8_t eps[] = {s_net.fn.ep_in, s_net.fn.ep_out, s_net.fn.ep_notify};
+    uint8_t eps[] = {s_net.ep_in, s_net.ep_out, s_net.ep_notify};
     for (unsigned i = 0; i < sizeof eps; i++) {
         if (!eps[i]) continue;
         usb_host_endpoint_halt(s_net.dev, eps[i]);
@@ -909,15 +1074,15 @@ void usb_port_net_close(void)
     for (int i = 0; i < 100 && atomic_load(&s_net.inflight) > 0; i++) vTaskDelay(pdMS_TO_TICKS(10));
     if (atomic_load(&s_net.inflight) > 0) s_net.leaked = true;   /* never free a transfer in flight */
     for (unsigned i = 0; i < sizeof eps; i++) if (eps[i]) usb_host_endpoint_clear(s_net.dev, eps[i]);
-    if (was_running && s_net.netif) {
+    if (was_running && s_net.netif && s_net.kind != USBP_SERIAL) {
         if (atomic_exchange(&s_net.link, false)) {
             esp_netif_action_disconnected(s_net.netif, NULL, 0, NULL);
             if (s_net.link_cb) s_net.link_cb(false, s_net.ctx);
         }
         esp_netif_action_stop(s_net.netif, NULL, 0, NULL);
     }
-    if (s_net.claimed_data) usb_host_interface_release(s_client, s_net.dev, s_net.fn.data);
-    if (s_net.claimed_ctrl) usb_host_interface_release(s_client, s_net.dev, s_net.fn.ctrl);
+    if (s_net.claimed_data) usb_host_interface_release(s_client, s_net.dev, s_net.data);
+    if (s_net.claimed_ctrl) usb_host_interface_release(s_client, s_net.dev, s_net.ctrl);
     s_net.claimed_data = s_net.claimed_ctrl = false;
     if (s_net.leaked) s_poisoned = true;
     free_transfers();

@@ -32,11 +32,12 @@ typedef struct {
     bool compiled, enabled_at_boot, driver_started, link_up, has_ip, selected, restart_required;
     uint32_t ip, mask, gw;                   /* network byte order */
     uint32_t link_changes;
-    char error[96];
+    char error[160];
     /* USB transport. */
     uint8_t transport, usb_net;              /* USBP_NET_* in use */
     bool usb_present;
     uint16_t usb_vid, usb_pid;
+    uint32_t usb_ram_host, usb_ram_session, usb_ram_free, usb_ram_min;   /* measured internal RAM, bytes */
 } eth_status_t;
 
 /* Uplink selection with a short stability window before moving to Ethernet;

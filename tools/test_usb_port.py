@@ -226,6 +226,33 @@ int main(void){
     uint8_t zeros[26]={26,3};for(int i=0;i<12;i++)zeros[2+2*i]='0';assert(!usbp_mac_string(zeros,26,mac6));
     sd[0]=40;assert(!usbp_mac_string(sd,26,mac6));
 
+    /* Serial ports: CDC-ACM control interface with its data interface (union
+     * or next), vendor interfaces with a bulk pair; RNDIS is not a serial port. */
+    usbp_net_t sp;
+    begin();iface(0,0,0xff,0xff,0xff,2);ep(0x81,2,64);ep(0x01,2,64);
+    iface(2,0,0xff,0,0,3);ep(0x83,3,16);ep(0x84,2,64);ep(0x03,2,64);
+    size_t sl=end();
+    assert(usbp_serial_find(D,sl,2,&sp)==1&&sp.kind==USBP_SERIAL&&sp.ctrl==2&&sp.data==2&&sp.ep_in==0x84&&sp.ep_out==0x03&&sp.ep_notify==0x83&&sp.mps_in==64);
+    assert(usbp_serial_find(D,sl,0,&sp)==1&&!sp.ep_notify&&sp.ep_in==0x81);
+    assert(usbp_serial_find(D,sl,1,&sp)==0&&usbp_serial_find(D,sl,40,&sp)==0);
+    begin();iface(0,0,2,2,1,1);uint8_t h5[5]={5,0x24,0,0x10,1};put(h5,5);cs_union(0,3);ep(0x81,3,16);
+    iface(1,0,0xff,0,0,0);iface(3,0,0x0a,0,0,2);ep(0x85,2,64);ep(0x05,2,64);sl=end();
+    assert(usbp_serial_find(D,sl,0,&sp)==1&&sp.ctrl==0&&sp.data==3&&sp.ep_in==0x85&&sp.ep_out==0x05&&sp.ep_notify==0x81);
+    begin();iface(0,0,2,2,1,1);ep(0x81,3,16);iface(1,0,0x0a,0,0,2);ep(0x82,2,64);ep(0x02,2,64);sl=end();
+    assert(usbp_serial_find(D,sl,0,&sp)==1&&sp.data==1&&sp.ep_in==0x82);                 /* no union: the next interface */
+    begin();iface(0,0,2,2,1,1);ep(0x81,3,16);iface(1,0,0x0a,0,0,1);ep(0x82,2,64);sl=end();
+    assert(usbp_serial_find(D,sl,0,&sp)==0);                                               /* data interface without OUT */
+    begin();iface(0,0,2,2,1,1);cs_union(0,0);ep(0x81,3,16);sl=end();assert(usbp_serial_find(D,sl,0,&sp)==0);   /* union to itself */
+    begin();rndis(2,2,0xff);sl=end();assert(usbp_serial_find(D,sl,0,&sp)==0&&usbp_serial_find(D,sl,1,&sp)==0);
+    begin();iface(0,0,0xff,0,0,0);iface(0,1,0xff,0,0,2);ep(0x81,2,64);ep(0x01,2,64);sl=end();
+    assert(usbp_serial_find(D,sl,0,&sp)==0);                                               /* alt 1 endpoints do not count */
+    begin();iface(0,0,0xff,0,0,2);ep(0x81,2,0);ep(0x01,2,64);sl=end();assert(usbp_serial_find(D,sl,0,&sp)==0);   /* MPS 0 */
+    begin();uint8_t badl[2]={0,4};put(badl,2);sl=end();assert(usbp_serial_find(D,sl,0,&sp)==-1);
+    assert(usbp_serial_find(NULL,9,0,&sp)==-1&&usbp_serial_find(D,sl,0,NULL)==-1&&usbp_serial_find(D,8,0,&sp)==-1);
+    /* The 40 KB internal RAM floor. */
+    assert(usbp_fits(60*1024,10*1024)&&usbp_fits(50*1024,10*1024)&&!usbp_fits(50*1024-1,10*1024));
+    assert(!usbp_fits(46*1024,8*1024)&&usbp_fits(46*1024,6*1024)&&!usbp_fits(1000,2000)&&usbp_fits(40*1024,0)&&!usbp_fits(40*1024-1,0));
+
     /* Deterministic fuzz: bounded results on arbitrary input. */
     uint32_t seed=99;
     for(int round=0;round<20000;round++){
@@ -234,12 +261,13 @@ int main(void){
         if(round%2)for(size_t i=9;i+2<l;i+=2+((seed>>9)%10)){seed=seed*1103515245u+12345u;D[i]=(uint8_t)(2+(seed>>16)%14);D[i+1]=(uint8_t)(4+((seed>>21)%3==0?0x20:(seed>>21)&1));}
         D[0]=9;D[1]=2;D[2]=(uint8_t)l;D[3]=(uint8_t)(l>>8);
         int r=usbp_scan(D,l,&n,&s);assert(r==0||r==-1);
+        r=usbp_serial_find(D,l,(uint8_t)(round%34),&sp);assert(r>=-1&&r<=1);if(r==1)assert(sp.kind==USBP_SERIAL&&(sp.ep_in&0x80)&&!(sp.ep_out&0x80));
         if(!r&&n.kind>=USBP_NET_ECM&&n.kind<=USBP_NET_RNDIS)assert(n.ep_in&0x80&&!(n.ep_out&0x80)&&n.mps_in&&n.mps_out);
         size_t o=0;int k=0;while((r=usbp_rndis_next(D,l,&o,&f,&fl))==1){assert(f>=D&&f+fl<=D+l&&fl>=14&&fl<=1514);k++;assert(k<100);}
         memcpy(buf,D,l);le32(buf,USBP_NTH16);le16(buf+4,12);if(round%3)le16(buf+8,(uint16_t)l);if(round%5)le16(buf+10,12);
         usbp_ncm_rx_t j={0};k=0;while((r=usbp_ncm_next(buf,l,&j,&f,&fl))==1){assert(f>=buf&&f+fl<=buf+l&&fl>=14);k++;assert(k<=64);}
     }
-    puts("PASS: actual USB port core: ECM/NCM/RNDIS/MBIM/vendor/storage scan, serial/network/switch/next-configuration decisions, usb_modeswitch messages byte for byte, RNDIS and NCM framing (alignment, chains, loops, malformed), iMACAddress, fuzz (no USB device)");
+    puts("PASS: actual USB port core: serial port endpoints (CDC-ACM union/next, vendor, malformed), 40 KB internal RAM floor, ECM/NCM/RNDIS/MBIM/vendor/storage scan, serial/network/switch/next-configuration decisions, usb_modeswitch messages byte for byte, RNDIS and NCM framing (alignment, chains, loops, malformed), iMACAddress, fuzz (no USB device)");
 }
 '''
 

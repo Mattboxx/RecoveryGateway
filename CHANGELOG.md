@@ -23,7 +23,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   first is vendor-only (Realtek RTL8152/RTL8153).
 - Both are off by default and cost no task, heap or USB host stack while off;
   the USB port becomes a USB host only when one of them is enabled with its
-  USB connection. Not yet tested with real modems, sticks, adapters or phones.
+  USB connection. The USB connection always leaves 40 KB of internal RAM to
+  the rest of the gateway; if that is not possible, the card says how much is
+  needed and free. Not yet tested with real modems, sticks, adapters or phones.
 
 ### Changed
 

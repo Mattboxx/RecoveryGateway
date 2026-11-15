@@ -16,8 +16,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Network function kinds. UNSUPPORTED: MBIM, vendor-only Ethernet chips. */
-enum {USBP_NET_NONE, USBP_NET_ECM, USBP_NET_NCM, USBP_NET_RNDIS, USBP_NET_UNSUPPORTED};
+/* Data function kinds. UNSUPPORTED: MBIM, vendor-only Ethernet chips.
+ * USBP_SERIAL: a serial (AT/PPP) port, CDC-ACM or vendor-specific. */
+enum {USBP_NET_NONE, USBP_NET_ECM, USBP_NET_NCM, USBP_NET_RNDIS, USBP_NET_UNSUPPORTED, USBP_SERIAL};
+/* Internal RAM always left to the rest of the gateway. */
+#define USBP_INTERNAL_FLOOR (40 * 1024)
 /* What to do with an attached device. */
 enum {USBP_ACT_NONE, USBP_ACT_SERIAL, USBP_ACT_NETWORK, USBP_ACT_SWITCH, USBP_ACT_NEXT_CONFIG};
 /* Cellular usb_mode setting. */
@@ -86,6 +89,13 @@ bool usbp_mac_string(const uint8_t *desc, size_t len, uint8_t mac[6]);
 /* Configuration to enumerate next after `current` found nothing usable: 0
  * when there is none (bounded to USBP_MAX_CONFIGS). */
 uint8_t usbp_next_config(uint8_t num_configs, uint8_t current);
+/* Serial port at interface `iface`: a CDC-ACM control interface (with its
+ * data interface from the union descriptor, or the next one) or a vendor
+ * interface with a bulk pair. Fills `out` as a USBP_SERIAL function.
+ * 1 found, 0 not a serial port, -1 malformed descriptor. */
+int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *out);
+/* True when `need` more bytes of internal RAM leave USBP_INTERNAL_FLOOR free. */
+bool usbp_fits(size_t free_internal, size_t need);
 
 #if !defined(USBP_HOST_TEST)
 #include "esp_err.h"
@@ -100,10 +110,14 @@ typedef struct {
 
 typedef void (*usbp_link_cb_t)(bool up, void *ctx);
 
+/* Internal RAM measured around the USB host start and the last session. */
+typedef struct {uint32_t free_at_start, host_bytes, session_bytes, free_now, min_free;} usbp_memory_t;
+
 /* Installs the USB host stack, its event task and the gateway's own USB host
- * client (PSRAM stacks); `cdc_acm` also installs the CDC-ACM driver for
- * serial modems. Once per boot; the port stays a host until restart. */
-esp_err_t usb_port_start(bool cdc_acm);
+ * client (PSRAM stacks), only if USBP_INTERNAL_FLOOR stays free. Once per
+ * boot; the port stays a host until restart. `why` explains a refusal. */
+esp_err_t usb_port_start(const char **why);
+void usb_port_memory(usbp_memory_t *out);
 /* Snapshot of the attached device and its configuration descriptor. */
 bool usb_port_device(usbp_device_t *out, uint8_t *cfg, size_t cap, size_t *len);
 /* Waits up to `ms` for an attach or a removal after `seq`. */
@@ -114,10 +128,18 @@ esp_err_t usb_port_switch(const usbp_device_t *d, const usbp_storage_t *st);
 bool usb_port_next_config(const usbp_device_t *d);
 /* The esp_netif driver handle to attach once to the consumer's netif. */
 void *usb_port_net_glue(void);
-/* Opens the network function and starts the data path (MAC set on `netif`). */
+/* One data session at a time, refused when it would take internal RAM
+ * below USBP_INTERNAL_FLOOR. A network function (MAC set on `netif`): */
 esp_err_t usb_port_net_open(const usbp_device_t *d, const usbp_net_t *fn, esp_netif_t *netif,
                             usbp_link_cb_t link, void *ctx, const char **why);
+/* or a serial port (from usbp_serial_find); bytes go through a PSRAM buffer. */
+esp_err_t usb_port_serial_open(const usbp_device_t *d, const usbp_net_t *port, const char **why);
+int usb_port_serial_write(const void *data, size_t len, uint32_t timeout_ms);   /* len, or -1 */
+int usb_port_serial_read(uint8_t *buf, size_t cap, uint32_t timeout_ms);        /* bytes, 0 timeout, -1 gone */
+void usb_port_serial_flush(void);
+/* True while the session runs (serial or network); false after an unplug or a fatal error. */
 bool usb_port_net_alive(void);
+/* Ends the session (serial or network) and releases the device (bounded). */
 void usb_port_net_close(void);
 void usb_port_counters(uint32_t *rx_dropped, uint32_t *tx_dropped, uint64_t *rx_bytes, uint64_t *tx_bytes);
 #endif
