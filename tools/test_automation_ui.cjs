@@ -65,6 +65,9 @@ async function fixture(browser, options = {}) {
       if (state.mqttFailures) { state.mqttFailures--; status = 503; }
       if (route.request().method() === 'POST') { state.savedMqtt = route.request().postDataJSON(); state.mqttBody = {...(state.mqttBody || mqtt), ...state.savedMqtt}; body = {ok:true}; }
       else body = state.mqttBody || mqtt;
+    } else if (url.pathname === '/api/ntfy/test') {
+      state.ntfyTests = (state.ntfyTests || 0) + 1;
+      body = state.ntfyTestBody || {ok: true};
     } else if (url.pathname === '/api/ntfy') {
       if (state.ntfyFailures) { state.ntfyFailures--; status = 503; }
       if (route.request().method() === 'POST') { state.savedNtfy = route.request().postDataJSON(); state.ntfyBody = {...(state.ntfyBody || ntfy), ...state.savedNtfy}; body = {ok: true}; }
@@ -1404,6 +1407,18 @@ async function main() {
     assert.equal(await f.page.locator('#ui-advanced-toggle').isChecked(), true);
     await f.page.locator('#ui-mode-card .feature-switch').click();
     assert.equal(await f.page.locator('body.ui-simple').count(), 1);
+    assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Toast titles are translated too (ntfy test, sent and failed).
+    f = await fixture(browser, { page: 'automation/notifications', locale: 'it-IT',
+      ntfyBody: { enabled: true, server: 'https://ntfy.example', topic: 'fixture-topic', info_enabled: false, commands_enabled: false, last_publish_ok: false } });
+    await f.page.waitForFunction(() => document.documentElement.lang === 'it' && !document.getElementById('ntfy-test').disabled);
+    await f.page.locator('#ntfy-test').click();
+    await f.page.waitForFunction(() => [...document.querySelectorAll('.toast-title')].some(t => t.textContent === 'Test ntfy inviato'));
+    f.state.ntfyTestBody = {ok: false};
+    await f.page.locator('#ntfy-test').click();
+    await f.page.waitForFunction(() => [...document.querySelectorAll('.toast-title')].some(t => t.textContent === 'Test ntfy non riuscito'));
+    assert.equal(f.state.ntfyTests, 2);
+    assert.ok(!(await f.page.locator('#toastContainer').textContent()).includes('ntfy test'), 'no English toast title left');
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
     // The simple-mode note keeps its number in Italian.
     f = await fixture(browser, { page: 'firewall', locale: 'it-IT', simpleMode: true });

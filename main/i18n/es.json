@@ -2267,5 +2267,14 @@
  "the device has no USB network interface: set the USB mode to automatic or serial": "El dispositivo no tiene interfaz de red USB: pon el modo USB en automático o serie",
  "{} advanced section is hidden in simple mode. Settings keep working.": "{} sección avanzada está oculta en el modo sencillo. Los ajustes siguen funcionando.",
  "{} advanced sections are hidden in simple mode. Settings keep working.": "{} secciones avanzadas están ocultas en el modo sencillo. Los ajustes siguen funcionando.",
- "While a USB connection is on, the gateway's Wi-Fi keeps fewer receive buffers to make room in internal RAM: Wi-Fi traffic peaks are a little slower. With the pins nothing changes.": "Mientras una conexión USB está activa, la Wi-Fi de la pasarela mantiene menos búferes de recepción para liberar RAM interna: los picos de tráfico Wi-Fi son algo más lentos. Con los pines no cambia nada."
+ "While a USB connection is on, the gateway's Wi-Fi keeps fewer receive buffers to make room in internal RAM: Wi-Fi traffic peaks are a little slower. With the pins nothing changes.": "Mientras una conexión USB está activa, la Wi-Fi de la pasarela mantiene menos búferes de recepción para liberar RAM interna: los picos de tráfico Wi-Fi son algo más lentos. Con los pines no cambia nada.",
+ "ntfy test sent": "Prueba de ntfy enviada",
+ "ntfy test failed": "La prueba de ntfy falló",
+ "ntfy is disabled": "ntfy está desactivado",
+ "ntfy saved": "ntfy guardado",
+ "ntfy save failed": "No se pudo guardar ntfy",
+ "connection error": "error de conexión",
+ "unknown error": "error desconocido",
+ "Rebooting…": "Reiniciando…",
+ "Reloading…": "Recargando…"
 }
