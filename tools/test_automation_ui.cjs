@@ -408,10 +408,12 @@ async function main() {
       assert.equal(await f.page.locator('#cell-usb-iface option').count(), 17);
       for (const id of ['#cell-uart', '#cell-baud', '#cell-tx', '#cell-rx']) assert.equal(await f.page.locator(id).isVisible(), false, id);
       assert.equal(await f.page.locator('#cell-pwrkey').isVisible(), true);   /* PWRKEY works with both connections */
-      assert.equal(await f.page.locator('#cell-card p.cell-usb').isVisible(), true);
+      assert.equal(await f.page.locator('#cell-card div.form-hint.cell-usb').isVisible(), true);
+      await f.page.locator('#cell-card div.form-hint.cell-usb details summary').click();
+      assert.match(await f.page.locator('#cell-card div.form-hint.cell-usb details').textContent(), /SIM7600[\s\S]*HiLink[\s\S]*Not supported/);
       await f.page.locator('#cell-transport').selectOption('uart');
       assert.equal(await f.page.locator('#cell-tx').isVisible(), true); assert.equal(await f.page.locator('#cell-usb-mode').isVisible(), false);
-      assert.equal(await f.page.locator('#cell-card p.cell-usb').isVisible(), false);
+      assert.equal(await f.page.locator('#cell-card div.form-hint.cell-usb').isVisible(), false);
       await f.page.locator('#cell-transport').selectOption('usb');
       await f.page.locator('#cell-usb-mode').selectOption('serial');
       await f.page.evaluate(() => { const s = document.getElementById('cell-usb-iface'); s.value = '3'; s.dispatchEvent(new Event('change')); });
@@ -1275,7 +1277,7 @@ async function main() {
     await f.page.locator('#eth-save').click();
     for(let i=0;i<50&&!f.state.savedEthernet;i++)await f.page.waitForTimeout(100);
     assert.deepEqual(f.state.savedEthernet,{enabled:true,transport:'spi',chip:'w5500',preference:'ethernet_first',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:true,ip:'192.168.1.60',netmask:'255.255.255.0',gateway:'192.168.1.1',dns:''});
-    assert.equal(await f.page.locator('#eth-sclk').isVisible(),true);assert.equal(await f.page.locator('#eth-card p.eth-usb').isVisible(),false);
+    assert.equal(await f.page.locator('#eth-sclk').isVisible(),true);assert.equal(await f.page.locator('#eth-card div.form-hint.eth-usb').isVisible(),false);
     assert.deepEqual(f.errors,[]);await f.context.close();count++;
     // Ethernet over USB (adapter or phone tethering): SPI fields hidden, USB status, typed save.
     f=await fixture(browser,{page:'network',ethernetBody:{config:{enabled:true,transport:'usb',chip:'w5500',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:false,ip:'',netmask:'',gateway:'',dns:'',preference:'ethernet_first'},
@@ -1285,12 +1287,12 @@ async function main() {
     assert.match(await f.page.locator('#eth-status').textContent(),/Link up · USB device 0bda:8153 \(CDC-ECM\) · 192\.168\.1\.77 via 192\.168\.1\.1 · current uplink/);
     assert.equal(await f.page.locator('#eth-transport').inputValue(),'usb');
     for(const id of ['#eth-host','#eth-mhz','#eth-sclk','#eth-mosi','#eth-miso','#eth-cs','#eth-int','#eth-rst'])assert.equal(await f.page.locator(id).isVisible(),false,id);
-    assert.equal(await f.page.locator('#eth-pref').isVisible(),true);assert.equal(await f.page.locator('#eth-card p.eth-usb').isVisible(),true);
+    assert.equal(await f.page.locator('#eth-pref').isVisible(),true);assert.equal(await f.page.locator('#eth-card div.form-hint.eth-usb').isVisible(),true);
     await f.page.locator('#eth-pref').selectOption('wifi_first');await f.page.locator('#eth-save').click();
     for(let i=0;i<50&&!f.state.savedEthernet;i++)await f.page.waitForTimeout(100);
     assert.equal(f.state.savedEthernet.transport,'usb');assert.equal(f.state.savedEthernet.preference,'wifi_first');assert.equal(f.state.savedEthernet.sclk,12);
     await f.page.locator('#eth-transport').selectOption('spi');
-    assert.equal(await f.page.locator('#eth-sclk').isVisible(),true);assert.equal(await f.page.locator('#eth-card p.eth-usb').isVisible(),false);
+    assert.equal(await f.page.locator('#eth-sclk').isVisible(),true);assert.equal(await f.page.locator('#eth-card div.form-hint.eth-usb').isVisible(),false);
     assert.deepEqual(f.errors,[]);await f.context.close();count++;
     // Ethernet over USB with an unsupported device: the reason is shown.
     f=await fixture(browser,{page:'network',ethernetBody:{config:{enabled:true,transport:'usb',chip:'w5500',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:false,ip:'',netmask:'',gateway:'',dns:'',preference:'ethernet_first'},
