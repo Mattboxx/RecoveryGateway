@@ -6,6 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.24] - 2026-11-15
+
+### Fixed
+
+- Validate gateway Wi-Fi names and passwords before saving. A 32-byte network
+  name now keeps its final byte.
+- Restore encrypted Wi-Fi credentials with the matching access-point mode.
+  A rejected settings write stops the backup restore before rebooting.
+
 ## [3.0.23] - 2026-11-14
 
 ### Added

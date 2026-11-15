@@ -825,8 +825,9 @@ static esp_err_t send_save_response(httpd_req_t *req)
     nvs_save_errors_attach(resp);
     char *body = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
+    if (!body) return httpd_resp_send_500(req);
     httpd_resp_set_type(req, "application/json");
-    esp_err_t e = httpd_resp_sendstr(req, body ? body : "{\"ok\":true}");
+    esp_err_t e = httpd_resp_sendstr(req, body);
     free(body);
     return e;
 }
@@ -1098,21 +1099,28 @@ static esp_err_t network_save_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
         return ESP_FAIL;
     }
-    /* The gateway Wi-Fi opens (no password) only when asked for, and an open
-     * one closes only with a password: checked before anything is written. */
-    const cJSON *ap_req = cJSON_GetObjectItem(root, "ap");
-    const cJSON *ap_open_req = cJSON_IsObject(ap_req) ? cJSON_GetObjectItem(ap_req, "open") : NULL;
-    if (cJSON_IsBool(ap_open_req)) {
-        const cJSON *pw_req = cJSON_GetObjectItem(ap_req, "password");
-        char *stored = nvs_param_get_str("ap_passwd");
-        const char *why = fb_check_ap_change(cJSON_IsTrue(ap_open_req), cJSON_IsString(pw_req) ? pw_req->valuestring : NULL,
-                                             stored && stored[0]);
-        free(stored);
-        if (why) {
-            cJSON_Delete(root);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, why);
-            return ESP_FAIL;
-        }
+    const cJSON *ap = cJSON_GetObjectItem(root, "ap");
+    const cJSON *ap_open = cJSON_GetObjectItem(ap, "open");
+    const cJSON *ap_ssid = cJSON_GetObjectItem(ap, "ssid");
+    const cJSON *ap_pw = cJSON_GetObjectItem(ap, "password");
+    const char *ap_password = cJSON_IsString(ap_pw) ? ap_pw->valuestring : NULL;
+    const char *ap_error = NULL;
+    if ((ap && !cJSON_IsObject(ap)) || (ap_open && !cJSON_IsBool(ap_open)) ||
+        (ap_pw && !cJSON_IsString(ap_pw))) {
+        ap_error = "invalid access point settings";
+    } else if (ap_ssid) {
+        ap_error = fb_check_ap_ssid(cJSON_IsString(ap_ssid) ? ap_ssid->valuestring : NULL);
+    }
+    if (!ap_error && (ap_open || ap_pw)) {
+        uint8_t was_open = 0;
+        nvs_param_get_u8("ap_open", &was_open);
+        ap_error = fb_check_ap_change(cJSON_IsTrue(ap_open), ap_password,
+                                      !cJSON_IsFalse(ap_open) || !was_open);
+    }
+    if (ap_error) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, ap_error);
+        return ESP_FAIL;
     }
     if (!save_txn_begin()) {
         cJSON_Delete(root);
@@ -1240,7 +1248,6 @@ static esp_err_t network_save_handler(httpd_req_t *req)
         apply_ttl = v;
     }
 
-    cJSON *ap = cJSON_GetObjectItem(root, "ap");
     if (cJSON_IsObject(ap)) {
         /* Snapshot the AP CIDR BEFORE the save so we can swap it out of
          * ts_advertise_routes after — keeps operator-added manual
@@ -1249,15 +1256,12 @@ static esp_err_t network_save_handler(httpd_req_t *req)
         compute_ap_cidr_from_nvs(old_cidr, sizeof old_cidr);
 
         save_str_if_present(ap, "ssid",     "ap_ssid");
-        const cJSON *ap_open_j = cJSON_GetObjectItem(ap, "open");
-        if (cJSON_IsTrue(ap_open_j)) {
+        if (cJSON_IsTrue(ap_open)) {
             nvs_save_str("ap_passwd", "");
             nvs_save_u8("ap_open", 1);
-        } else {
-            save_str_if_present(ap, "password", "ap_passwd");
-            const cJSON *ap_pw_j = cJSON_GetObjectItem(ap, "password");
-            if (cJSON_IsFalse(ap_open_j) || (cJSON_IsString(ap_pw_j) && ap_pw_j->valuestring[0]))
-                nvs_save_u8("ap_open", 0);   /* a password closes an open AP */
+        } else if (ap_password && *ap_password) {
+            nvs_save_str("ap_passwd", ap_password);
+            nvs_save_u8("ap_open", 0);
         }
         /* AP channel is auto-managed (follows the uplink on the single radio);
          * the UI exposes it read-only, so there is nothing to persist here. */
@@ -1340,8 +1344,9 @@ static esp_err_t network_save_handler(httpd_req_t *req)
     cJSON_Delete(resp_json);
     cJSON_Delete(root);
 
+    if (!resp_str) return httpd_resp_send_500(req);
     httpd_resp_set_type(req, "application/json");
-    esp_err_t err = httpd_resp_sendstr(req, resp_str ? resp_str : "{\"ok\":true}");
+    esp_err_t err = httpd_resp_sendstr(req, resp_str);
     free(resp_str);
     return err;
 }
@@ -4499,6 +4504,14 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    const cJSON *ap_pw = cJSON_GetObjectItem(root, "ap_password");
+    if (ap_pw && (!cJSON_IsString(ap_pw) ||
+        (ap_pw->valuestring[0] && fb_check_ap_password(ap_pw->valuestring)))) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid access point password");
+        return ESP_FAIL;
+    }
+
     const cJSON *ntfy_token = cJSON_GetObjectItemCaseSensitive(root, "ntfy_token");
     ntfy_integration_config_t ntfy_prev;
     ntfy_integration_get_config(&ntfy_prev);
@@ -4514,7 +4527,10 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
         return send_save_response(req);
     }
     save_str_if_present(root, "auth_key",    "ts_authkey");
-    save_str_if_present(root, "ap_password", "ap_passwd");
+    if (cJSON_IsString(ap_pw) && ap_pw->valuestring[0]) {
+        nvs_save_str("ap_passwd", ap_pw->valuestring);
+        nvs_save_u8("ap_open", 0);
+    }
     save_str_if_present(root, "mqtt_password", "mqtt_pass");
 
     /* Network array — only rewrite NVS when the client actually sent one,

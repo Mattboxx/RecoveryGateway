@@ -500,7 +500,7 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     }
     bool ap_open = bool_of(cmd, "ap_open", false);
     if (!reason) reason = fb_check_ap_settings(ap_pw, ap_open, admin);
-    if (!reason && (!ap_ssid || !*ap_ssid || strlen(ap_ssid) > 32)) reason = "access point name must be 1 to 32 bytes";
+    if (!reason) reason = fb_check_ap_ssid(ap_ssid);
     if (!reason) reason = fb_check_auth_key(key);
     if (!reason) reason = fb_check_login_server(server);
     if (!reason) reason = fb_check_hostname(host);

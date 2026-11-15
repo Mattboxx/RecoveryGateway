@@ -144,6 +144,8 @@ int main(void) {
     assert(fb_check_ap_settings("", false, NULL) && fb_check_ap_settings(NULL, false, NULL) && !fb_check_ap_settings("12345678", false, "admin-pass-1"));
     assert(fb_check_ap_settings("admin-pass-1", false, "admin-pass-1"));
     /* Network page: open without a password; close with a new one or a stored one. */
+    assert(!fb_check_ap_ssid("Gateway") && !fb_check_ap_ssid("12345678901234567890123456789012"));
+    assert(fb_check_ap_ssid(NULL) && fb_check_ap_ssid("") && fb_check_ap_ssid("123456789012345678901234567890123"));
     assert(!fb_check_ap_change(true, NULL, true) && !fb_check_ap_change(true, "", false) && fb_check_ap_change(true, "12345678", true));
     assert(!fb_check_ap_change(false, "12345678", false) && fb_check_ap_change(false, "1234567", true) && !fb_check_ap_change(false, NULL, true));
     assert(fb_check_ap_change(false, NULL, false) && fb_check_ap_change(false, "", false));

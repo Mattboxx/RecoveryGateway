@@ -257,14 +257,19 @@ const char *fb_check_ap_settings(const char *pw, bool open, const char *admin)
     return reason;
 }
 
-/* Network page: open the gateway Wi-Fi (no password) or keep WPA2. Closing an
- * open network needs a new password unless one is stored: an empty password
- * would otherwise fall back to the shared build-time default. */
-const char *fb_check_ap_change(bool open, const char *new_pw, bool have_stored)
+const char *fb_check_ap_ssid(const char *ssid)
+{
+    return ssid && *ssid && strlen(ssid) <= 32 ? NULL : "access point name must be 1 to 32 bytes";
+}
+
+/* Empty passwords mean keep the current setting except when opening the AP.
+ * Requiring a new password when closing an open AP prevents falling back to
+ * the shared build-time password. Legacy protected installations may keep it. */
+const char *fb_check_ap_change(bool open, const char *new_pw, bool can_keep_password)
 {
     if (open) return new_pw && *new_pw ? "an open access point takes no password" : NULL;
     if (new_pw && *new_pw) return fb_check_ap_password(new_pw);
-    return have_stored ? NULL : "set a password to close the open network";
+    return can_keep_password ? NULL : "set a password to close the open network";
 }
 
 const char *fb_check_auth_key(const char *key)
