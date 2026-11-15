@@ -118,6 +118,9 @@ const char *fb_check_lan_name(const char *name);
  * Wi-Fi needs a network; with only a SIM the gateway is reached through
  * the tailnet, so an auth key is needed. NULL = acceptable. */
 const char *fb_check_uplink(const char *type, bool has_wifi);
+/* Ethernet/modem connection chosen in setup: 0 pins (also when absent),
+ * 1 the USB port, -1 unknown. */
+int fb_uplink_usb(const char *transport);
 /* POSIX TZ rule as written by the Web UI (empty = UTC). */
 const char *fb_check_tz(const char *tz);
 

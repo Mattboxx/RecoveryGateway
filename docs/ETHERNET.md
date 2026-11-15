@@ -108,5 +108,8 @@ screening) are unchanged.
 - SNMP exposes the Ethernet, WiFi and tunnel interfaces separately.
 - DNS servers are global in lwIP: the last interface to obtain DHCP DNS wins.
 - No measurements of throughput, link-flap behavior or power on real hardware.
-- Settings saved by 3.0.25 or later use a new record; an older firmware leaves
-  Ethernet off until saved there again.
+- A W5500 is saved as before, so an older firmware keeps using it after a
+  downgrade. A USB setting is saved in a new format that older firmware
+  ignores: there Ethernet stays off.
+- First-boot setup asks the same question (*W5500 module wired to the pins* or
+  *USB Ethernet adapter or phone*).

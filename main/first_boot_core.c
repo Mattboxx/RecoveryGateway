@@ -213,6 +213,13 @@ const char *fb_check_uplink(const char *type, bool has_wifi)
     return "unknown connection type";
 }
 
+int fb_uplink_usb(const char *transport)
+{
+    if (!transport || !strcmp(transport, "pins")) return 0;   /* pages before 3.0.25 send no transport */
+    if (!strcmp(transport, "usb")) return 1;
+    return -1;
+}
+
 const char *fb_check_tz(const char *tz)
 {
     if (!tz || !*tz) return NULL;

@@ -161,6 +161,9 @@ int main(void) {
     assert(!fb_check_uplink("ethernet", false) && !fb_check_uplink("ethernet", true));
     assert(!fb_check_uplink("cellular", false) && !fb_check_uplink("cellular", true));
     assert(fb_check_uplink("satellite", true) && fb_check_uplink("", true));
+    /* Ethernet/modem connection: pins (also when an older page sends none) or USB. */
+    assert(fb_uplink_usb(NULL) == 0 && fb_uplink_usb("pins") == 0 && fb_uplink_usb("usb") == 1);
+    assert(fb_uplink_usb("") == -1 && fb_uplink_usb("USB") == -1 && fb_uplink_usb("uart") == -1 && fb_uplink_usb("spi") == -1);
     /* Time zone rules as the System page writes them. */
     assert(!fb_check_tz(NULL) && !fb_check_tz("") && !fb_check_tz("CET-1CEST,M3.5.0,M10.5.0/3") && !fb_check_tz("<+0545>-5:45"));
     assert(!fb_check_tz("ACST-9:30ACDT,M10.1.0,M4.1.0/3") && !fb_check_tz("UTC0"));

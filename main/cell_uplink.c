@@ -274,9 +274,10 @@ int cell_usb_plan(uint16_t vid, uint16_t pid, const uint8_t *cfg, size_t len, ui
 
 #define CELL_MAGIC 0x43454c31u /* CEL1 */
 typedef struct {uint32_t magic, version; cell_config_t config; uint32_t checksum;} cell_record_t;
-/* Version 1 (UART only, up to 3.0.24): read and migrated, never written.
- * A rollback to such a firmware finds a version 2 record and keeps the
- * cellular uplink off (fail closed) until it is saved there again. */
+/* Version 1 (UART only, up to 3.0.24) is still written for a UART modem
+ * with the USB settings at their defaults, so an older firmware keeps
+ * working after a rollback. Anything using USB is written as version 2,
+ * which an older firmware refuses (cellular off, fail closed). */
 typedef struct {
     uint8_t enabled, uart, mode, roaming, data_ack, pwrkey_active_high;
     int8_t tx, rx, rts, cts, pwrkey;
@@ -326,6 +327,34 @@ static void migrate_v1(const cell_config_v1_t *v1, cell_config_t *c)
     c->tx = v1->tx; c->rx = v1->rx; c->rts = v1->rts; c->cts = v1->cts; c->pwrkey = v1->pwrkey; c->baud = v1->baud;
     memcpy(c->apn, v1->apn, sizeof c->apn); memcpy(c->user, v1->user, sizeof c->user);
     memcpy(c->password, v1->password, sizeof c->password); memcpy(c->pin, v1->pin, sizeof c->pin);
+}
+
+/* The record bytes for `c`: version 1 when it fits, else version 2. */
+static size_t record_encode(const cell_config_t *c, void *out)
+{
+    if (c->transport == CELL_TRANSPORT_UART && c->usb_iface == CELL_USB_IFACE_AUTO && c->usb_mode == 0) {
+        cell_record_v1_t r;
+        memset(&r, 0, sizeof r);
+        r.magic = CELL_MAGIC; r.version = 1;
+        r.config.enabled = c->enabled; r.config.uart = c->uart; r.config.mode = c->mode; r.config.roaming = c->roaming;
+        r.config.data_ack = c->data_ack; r.config.pwrkey_active_high = c->pwrkey_active_high;
+        r.config.tx = c->tx; r.config.rx = c->rx; r.config.rts = c->rts; r.config.cts = c->cts; r.config.pwrkey = c->pwrkey;
+        r.config.baud = c->baud;
+        memcpy(r.config.apn, c->apn, sizeof r.config.apn); memcpy(r.config.user, c->user, sizeof r.config.user);
+        memcpy(r.config.password, c->password, sizeof r.config.password); memcpy(r.config.pin, c->pin, sizeof r.config.pin);
+        r.checksum = cell_fnv(&r, offsetof(cell_record_v1_t, checksum));
+        memcpy(out, &r, sizeof r);
+        memset(&r, 0, sizeof r);
+        return sizeof r;
+    }
+    cell_record_t r;
+    memset(&r, 0, sizeof r);
+    r.magic = CELL_MAGIC; r.version = 2;
+    memcpy(&r.config, c, sizeof r.config);
+    r.checksum = record_checksum(&r);
+    memcpy(out, &r, sizeof r);
+    memset(&r, 0, sizeof r);
+    return sizeof r;
 }
 
 static void load(cell_config_t *out)
@@ -996,18 +1025,16 @@ esp_err_t cell_uplink_set_config(const cell_config_t *c, char *why, size_t n)
             for (unsigned j = 0; mine[i] >= 0 && j < sizeof theirs; j++)
                 if (mine[i] == theirs[j]) {snprintf(why, n, "pin %d is used by the Ethernet module", mine[i]); return ESP_ERR_INVALID_ARG;}
     }
-    cell_record_t r;
-    memset(&r, 0, sizeof r);
-    r.magic = CELL_MAGIC; r.version = 2;
-    memcpy(&r.config, c, sizeof r.config);
-    r.checksum = record_checksum(&r);
+    union {cell_record_t v2; cell_record_v1_t v1;} r;
+    size_t size = record_encode(c, &r);
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
     if (err == ESP_OK) {
-        err = nvs_set_blob(nvs, "cell_cfg", &r, sizeof r);
+        err = nvs_set_blob(nvs, "cell_cfg", &r, size);
         if (err == ESP_OK) err = nvs_commit(nvs);
         nvs_close(nvs);
     }
+    memset(&r, 0, sizeof r);   /* it held the SIM PIN and APN password */
     if (err != ESP_OK) return err;   /* RAM keeps the previously saved value */
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_saved = *c;

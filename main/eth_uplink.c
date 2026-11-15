@@ -100,9 +100,9 @@ int eth_uplink_choose(eth_selector_t *s, bool enabled, uint8_t preference, bool 
 
 #define ETH_MAGIC 0x45544831u /* ETH1 */
 typedef struct {uint32_t magic, version; eth_config_t config; uint32_t checksum;} eth_record_t;
-/* Version 1 (SPI only, up to 3.0.24): read and migrated, never written.
- * A rollback to such a firmware finds a version 2 record and keeps the
- * Ethernet uplink off (fail closed) until it is saved there again. */
+/* Version 1 (SPI only, up to 3.0.24) is still written for the W5500, so an
+ * older firmware keeps working after a rollback. The USB connection is
+ * written as version 2, which an older firmware refuses (Ethernet off). */
 typedef struct {
     uint8_t enabled, chip, spi_host, spi_mhz, ip_static, preference;
     int8_t sclk, mosi, miso, cs, intr, rst;
@@ -151,6 +151,31 @@ static void migrate_v1(const eth_config_v1_t *v1, eth_config_t *c)
     c->ip_static = v1->ip_static; c->preference = v1->preference;
     c->sclk = v1->sclk; c->mosi = v1->mosi; c->miso = v1->miso; c->cs = v1->cs; c->intr = v1->intr; c->rst = v1->rst;
     c->ip = v1->ip; c->mask = v1->mask; c->gw = v1->gw; c->dns = v1->dns;
+}
+
+/* The record bytes for `c`: version 1 for SPI, else version 2. */
+static size_t record_encode(const eth_config_t *c, void *out)
+{
+    if (c->transport == ETH_TRANSPORT_SPI) {
+        eth_record_v1_t r;
+        memset(&r, 0, sizeof r);
+        r.magic = ETH_MAGIC; r.version = 1;
+        r.config.enabled = c->enabled; r.config.chip = c->chip; r.config.spi_host = c->spi_host; r.config.spi_mhz = c->spi_mhz;
+        r.config.ip_static = c->ip_static; r.config.preference = c->preference;
+        r.config.sclk = c->sclk; r.config.mosi = c->mosi; r.config.miso = c->miso; r.config.cs = c->cs;
+        r.config.intr = c->intr; r.config.rst = c->rst;
+        r.config.ip = c->ip; r.config.mask = c->mask; r.config.gw = c->gw; r.config.dns = c->dns;
+        r.checksum = eth_fnv(&r, offsetof(eth_record_v1_t, checksum));
+        memcpy(out, &r, sizeof r);
+        return sizeof r;
+    }
+    eth_record_t r;
+    memset(&r, 0, sizeof r);
+    r.magic = ETH_MAGIC; r.version = 2;
+    memcpy(&r.config, c, sizeof r.config);
+    r.checksum = record_checksum(&r);
+    memcpy(out, &r, sizeof r);
+    return sizeof r;
 }
 
 static void load(eth_config_t *out)
@@ -501,15 +526,12 @@ esp_err_t eth_uplink_set_config(const eth_config_t *c, char *why, size_t n)
             return ESP_ERR_INVALID_ARG;
         }
     }
-    eth_record_t r;
-    memset(&r, 0, sizeof r);
-    r.magic = ETH_MAGIC; r.version = 2;
-    memcpy(&r.config, c, sizeof r.config);
-    r.checksum = record_checksum(&r);
+    union {eth_record_t v2; eth_record_v1_t v1;} r;
+    size_t size = record_encode(c, &r);
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
     if (err == ESP_OK) {
-        err = nvs_set_blob(nvs, "eth_cfg", &r, sizeof r);
+        err = nvs_set_blob(nvs, "eth_cfg", &r, size);
         if (err == ESP_OK) err = nvs_commit(nvs);
         nvs_close(nvs);
     }

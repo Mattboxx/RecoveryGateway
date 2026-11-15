@@ -11,10 +11,10 @@ guessed configuration. Stable 1.13 does not read any of these keys.
 | `ops_health` | health_monitor.c | Health Monitor targets/cadence | Health Monitor off |
 | `tn_leases` | service_lease.c | temporary-access ledger (bindings, expiry, tombstones) | timed rules closed, not opened |
 | `cfg_profile` | config_profiles.c | active profile and one rollback record | no profile, no rollback |
-| `eth_cfg` | eth_uplink.c | Ethernet connection (SPI/USB), pins/IP/preference; record v2 from 3.0.25, v1 read and migrated | Ethernet off |
+| `eth_cfg` | eth_uplink.c | Ethernet connection (SPI/USB), pins/IP/preference; SPI written as record v1 (as 3.0.24), USB as v2 | Ethernet off |
 | `svc_watch` | service_check.c | Service watch enable/notify/interval | watch off |
 | `ntfy_sysev` | ntfy_integration.c | candidate: 0=off, 1=both (legacy on), 2=power-on only, 3=other system events only; main v1 record unchanged; older rollback reads 2/3 as optional events off | events off |
-| `cell_cfg` | cell_uplink.c | cellular connection (UART/USB, USB mode/interface), pins, APN, PIN, mode; record v2 from 3.0.25, v1 read and migrated | cellular off |
+| `cell_cfg` | cell_uplink.c | cellular connection (UART/USB, USB mode/interface), pins, APN, PIN, mode; UART with default USB settings written as record v1 (as 3.0.24), otherwise v2 | cellular off |
 | `txn_undo` | nvs_params.c | undo journal of a multi-key settings save in progress (previous value or absence of each key, CRC-32); dropped when the save is kept, applied and dropped on failure or at the next boot after a power loss; a damaged journal is discarded without being applied (after 3.0.1) | absent |
 | `hist_cfg` | history.c, nvs_flags.c | event history, trends, settings copy before updates as one byte (bits 0–2, bit 7 marks the record; after 3.0.1) | all off; damaged = all off |
 | `hist_ev`, `hist_mx`, `hist_snap` | history.c | 3.0.0/3.0.1 per-switch keys: read only while `hist_cfg` is absent, written after it for a rollback | each off |

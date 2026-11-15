@@ -27,8 +27,11 @@ transfers, drop when busy) and refuses further sessions after a transfer that
 never completed, instead of leaking per retry. `esp_modem` was not used either:
 the existing AT/PPP logic already covers it and is kept identical for UART.
 Serial is preferred over USB networking in automatic mode because it keeps
-SIM, APN and signal under the gateway's control. Records moved to version 2
-with a v1 migration; older firmware fails closed (uplink off).
+SIM, APN and signal under the gateway's control. The owner asked that
+everything else behave as before: UART and SPI settings are still written as
+the version 1 record that 3.0.24 reads (rollback unchanged); only settings
+that use USB are written as version 2, which older firmware refuses (that
+uplink off, fail closed). First-boot setup offers the same pins/USB choice.
 
 Cost while off: no task, heap, USB stack or PHY change; measured against
 3.0.24, the image uses about 2.5 KB more internal RAM (IRAM +2192 B, mostly the

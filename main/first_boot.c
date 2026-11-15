@@ -464,10 +464,14 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
         if (cell_up && !cs.compiled) reason = "the mobile network is not included in this firmware";
     }
     const cJSON *pins = eth_up ? cJSON_GetObjectItem(up, "ethernet") : cell_up ? cJSON_GetObjectItem(up, "cellular") : NULL;
+    /* Pins (the saved defaults plus the page's values) or the USB port. */
+    int usb = (eth_up || cell_up) ? fb_uplink_usb(str_of(pins, "transport")) : 0;
+    if (!reason && usb < 0) reason = "unknown connection: pins or USB";
     if (!reason && eth_up) {
         static const char *const keys[] = {"sclk", "mosi", "miso", "cs", "intr", "rst"};
         int8_t *fields[] = {&eth.sclk, &eth.mosi, &eth.miso, &eth.cs, &eth.intr, &eth.rst};
-        for (unsigned i = 0; i < 6; i++) {
+        eth.transport = usb ? ETH_TRANSPORT_USB : ETH_TRANSPORT_SPI;
+        for (unsigned i = 0; !usb && i < 6; i++) {
             const cJSON *v = cJSON_GetObjectItem(pins, keys[i]);
             if (cJSON_IsNumber(v) && v->valuedouble >= -1 && v->valuedouble <= 48 && v->valuedouble == (int)v->valuedouble) *fields[i] = (int8_t)v->valuedouble;
         }
@@ -478,11 +482,13 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     if (!reason && cell_up) {
         static const char *const keys[] = {"tx", "rx", "pwrkey"};
         int8_t *fields[] = {&cell.tx, &cell.rx, &cell.pwrkey};
-        for (unsigned i = 0; i < 3; i++) {
+        cell.transport = usb ? CELL_TRANSPORT_USB : CELL_TRANSPORT_UART;
+        for (unsigned i = 0; !usb && i < 3; i++) {
             const cJSON *v = cJSON_GetObjectItem(pins, keys[i]);
             if (cJSON_IsNumber(v) && v->valuedouble >= -1 && v->valuedouble <= 48 && v->valuedouble == (int)v->valuedouble) *fields[i] = (int8_t)v->valuedouble;
         }
         const char *apn = str_of(pins, "apn"), *pin = str_of(pins, "pin"), *user = str_of(pins, "user"), *pass = str_of(pins, "password");
+        if (!apn && usb) apn = "";   /* over USB the modem's own APN may be kept */
         if (!apn || strlen(apn) >= sizeof cell.apn || (pin && strlen(pin) >= sizeof cell.pin) ||
             (user && strlen(user) >= sizeof cell.user) || (pass && strlen(pass) >= sizeof cell.password)) reason = "APN required; PIN, user and password too long";
         else {

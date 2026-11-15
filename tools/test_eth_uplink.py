@@ -100,6 +100,14 @@ int main(void){
     assert(out.transport==ETH_TRANSPORT_SPI&&!out.reserved[0]&&!out.reserved[1]&&!out.reserved[2]);
     eth_record_v1_t v1b=v1;v1b.checksum^=1;memcpy(blob,&v1b,sizeof v1b);load(&out);assert(!out.enabled);
     v1b=v1;v1b.config.sclk=33;v1b.checksum=eth_fnv(&v1b,offsetof(eth_record_v1_t,checksum));memcpy(blob,&v1b,sizeof v1b);load(&out);assert(!out.enabled);
+    /* Saving: SPI is written as version 1 (what 3.0.24 reads); USB as version 2. */
+    union {eth_record_t v2; eth_record_v1_t v1;} enc;
+    size_t es=record_encode(&s,&enc);
+    assert(es==sizeof(eth_record_v1_t)&&enc.v1.version==1&&enc.v1.checksum==eth_fnv(&enc.v1,offsetof(eth_record_v1_t,checksum)));
+    assert(enc.v1.config.ip==s.ip&&enc.v1.config.sclk==s.sclk&&enc.v1.config.ip_static==1);
+    memcpy(blob,&enc,es);blob_size=es;load(&out);assert(!memcmp(&out,&s,sizeof s));
+    eth_config_t su=s;su.transport=ETH_TRANSPORT_USB;es=record_encode(&su,&enc);
+    assert(es==sizeof(eth_record_t)&&enc.v2.version==2);memcpy(blob,&enc,es);blob_size=es;load(&out);assert(!memcmp(&out,&su,sizeof su));
     blob_size=sizeof r;
     bad=r;bad.config.sclk=33;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled); /* valid checksum, unsafe pins */
     blob_size=sizeof r-1;memcpy(blob,&r,sizeof r);load(&out);assert(!out.enabled);

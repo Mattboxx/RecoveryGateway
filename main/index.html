@@ -2191,20 +2191,28 @@
         <p><b>Connect to the Internet.</b> How will the gateway reach the Internet? The choice sets up the rest for you.</p>
         <div class="fb-uplinks" role="radiogroup" aria-label="Internet connection">
           <label class="fb-opt"><input type="radio" name="fb-up" value="wifi" checked><span><b>Wi-Fi</b><small>Your home or office Wi-Fi (2.4 GHz).</small></span></label>
-          <label class="fb-opt" id="fb-up-eth" hidden><input type="radio" name="fb-up" value="ethernet"><span><b>Ethernet cable</b><small>A W5500 Ethernet module wired to the board. The steadiest link, and the board's Wi-Fi stays free for its own network.</small></span></label>
-          <label class="fb-opt" id="fb-up-cell" hidden><input type="radio" name="fb-up" value="cellular"><span><b>Mobile network (SIM)</b><small>A 4G/LTE modem with a SIM card, for places without a fixed line. Experimental.</small></span></label>
+          <label class="fb-opt" id="fb-up-eth" hidden><input type="radio" name="fb-up" value="ethernet"><span><b>Ethernet cable</b><small>A W5500 module wired to the board, or a USB Ethernet adapter. The steadiest link, and the board's Wi-Fi stays free for its own network.</small></span></label>
+          <label class="fb-opt" id="fb-up-cell" hidden><input type="radio" name="fb-up" value="cellular"><span><b>Mobile network (SIM)</b><small>A 4G/LTE modem wired to the board or a USB modem or stick, with a SIM card, for places without a fixed line. Experimental.</small></span></label>
         </div>
         <div id="fb-eth-box" hidden>
+          <div class="fb-uplinks" role="radiogroup" aria-label="How Ethernet is connected">
+            <label class="fb-opt"><input type="radio" name="fb-eth-conn" value="spi" checked><span><b>W5500 module wired to the pins</b><small>An SPI Ethernet module connected to the board's pins.</small></span></label>
+            <label class="fb-opt"><input type="radio" name="fb-eth-conn" value="usb"><span><b>USB Ethernet adapter or phone</b><small>Plugged into the board's USB port (not the COM port), with 5 V for the device. About 10 Mbit/s at most.</small></span></label>
+          </div>
           <p class="auth-hint">The cable is used first and the address comes from your router (DHCP). Ethernet starts after the restart that ends this setup.</p>
-          <details class="fb-details"><summary>Module wiring (change only if yours differs)</summary>
+          <details class="fb-details" id="fb-eth-wiring"><summary>Module wiring (change only if yours differs)</summary>
             <div class="fb-pins"><div class="form-group"><label class="form-label" for="fb-eth-sclk">SCLK</label><input class="input mono" type="number" id="fb-eth-sclk" min="-1" max="48" value="12"></div><div class="form-group"><label class="form-label" for="fb-eth-mosi">MOSI</label><input class="input mono" type="number" id="fb-eth-mosi" min="-1" max="48" value="11"></div><div class="form-group"><label class="form-label" for="fb-eth-miso">MISO</label><input class="input mono" type="number" id="fb-eth-miso" min="-1" max="48" value="13"></div><div class="form-group"><label class="form-label" for="fb-eth-cs">CS</label><input class="input mono" type="number" id="fb-eth-cs" min="-1" max="48" value="10"></div><div class="form-group"><label class="form-label" for="fb-eth-intr">INT (-1 = none)</label><input class="input mono" type="number" id="fb-eth-intr" min="-1" max="48" value="14"></div><div class="form-group"><label class="form-label" for="fb-eth-rst">RST (-1 = none)</label><input class="input mono" type="number" id="fb-eth-rst" min="-1" max="48" value="9"></div></div>
           </details>
         </div>
         <div id="fb-cell-box" hidden>
+          <div class="fb-uplinks" role="radiogroup" aria-label="How the modem is connected">
+            <label class="fb-opt"><input type="radio" name="fb-cell-conn" value="uart" checked><span><b>Modem wired to the pins</b><small>A modem board connected to the board's pins (UART).</small></span></label>
+            <label class="fb-opt"><input type="radio" name="fb-cell-conn" value="usb"><span><b>USB modem or 4G stick</b><small>Plugged into the board's USB port (not the COM port). The modem needs its own 5 V supply for 2 A peaks.</small></span></label>
+          </div>
           <div class="form-group"><label class="form-label" for="fb-apn">APN</label><input class="input mono" id="fb-apn" maxlength="63" autocomplete="off" spellcheck="false" placeholder="internet">
-            <span class="auth-hint">From your mobile operator, for example internet or web.omnitel.it.</span></div>
+            <span class="auth-hint" id="fb-apn-hint">From your mobile operator, for example internet or web.omnitel.it.</span><span class="auth-hint" id="fb-apn-usb-hint" hidden>Optional over USB: leave it empty to keep the modem's own. A stick with its own web page connects by itself.</span></div>
           <div class="form-group"><label class="form-label" for="fb-simpin">SIM PIN</label><input class="input mono" type="password" id="fb-simpin" maxlength="8" inputmode="numeric" autocomplete="off" placeholder="Empty if the SIM has no PIN"></div>
-          <details class="fb-details"><summary>Modem wiring (change only if yours differs)</summary>
+          <details class="fb-details" id="fb-cell-wiring"><summary>Modem wiring (change only if yours differs)</summary>
             <div class="fb-pins"><div class="form-group"><label class="form-label" for="fb-cell-tx">TX (to modem RX)</label><input class="input mono" type="number" id="fb-cell-tx" min="-1" max="48" value="17"></div><div class="form-group"><label class="form-label" for="fb-cell-rx">RX (from modem TX)</label><input class="input mono" type="number" id="fb-cell-rx" min="-1" max="48" value="18"></div><div class="form-group"><label class="form-label" for="fb-cell-pwrkey">PWRKEY (-1 = none)</label><input class="input mono" type="number" id="fb-cell-pwrkey" min="-1" max="48" value="-1"></div></div>
           </details>
           <label class="fb-opt"><input type="checkbox" id="fb-roam"><span><b>Allow roaming</b><small>Off: the modem connects only on your home network.</small></span></label>
@@ -2811,12 +2819,12 @@
       <div class="card mt-4" id="eth-card" data-capability="ethernet">
         <div class="card-header"><div data-advanced class="card-header-left"><span class="card-title">Ethernet uplink (W5500 SPI module or USB adapter)</span></div><span class="badge badge-neutral" id="eth-badge">—</span></div>
         <div class="card-body">
-          <p class="form-hint">A W5500 module on SPI pins, or a USB Ethernet adapter or phone tethering on the USB port. Changes apply after a restart.</p>
+          <p class="form-hint">Choose how Ethernet is connected: a W5500 module wired to the board's pins, or a USB Ethernet adapter or phone tethering on the board's USB port. Changes apply after a restart.</p>
           <p id="eth-status" role="status">Not loaded</p>
           <div class="form-row">
-            <div class="form-group"><label class="form-label" for="eth-transport">Connection</label><select class="input" id="eth-transport"><option value="spi">W5500 module on SPI pins</option><option value="usb">USB adapter or phone tethering</option></select></div>
+            <div class="form-group"><label class="form-label" for="eth-transport">How Ethernet is connected</label><select class="input" id="eth-transport"><option value="spi">W5500 module wired to the board's pins (SPI)</option><option value="usb">USB port (Ethernet adapter or phone tethering)</option></select></div>
           </div>
-          <p class="form-hint eth-usb" hidden>The USB port becomes a USB host until restart; flashing and the console stay on the COM port. For CDC-ECM, CDC-NCM or RNDIS adapters and phones (such as RTL8152/RTL8153, Android tethering), not ASIX AX88179/AX88772 or iPhone. About 10 Mbit/s at most. One device, no hubs. Not yet tested with a real adapter.</p>
+          <div class="form-hint eth-usb" hidden><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Plug the adapter or phone into the board's USB port, not the COM port. After the restart that port works as a USB host; flashing and logs stay on the COM port.</li><li>The device needs 5 V on the USB port: use a powered OTG cable or adapter.</li><li>The port runs at USB full speed: about 10 Mbit/s at most.</li><li>One device at a time, without USB hubs.</li></ul><details><summary style="cursor:pointer;">Compatible devices (not yet tested with real hardware)</summary><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Expected: Realtek RTL8152, RTL8153 and RTL8156 adapters (their standard configuration is chosen automatically) and adapters or docks with CDC-ECM or CDC-NCM.</li><li>Likely: Android USB tethering (RNDIS or NCM).</li><li>Not supported: ASIX AX88179 and AX88772, Microchip LAN78xx and iPhone tethering.</li></ul></details></div>
           <label class="feature-switch"><input type="checkbox" id="eth-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Enable Ethernet at next boot</span></label>
           <div class="form-row">
             <div class="form-group"><label class="form-label" for="eth-pref">Uplink preference</label><select class="input" id="eth-pref"><option value="wifi_first">WiFi first, Ethernet as fallback</option><option value="ethernet_first">Ethernet first, WiFi as fallback</option></select></div>
@@ -2846,7 +2854,7 @@
       <div class="card mt-4" id="cell-card">
         <div class="card-header"><div class="card-header-left"><span class="card-title">Cellular uplink (GSM/LTE modem with SIM)</span></div><span class="badge badge-neutral" id="cell-badge">—</span></div>
         <div class="card-body">
-          <p class="form-hint">Requires an external modem (UART pins or USB port) and a data SIM. Use it as the primary Internet uplink or as a fallback. Connect to the gateway locally over WiFi or Ethernet, including its access point when using a SIM alone. Changes apply after a restart.</p>
+          <p class="form-hint">Requires a data SIM in an external modem, either wired to the board's pins or plugged into its USB port. Use it as the primary Internet uplink or as a fallback. Connect to the gateway locally over WiFi or Ethernet, including its access point when using a SIM alone. Changes apply after a restart.</p>
           <p id="cell-status" role="status">Not loaded</p>
           <label class="feature-switch"><input type="checkbox" id="cell-ack"><span class="feature-switch-track" aria-hidden="true"></span><span>I understand that mobile data may cost money, and that Tailscale, updates and integrations will use it</span></label>
           <label class="feature-switch"><input type="checkbox" id="cell-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Enable the cellular uplink at next boot</span></label>
@@ -2859,11 +2867,11 @@
             <div class="form-group"><label class="form-label" for="cell-pin">SIM PIN (optional)</label><input class="input mono" id="cell-pin" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="Optional"><span class="form-hint">Sent once per start: a wrong PIN stops the modem instead of risking a PUK lock.</span><label class="form-hint" style="display:flex; gap:0.35rem; align-items:center;"><input type="checkbox" id="cell-clear-pin"> Clear saved PIN</label></div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label class="form-label" for="cell-transport">Connection</label><select class="input" id="cell-transport"><option value="uart">UART pins (wired module)</option><option value="usb">USB port (USB modem or 4G stick)</option></select></div>
-            <div class="form-group cell-usb" hidden><label class="form-label" for="cell-usb-mode">USB mode</label><select class="input" id="cell-usb-mode"><option value="auto">Automatic</option><option value="serial">Serial AT port (PPP)</option><option value="network">USB network (RNDIS, ECM or NCM)</option></select></div>
-            <div class="form-group cell-usb" data-advanced hidden><label class="form-label" for="cell-usb-iface">USB interface</label><select class="input" id="cell-usb-iface"><option value="-1">Automatic</option></select></div>
+            <div class="form-group"><label class="form-label" for="cell-transport">How the modem is connected</label><select class="input" id="cell-transport"><option value="uart">Wired to the board's pins (UART)</option><option value="usb">USB port (USB modem or 4G stick)</option></select></div>
+            <div class="form-group cell-usb" hidden><label class="form-label" for="cell-usb-mode">USB mode</label><select class="input" id="cell-usb-mode"><option value="auto">Automatic (recommended)</option><option value="serial">Modem with AT commands (PPP)</option><option value="network">Stick with its own web page (RNDIS, ECM or NCM)</option></select></div>
+            <div class="form-group cell-usb" data-advanced hidden><label class="form-label" for="cell-usb-iface">USB interface</label><select class="input" id="cell-usb-iface"><option value="-1">Automatic</option></select><span class="form-hint">Only for a modem with AT commands whose port is not found automatically.</span></div>
           </div>
-          <p class="form-hint cell-usb" hidden>The USB port becomes a USB host until restart; flashing and the console stay on the COM port. The modem needs its own 5 V supply (2 A peaks). Serial modems use the PIN and APN above (APN optional over USB); network sticks dial by themselves. CD-ROM sticks are switched automatically. One device, no hubs. Not yet tested with a real modem.</p>
+          <div class="form-hint cell-usb" hidden><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Plug the modem or stick into the board's USB port, not the COM port. After the restart that port works as a USB host; flashing and logs stay on the COM port.</li><li>Give the modem its own 5 V supply that can deliver 2 A peaks: the board's USB port cannot power it.</li><li>USB modems with AT commands use the SIM PIN and APN above. Over USB the APN can stay empty to keep the modem's own.</li><li>4G sticks with their own web page (RNDIS, ECM or NCM) connect by themselves: set their APN and PIN in the stick.</li><li>Sticks that first appear as a CD-ROM are switched to modem mode automatically.</li><li>One device at a time, without USB hubs.</li></ul><details><summary style="cursor:pointer;">Compatible devices (not yet tested with real hardware)</summary><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Expected: SIMCom SIM7600; Quectel EC25, EG25-G, EC21, EG91, EG95 and BG96; modems with a standard CDC-ACM port.</li><li>Likely: SIMCom A7670, A7600, SIM7070 and SIM7080; Quectel EC200 and EG800; Fibocom, Neoway and MeiG modules (their AT port is found by a probe).</li><li>Likely: Huawei E3372h and E8372h HiLink, ZTE MF79U and MF833, Alcatel Link Key and other RNDIS, ECM or NCM sticks.</li><li>Not supported: modems with only MBIM or QMI and no AT port.</li></ul></details></div>
           <div class="form-row">
             <div class="form-group cell-pins"><label class="form-label" for="cell-uart">UART</label><select class="input" id="cell-uart"><option value="1">UART1</option><option value="2">UART2</option></select></div>
             <div class="form-group cell-pins"><label class="form-label" for="cell-baud">Baud rate</label><select class="input" id="cell-baud"><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option><option>230400</option><option>460800</option><option>921600</option></select></div>
@@ -12505,15 +12513,21 @@
       }
       function uplinkProblem() {
         var up = uplink();
-        if (up === 'ethernet') { var e = pinProblem(pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']), ['intr', 'rst']); if (e) return e; }
+        if (up === 'ethernet' && !connUsb('eth')) { var e = pinProblem(pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']), ['intr', 'rst']); if (e) return e; }
         if (up === 'cellular') {
-          if (!/^[A-Za-z0-9.-]{1,63}$/.test($('fb-apn').value.trim())) return 'Enter the APN of your mobile operator.';
+          if (!(connUsb('cell') ? /^[A-Za-z0-9.-]{0,63}$/ : /^[A-Za-z0-9.-]{1,63}$/).test($('fb-apn').value.trim())) return 'Enter the APN of your mobile operator.';
           if (!/^(\d{4,8})?$/.test($('fb-simpin').value)) return 'The SIM PIN has 4 to 8 digits, or leave it empty.';
-          var c = pinProblem(pins('fb-cell-', ['tx', 'rx', 'pwrkey']), ['pwrkey']); if (c) return c;
+          var c = connUsb('cell') ? '' : pinProblem(pins('fb-cell-', ['tx', 'rx', 'pwrkey']), ['pwrkey']); if (c) return c;
           if (!$('fb-data-ack').checked) return 'Confirm that the gateway may use mobile data.';
         }
         if (lanName() && !/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(lanName())) return 'The home network name may use a-z, 0-9 and - (not at the start or end), up to 32 characters.';
         return wifiWanted() ? wifiProblem() : '';
+      }
+      /* Ethernet / modem connection: pins or the USB port. */
+      function connUsb(kind) { var r = document.querySelector('input[name="fb-' + kind + '-conn"]:checked'); return !!r && r.value === 'usb'; }
+      function connView() {
+        $('fb-eth-wiring').hidden = connUsb('eth'); $('fb-cell-wiring').hidden = connUsb('cell');
+        $('fb-apn-hint').hidden = connUsb('cell'); $('fb-apn-usb-hint').hidden = !connUsb('cell');
       }
       /* <name>.local on the home network; none without one (SIM only). */
       function lanName() { return uplink() === 'cellular' && !wifiWanted() ? '' : $('fb-lan').value.trim(); }
@@ -12762,7 +12776,9 @@
         var up = uplink(), UP = {wifi: 'Wi-Fi', ethernet: 'Ethernet cable', cellular: 'Mobile network (SIM)'};
         row(dl, 'Internet connection', T(UP[up]) + (up !== 'wifi' && wifiWanted() ? ' + ' + T('Wi-Fi') : ''));
         if (wifiWanted()) row(dl, 'Home Wi-Fi', $('fb-ssid').value + (st.wifiOk ? ' (' + T('tested') + ')' : ' (' + T('not tested') + ')'));
-        if (up === 'cellular') row(dl, 'APN', $('fb-apn').value.trim() + (wifiWanted() ? ' · ' + T('backup when the Wi-Fi is out of range') : ''));
+        if (up === 'ethernet') row(dl, 'Ethernet connection', T(connUsb('eth') ? 'USB port' : 'Pins'));
+        if (up === 'cellular') row(dl, 'Modem connection', T(connUsb('cell') ? 'USB port' : 'Pins'));
+        if (up === 'cellular') row(dl, 'APN', ($('fb-apn').value.trim() || T('from the modem')) + (wifiWanted() ? ' · ' + T('backup when the Wi-Fi is out of range') : ''));
         var lan = lanName() || st.defaults.lan_name ? 'http://' + (lanName() || st.defaults.lan_name) + '.local/' : '';
         row(dl, 'Address after the restart', up === 'cellular' && !wifiWanted() ? (lan || T('Connect to the gateway access point'))
           : st.wifiIp && up === 'wifi' ? 'http://' + st.wifiIp + '/' + (lan ? '  ·  ' + lan : '') : (lan || T('Test the Wi-Fi to see it')));
@@ -12790,8 +12806,8 @@
         var cmd = { action: 'finish', admin_password: $('fb-pw').value,
           wifi: { ssid: wifiOn ? $('fb-ssid').value : '', password: wifiOn ? $('fb-wpw').value : '' },
           uplink: { type: up,
-            ethernet: up === 'ethernet' ? pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']) : undefined,
-            cellular: up === 'cellular' ? Object.assign(pins('fb-cell-', ['tx', 'rx', 'pwrkey']),
+            ethernet: up === 'ethernet' ? (connUsb('eth') ? {transport: 'usb'} : Object.assign(pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']), {transport: 'pins'})) : undefined,
+            cellular: up === 'cellular' ? Object.assign(connUsb('cell') ? {transport: 'usb'} : Object.assign(pins('fb-cell-', ['tx', 'rx', 'pwrkey']), {transport: 'pins'}),
               { apn: $('fb-apn').value.trim(), pin: $('fb-simpin').value, roaming: $('fb-roam').checked, data_ack: $('fb-data-ack').checked }) : undefined },
           tz: browserTz().rule,
           ap_ssid: $('fb-apname').value, ap_password: $('fb-ap-open').checked ? '' : $('fb-appw').value, ap_open: $('fb-ap-open').checked, ap_recovery_only: !$('fb-ap-always').checked,
@@ -12917,6 +12933,7 @@
         $('fb-wifi-backup').addEventListener('change', shapeUplink);
         ['fb-apn', 'fb-simpin', 'fb-roam', 'fb-data-ack', 'fb-eth-sclk', 'fb-eth-mosi', 'fb-eth-miso', 'fb-eth-cs', 'fb-eth-intr', 'fb-eth-rst',
          'fb-cell-tx', 'fb-cell-rx', 'fb-cell-pwrkey'].forEach(function (id) { $(id).addEventListener('input', validate); $(id).addEventListener('change', validate); });
+        document.querySelectorAll('input[name="fb-eth-conn"],input[name="fb-cell-conn"]').forEach(function (el) { el.addEventListener('change', function () { connView(); validate(); }); });
         var lang = $('fb-lang');
         if (window.I18N && I18N.languages().length > 1) {
           I18N.languages().forEach(function (l) { var o = document.createElement('option'); o.value = l[0]; o.textContent = l[1]; lang.appendChild(o); });

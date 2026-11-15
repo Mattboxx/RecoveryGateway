@@ -156,8 +156,11 @@ reason when nothing usable is found.
   every retry.
 - Tailscale over mobile networks usually runs through DERP relays because of
   carrier NAT: it works, with higher latency.
-- Settings saved by 3.0.25 or later use a new record. Going back to an older
-  firmware leaves the cellular uplink off until you save it there again.
+- A UART modem is saved as before, so an older firmware keeps using it after
+  a downgrade. A USB setting is saved in a new format that older firmware
+  ignores: there the cellular uplink stays off.
+- First-boot setup asks the same question (*Modem wired to the pins* or *USB
+  modem or 4G stick*); over USB the APN may stay empty.
 - Everything that uses the Internet uses mobile data while cellular carries the
   traffic: Tailscale, GitHub update checks, MQTT/ntfy, and Internet traffic of
   access-point clients. Use failover mode on limited plans.
