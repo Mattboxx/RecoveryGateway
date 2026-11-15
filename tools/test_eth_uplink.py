@@ -58,6 +58,11 @@ int main(void){
     c=s;c.gw=ip4(10,0,0,1);assert(!valid(c));c=s;c.gw=c.ip;assert(!valid(c));c=s;c.gw=0;assert(!valid(c));
     c=s;c.ip_static=0;c.ip=0;assert(valid(c)); /* DHCP ignores static fields */
     assert(!eth_config_valid(NULL,NULL,0));
+    /* USB transport: the SPI pins are kept but not used or checked. */
+    c=good();assert(c.transport==ETH_TRANSPORT_SPI);c.transport=ETH_TRANSPORT_USB;assert(valid(c));
+    c.sclk=33;c.mosi=19;c.cs=c.miso;assert(valid(c));c.transport=ETH_TRANSPORT_SPI;assert(!valid(c));
+    c=good();c.transport=2;assert(!valid(c));
+    c=s;c.transport=ETH_TRANSPORT_USB;assert(valid(c));c.gw=0;assert(!valid(c));   /* static IP still validated */
 
     /* Selection: disabled is legacy; wifi_first falls back only when STA lacks an address. */
     eth_selector_t sel={0};
@@ -74,15 +79,32 @@ int main(void){
     for(int i=0;i<300;i++){eth_uplink_choose(&sel,true,ETH_PREF_ETHERNET_FIRST,true,true);}
     assert(sel.eth_streak==ETH_STABLE_SAMPLES); /* saturates */
 
-    /* Record load: only a checksummed, valid v1 record is used; anything else is OFF. */
-    eth_config_t out;eth_record_t r={.magic=ETH_MAGIC,.version=1,.config=s};r.checksum=record_checksum(&r);
+    /* Record load: a checksummed, valid v2 record, or a v1 record migrated
+     * as SPI; anything else is OFF. */
+    eth_config_t out;eth_record_t r;memset(&r,0,sizeof r);r.magic=ETH_MAGIC;r.version=2;memcpy(&r.config,&s,sizeof s);r.checksum=record_checksum(&r);
     memcpy(blob,&r,sizeof r);blob_size=sizeof r;load(&out);assert(!memcmp(&out,&s,sizeof s));
+    eth_record_t u=r;u.config.transport=ETH_TRANSPORT_USB;u.config.sclk=33;u.checksum=record_checksum(&u);
+    memcpy(blob,&u,sizeof u);load(&out);assert(out.enabled&&out.transport==ETH_TRANSPORT_USB);
     eth_record_t bad=r;bad.checksum^=1;memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
-    bad=r;bad.version=2;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
+    bad=r;bad.version=3;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
+    bad=r;bad.version=1;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);   /* v1 tag, v2 size */
+    bad=r;bad.config.transport=5;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
+    /* Version 1 (3.0.24 and earlier): same fields, SPI. */
+    eth_record_v1_t v1;memset(&v1,0,sizeof v1);v1.magic=ETH_MAGIC;v1.version=1;
+    v1.config=(eth_config_v1_t){.enabled=1,.chip=ETH_CHIP_W5500,.spi_host=2,.spi_mhz=33,.ip_static=1,.preference=ETH_PREF_ETHERNET_FIRST,
+        .sclk=4,.mosi=5,.miso=6,.cs=7,.intr=-1,.rst=8,.ip=s.ip,.mask=s.mask,.gw=s.gw,.dns=ip4(1,1,1,1)};
+    v1.checksum=eth_fnv(&v1,offsetof(eth_record_v1_t,checksum));
+    memcpy(blob,&v1,sizeof v1);blob_size=sizeof v1;load(&out);
+    assert(out.enabled&&out.chip==ETH_CHIP_W5500&&out.spi_host==2&&out.spi_mhz==33&&out.ip_static&&out.preference==ETH_PREF_ETHERNET_FIRST);
+    assert(out.sclk==4&&out.mosi==5&&out.miso==6&&out.cs==7&&out.intr==-1&&out.rst==8&&out.ip==s.ip&&out.mask==s.mask&&out.gw==s.gw&&out.dns==ip4(1,1,1,1));
+    assert(out.transport==ETH_TRANSPORT_SPI&&!out.reserved[0]&&!out.reserved[1]&&!out.reserved[2]);
+    eth_record_v1_t v1b=v1;v1b.checksum^=1;memcpy(blob,&v1b,sizeof v1b);load(&out);assert(!out.enabled);
+    v1b=v1;v1b.config.sclk=33;v1b.checksum=eth_fnv(&v1b,offsetof(eth_record_v1_t,checksum));memcpy(blob,&v1b,sizeof v1b);load(&out);assert(!out.enabled);
+    blob_size=sizeof r;
     bad=r;bad.config.sclk=33;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled); /* valid checksum, unsafe pins */
     blob_size=sizeof r-1;memcpy(blob,&r,sizeof r);load(&out);assert(!out.enabled);
     blob_size=0;load(&out);assert(!out.enabled);open_fail=1;blob_size=sizeof r;load(&out);assert(!out.enabled);
-    puts("PASS: actual Ethernet pin/SPI/static-IP validation, wifi_first/ethernet_first selection with stability window, fail-closed record load (no hardware)");
+    puts("PASS: actual Ethernet pin/SPI/static-IP validation, SPI/USB transport, wifi_first/ethernet_first selection with stability window, fail-closed record load and v1 migration (no hardware)");
 }
 '''
 
@@ -132,6 +154,7 @@ static int httpd_resp_sendstr(httpd_req_t *r,const char *s){snprintf(r->reply,si
 static int httpd_req_recv(httpd_req_t *r,char *out,int n){memcpy(out,r->body+r->offset,n);r->offset+=n;return n;}
 ''' + types + 'bool eth_config_valid(const eth_config_t *c, char *why, size_t why_size);\n' + core + r'''
 static eth_config_t stored;static int saves;static esp_err_t save_result;
+static void eth_uplink_get_config(eth_config_t *out){*out=stored;}
 static esp_err_t eth_uplink_set_config(const eth_config_t *c,char *why,size_t n){if(!eth_config_valid(c,why,n))return ESP_ERR_INVALID_ARG;saves++;if(save_result)return save_result;stored=*c;return ESP_OK;}
 ''' + ''.join(function(source, s) for s in ('static esp_err_t send_json(', 'static bool json_int(', 'static bool json_ip(', 'static esp_err_t post_ethernet(')) + r'''
 static httpd_req_t post(const char *body){httpd_req_t r={.content_len=(int)strlen(body),.body=body,.authorized=true};post_ethernet(&r);return r;}
@@ -160,9 +183,19 @@ int main(void){
     r=post(bad[0]);assert(strstr(r.reply,"pin not usable"));
     save_result=ESP_FAIL;r=post("{\"enabled\":true," BASE ",\"preference\":\"wifi_first\"" DHCP);
     assert(r.status==500&&!memcmp(&stored,&keep,sizeof keep));save_result=ESP_OK;
+    /* transport: absent keeps the saved choice; "usb" ignores the SPI pins. */
+    r=post("{\"enabled\":true,\"transport\":\"usb\",\"chip\":\"w5500\",\"spi_host\":2,\"spi_mhz\":20,\"sclk\":19,\"mosi\":20,\"miso\":13,\"cs\":10,\"int\":14,\"rst\":9,\"dns\":\"\",\"preference\":\"ethernet_first\"" DHCP);
+    assert(r.status==200&&stored.enabled&&stored.transport==ETH_TRANSPORT_USB&&stored.sclk==19);
+    r=post("{\"enabled\":true," BASE ",\"preference\":\"wifi_first\"" DHCP);assert(r.status==200&&stored.transport==ETH_TRANSPORT_USB);
+    r=post("{\"enabled\":true,\"transport\":\"spi\"," BASE ",\"preference\":\"wifi_first\"" DHCP);assert(r.status==200&&stored.transport==ETH_TRANSPORT_SPI);
+    keep=stored;
+    const char *bad_t[]={"{\"enabled\":true,\"transport\":\"pcie\"," BASE ",\"preference\":\"wifi_first\"" DHCP,
+        "{\"enabled\":true,\"transport\":1," BASE ",\"preference\":\"wifi_first\"" DHCP,
+        "{\"enabled\":true,\"transport\":\"spi\",\"chip\":\"w5500\",\"spi_host\":2,\"spi_mhz\":20,\"sclk\":19,\"mosi\":11,\"miso\":13,\"cs\":10,\"int\":14,\"rst\":9,\"dns\":\"\",\"preference\":\"wifi_first\"" DHCP};
+    for(unsigned i=0;i<sizeof bad_t/sizeof *bad_t;i++){r=post(bad_t[i]);assert(r.status==400&&!memcmp(&stored,&keep,sizeof keep));}
     httpd_req_t denied={.content_len=2,.body="{}",.authorized=false};int before=saves;post_ethernet(&denied);assert(denied.status==401&&saves==before);
     char big[600];memset(big,' ',sizeof big-1);big[sizeof big-1]=0;r=post(big);assert(r.status==400);
-    puts("PASS: actual Ethernet POST: typed fields, real pin/SPI/static-IP validation, DHCP clears static fields, 400/500/401 without saved-state change (fixtures)");
+    puts("PASS: actual Ethernet POST: typed fields, SPI/USB transport (optional, kept, validated), real pin/SPI/static-IP validation, DHCP clears static fields, 400/500/401 without saved-state change (fixtures)");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='eth-http-') as folder:

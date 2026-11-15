@@ -6,6 +6,31 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Cellular uplink over USB.** Besides a modem wired to UART pins, the
+  Cellular card can use the board's native USB port: USB LTE modems with a
+  serial AT port (PPP, the same SIM PIN/APN/registration logic as UART) and
+  4G sticks with a USB network function (RNDIS, CDC-ECM or CDC-NCM, DHCP from
+  the stick). Sticks that start as a CD-ROM are switched to modem mode with
+  the usb_modeswitch reference messages. The AT port is found from known
+  layouts, standard CDC-ACM or an AT probe; a manual interface choice exists.
+- **Ethernet uplink over USB.** Besides the W5500 SPI module, the Ethernet
+  card can use a USB Ethernet adapter or phone USB tethering (CDC-ECM, CDC-NCM
+  or RNDIS), with another USB configuration chosen automatically when the
+  first is vendor-only (Realtek RTL8152/RTL8153).
+- Both are off by default and cost no task, heap or USB host stack while off;
+  the USB port becomes a USB host only when one of them is enabled with its
+  USB connection. Not yet tested with real modems, sticks, adapters or phones.
+
+### Changed
+
+- Cellular and Ethernet settings use a new saved record that older firmware
+  does not read: after a downgrade those uplinks stay off until saved again.
+  3.0.24 records are migrated unchanged.
+- Translations: every Web UI string, including the TCP checks and setup texts
+  of 3.0.21-3.0.24, in Italian, German, French, Spanish and Chinese.
+
 ## [3.0.24] - 2026-11-15
 
 ### Fixed

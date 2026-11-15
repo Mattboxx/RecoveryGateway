@@ -94,7 +94,20 @@ that historical download packages have already been republished.
 
 Additional ESP-IDF managed components pulled at build time keep their
 original licenses as declared in their respective `idf_component.yml` /
-`LICENSE` files under `managed_components/`.
+`LICENSE` files under `managed_components/`. They include Espressif's USB host
+library `espressif/usb` 1.6.0 and CDC-ACM host driver
+`espressif/usb_host_cdc_acm` 2.4.1 (both Apache-2.0), pinned in
+`main/idf_component.yml` for the optional USB connection.
+
+## USB mode-switch messages
+
+`main/usb_port.c` contains the mode-switch messages of a few USB modem sticks
+(SCSI command blocks that move a stick from its CD-ROM mode to its modem mode)
+taken from the **usb_modeswitch** device reference data
+(usb-modeswitch-data 20251207) and the built-in HuaweiNewMode and
+StandardEject messages of usb_modeswitch 2.6.2, Copyright (C) 2007-2025
+Josua Dietze, licensed GPL-2.0-or-later and used here under GPL-3.0. The
+usb_modeswitch program itself is not included.
 
 ## Website browser installer (separate from the firmware)
 

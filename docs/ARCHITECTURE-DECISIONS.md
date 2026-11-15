@@ -2,6 +2,41 @@
 
 Decisions are explicit, revisable with evidence and never remove approved scope.
 
+## ADR-036 — One USB port module, an in-house ECM/NCM/RNDIS path (2026-11-15)
+
+The owner asked for USB modems and sticks on the cellular uplink, then USB
+Ethernet adapters and phone tethering, with class-based detection, automatic
+mode switching and interface discovery instead of a fixed VID/PID.
+
+`main/usb_port.c` owns the native USB port as a host for one device: the USB
+host library, the gateway's own client (detection, mode switch, configuration
+choice through the enumeration filter) and an Ethernet data path over CDC-ECM,
+CDC-NCM and RNDIS behind an esp_netif driver. The cellular uplink uses it
+(plus the CDC-ACM driver for serial AT ports, through a UART/USB channel
+abstraction under the existing AT/PPP engine); the Ethernet uplink uses it
+with the standard `ETH_DEF` netif, so selection, hooks and listeners are
+unchanged. The two cannot share the port (validated on save).
+
+Espressif's `iot_usbh_rndis`/`iot_usbh_ecm` were not used: they bring a
+second CDC host driver and three internal-RAM task stacks, abort on runtime
+USB errors (`ESP_ERROR_CHECK`) and assert on a device-provided RNDIS length,
+so a faulty stick could reset the gateway; no NCM component exists. The
+in-house path parses every descriptor and frame with bounds (host-tested with
+malformed input and a fuzz), never blocks the TCP/IP thread (two transmit
+transfers, drop when busy) and refuses further sessions after a transfer that
+never completed, instead of leaking per retry. `esp_modem` was not used either:
+the existing AT/PPP logic already covers it and is kept identical for UART.
+Serial is preferred over USB networking in automatic mode because it keeps
+SIM, APN and signal under the gateway's control. Records moved to version 2
+with a v1 migration; older firmware fails closed (uplink off).
+
+Cost while off: no task, heap, USB stack or PHY change; measured against
+3.0.24, the image uses about 2.5 KB more internal RAM (IRAM +2192 B, mostly the
+USB component's `IRAM_ATTR` transfer code, which moves DRAM by 2048 B; static
+DRAM +484 B of state variables). When enabled: two PSRAM-stack tasks, the
+CDC driver's 4 KB internal stack, and DMA transfers (estimated 8-12 KB), refused
+below 56/64 KB of free internal RAM. Pending: every hardware result.
+
 ## ADR-035 — Compromised CA keys are refused on every TLS connection (2026-11-04)
 
 In October 2026 the private keys of eight eMudhra intermediate CAs turned out

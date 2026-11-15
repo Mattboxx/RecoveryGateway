@@ -97,11 +97,12 @@ typedef void (*netif_ext_callback_t)(struct netif *, netif_nsc_reason_t,
 #define ESP_OK 0
 #define ESP_ERR_INVALID_STATE 1
 #define ESP_ERROR_CHECK(expr) assert((expr) == ESP_OK)
-static struct netif sta, ap, eth;
-static struct netif *s_sta, *s_ap, *s_eth;
+static struct netif sta, ap, eth, usb;
+static struct netif *s_sta, *s_ap, *s_eth, *s_usbnet;
+static volatile bool s_physical_ready;
 static netif_ext_callback_t s_physical_callback;
-static netif_input_fn original_sta_input, original_ap_input, original_eth_input;
-static netif_linkoutput_fn original_sta_linkoutput, original_ap_linkoutput, original_eth_linkoutput;
+static netif_input_fn original_sta_input, original_ap_input, original_eth_input, original_usbnet_input;
+static netif_linkoutput_fn original_sta_linkoutput, original_ap_linkoutput, original_eth_linkoutput, original_usbnet_linkoutput;
 static bool core;
 static struct netif *esp_netif_get_handle_from_ifkey(const char *key) {
     if (!strcmp(key, "WIFI_STA_DEF")) return &sta;
@@ -122,6 +123,7 @@ static err_t name##_linkoutput_hook(struct netif *n, struct pbuf *p) { return or
 FAKE_HOOK_PAIR(sta)
 FAKE_HOOK_PAIR(ap)
 FAKE_HOOK_PAIR(eth)
+FAKE_HOOK_PAIR(usbnet)
 static err_t restarted_driver_input(struct pbuf *p, struct netif *n) {
     return driver_input(p, n) + 1;
 }
@@ -136,9 +138,18 @@ static void check_physical_lifecycle(void) {
     struct pbuf p = {.tot_len = 64};
     struct netif tunnel = {0};
     netif_hooks_init();
-    assert(!sta.input && !ap.input && !eth.input);
+    assert(!sta.input && !ap.input && !eth.input && s_physical_ready);
     fake_add(&sta, driver_input); fake_add(&ap, driver_input); fake_add(&eth, driver_input);
     fake_add(&tunnel, driver_input);
+    /* The cellular USB network netif: hooked only once registered, on every add. */
+    fake_add(&usb, driver_input);
+    assert(usb.input == driver_input && usb.linkoutput == driver_linkoutput);
+    s_usbnet = &usb;
+    fake_add(&usb, driver_input);
+    assert(usb.input == usbnet_input_hook && usb.linkoutput == usbnet_linkoutput_hook);
+    assert(usb.input(&p, &usb) == 42 && usb.linkoutput(&usb, &p) == 24);
+    fake_add(&usb, restarted_driver_input);
+    assert(usb.input == usbnet_input_hook && usb.input(&p, &usb) == 43);
     assert(sta.input == sta_input_hook && sta.linkoutput == sta_linkoutput_hook);
     assert(ap.input == ap_input_hook && ap.linkoutput == ap_linkoutput_hook);
     assert(eth.input == eth_input_hook && eth.linkoutput == eth_linkoutput_hook);
@@ -151,7 +162,7 @@ static void check_physical_lifecycle(void) {
     assert(sta.input(&p, &sta) == 43 && sta.linkoutput(&sta, &p) == 24);
     unhook_netif(IF_WIFI, &sta);
     assert(sta.input == sta_input_hook && sta.linkoutput == sta_linkoutput_hook);
-    puts("PASS: driver callbacks wrapped on add/re-add, including late startup, without recapturing SNMP");
+    puts("PASS: driver callbacks wrapped on add/re-add (STA, AP, Ethernet, registered USB network netif), including late startup, without recapturing SNMP");
 }
 '''
 

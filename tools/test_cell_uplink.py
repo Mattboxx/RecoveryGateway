@@ -1,10 +1,13 @@
 """Actual cellular uplink core and HTTP API, no modem.
 
 Compiles the real core, record loader and /api/cellular handlers of
-main/cell_uplink.c with fixture NVS/HTTP: config validation (pins, APN,
-PIN, data notice), AT response parsers, primary/failover selection,
-fail-closed record load, write-only SIM PIN and password. UART, PPP and any
-physical modem/SIM/carrier behavior are NOT covered.
+main/cell_uplink.c with fixture NVS/HTTP: config validation per transport
+(UART pins or USB), AT response parsers and line classifier, the USB serial
+interface plan from synthetic configuration descriptors (known modems,
+CDC-ACM, vendor probe order, RNDIS/ECM refusal, manual choice, malformed and
+fuzzed input), primary/failover selection, fail-closed record load with the
+version 1 -> 2 migration, write-only SIM PIN and password. UART, USB host,
+PPP and any physical modem/SIM/carrier behavior are NOT covered.
 CELL_SANITIZE=1 adds ASan/UBSan on Linux.
 """
 import os
@@ -18,6 +21,7 @@ header = (ROOT / 'main/cell_uplink.h').read_text(encoding='utf-8')
 types = 'enum {CELL_MODE_FAILOVER' + header.split('enum {CELL_MODE_FAILOVER', 1)[1].split('/* Core (pure, host-tested). */', 1)[0]
 types += 'typedef struct {uint8_t streak;} cell_selector_t;\n#define CELL_STABLE_SAMPLES 3\n'
 core = source.split('/* --- cell core (begin) --- */', 1)[1].split('/* --- cell core (end) --- */', 1)[0]
+records = '#define CELL_MAGIC' + source.split('#define CELL_MAGIC', 1)[1].split('\nstatic SemaphoreHandle_t s_lock;', 1)[0] + '\n'
 
 
 def function(text, signature):
@@ -51,10 +55,22 @@ static unsigned char blob[512];static size_t blob_size;static int open_fail;
 static esp_err_t nvs_open(const char *ns,int mode,nvs_handle_t *h){(void)ns;(void)mode;*h=1;return open_fail?ESP_FAIL:ESP_OK;}
 static esp_err_t nvs_get_blob(nvs_handle_t h,const char *k,void *out,size_t *n){(void)h;assert(!strcmp(k,"cell_cfg"));if(!blob_size)return ESP_FAIL;if(*n<blob_size){*n=blob_size;return ESP_FAIL;}memcpy(out,blob,blob_size);*n=blob_size;return ESP_OK;}
 static void nvs_close(nvs_handle_t h){(void)h;}
-''' + '#define CELL_MAGIC 0x43454c31u /* CEL1 */\n' \
-    + 'typedef struct {uint32_t magic, version; cell_config_t config; uint32_t checksum;} cell_record_t;\n' \
-    + ''.join(function(source, s) for s in ('static void defaults(', 'static uint32_t record_checksum(', 'static void load(')) + r'''
+''' + records + ''.join(function(source, s) for s in ('static void defaults(', 'static uint32_t cell_fnv(', 'static uint32_t record_checksum(',
+                                                    'static void migrate_v1(', 'static void load(')) + r'''
 static cell_config_t good(void){cell_config_t c;defaults(&c);c.enabled=1;c.data_ack=1;strcpy(c.apn,"internet.example");return c;}
+/* Synthetic USB configuration descriptors. */
+static uint8_t D[1200];static size_t DL;
+static void begin(void){memset(D,0,sizeof D);D[0]=9;D[1]=2;DL=9;}
+static void put(const uint8_t *d,size_t n){memcpy(D+DL,d,n);DL+=n;}
+static void iface(uint8_t num,uint8_t alt,uint8_t cls,uint8_t sub,uint8_t proto,uint8_t eps){uint8_t d[9]={9,4,num,alt,eps,cls,sub,proto,0};put(d,9);}
+static void ep(uint8_t addr,uint8_t attr){uint8_t d[7]={7,5,addr,attr,64,0,0};put(d,7);}
+static size_t end(void){D[2]=(uint8_t)(DL&255);D[3]=(uint8_t)(DL>>8);return DL;}
+static void serial(uint8_t num,bool status){iface(num,0,0xff,0xff,0xff,status?3:2);if(status)ep((uint8_t)(0x81+num),3);ep((uint8_t)(0x81+num),2);ep((uint8_t)(1+num),2);}
+static void acm(uint8_t ctrl){uint8_t iad[8]={8,0x0b,ctrl,2,2,2,1,0},hdr[5]={5,0x24,0,0x10,1},uni[5]={5,0x24,6,ctrl,(uint8_t)(ctrl+1)};
+    put(iad,8);iface(ctrl,0,2,2,1,1);put(hdr,5);put(uni,5);ep((uint8_t)(0x81+ctrl),3);iface((uint8_t)(ctrl+1),0,0x0a,0,0,2);ep((uint8_t)(0x82+ctrl),2);ep((uint8_t)(2+ctrl),2);}
+static void rndis(void){iface(0,0,2,2,0xff,1);ep(0x81,3);iface(1,0,0x0a,0,0,2);ep(0x82,2);ep(0x02,2);}
+static int plan(uint16_t vid,uint16_t pid,uint8_t override,cell_usb_plan_t *p){size_t n=end();return cell_usb_plan(vid,pid,D,n,override,p);}
+static bool order(const cell_usb_plan_t *p,int n,const uint8_t *want){if(p->count!=n)return false;for(int i=0;i<n;i++)if(p->iface[i]!=want[i])return false;return true;}
 static bool valid(cell_config_t c){char why[96]="";bool ok=cell_config_valid(&c,why,sizeof why);assert(ok||why[0]);return ok;}
 int main(void){
     cell_config_t d;defaults(&d);assert(!d.enabled&&valid(d)); /* the default record: off, no APN, no secrets */
@@ -107,17 +123,128 @@ int main(void){
     for(int i=0;i<300;i++)cell_uplink_choose(&s,CELL_MODE_PRIMARY,true,true);
     assert(s.streak==CELL_STABLE_SAMPLES);
 
-    /* Record load: only a checksummed, valid v1 record; anything else is OFF. */
+    /* Transport: USB ignores the UART pins and flow control, keeps PWRKEY checks. */
+    c=good();c.transport=CELL_TRANSPORT_USB;assert(valid(c));
+    c.tx=33;c.rx=19;c.rts=5;assert(valid(c));                              /* unused UART fields */
+    c.pwrkey=19;assert(!valid(c));c.pwrkey=7;assert(valid(c));c.pwrkey=-1;assert(valid(c));
+    c.usb_iface=0;assert(valid(c));c.usb_iface=15;assert(valid(c));c.usb_iface=16;assert(!valid(c));c.usb_iface=CELL_USB_IFACE_AUTO;assert(valid(c));
+    c.transport=2;assert(!valid(c));
+    c=good();c.transport=CELL_TRANSPORT_USB;c.data_ack=0;assert(!valid(c));    /* data notice for USB too */
+    /* USB may leave the APN empty (the modem's default context; a network
+     * stick has its own); UART keeps requiring it. Quoting rules stay. */
+    c=good();c.transport=CELL_TRANSPORT_USB;c.apn[0]=0;assert(valid(c));strcpy(c.apn,"a\"b");assert(!valid(c));
+    c=good();c.apn[0]=0;assert(!valid(c));
+    c=good();c.transport=CELL_TRANSPORT_USB;for(uint8_t m=0;m<3;m++){c.usb_mode=m;assert(valid(c));}c.usb_mode=3;assert(!valid(c));
+    c=good();c.tx=33;assert(!valid(c));c.transport=CELL_TRANSPORT_UART;assert(!valid(c));   /* UART still checks pins */
+    assert(d.transport==CELL_TRANSPORT_UART&&d.usb_iface==CELL_USB_IFACE_AUTO);
+
+    /* AT line classifier shared by both transports. */
+    assert(cell_at_line("OK",NULL)==1&&cell_at_line("ERROR",NULL)==0&&cell_at_line("+CME ERROR: 10",NULL)==0);
+    assert(cell_at_line("NO CARRIER",NULL)==0&&cell_at_line("BUSY",NULL)==0&&cell_at_line("NO DIALTONE",NULL)==0);
+    assert(cell_at_line("CONNECT 150000000","CONNECT")==1&&cell_at_line("+CPIN: READY","+CPIN")==1);
+    assert(cell_at_line("+CSQ: 18,99",NULL)==-1&&cell_at_line("OK ",NULL)==-1&&cell_at_line("",NULL)==-1&&cell_at_line("RING","CONNECT")==-1);
+
+    /* USB plan. Quectel EC25 layout: DM, NMEA, AT, modem, QMI. */
+    cell_usb_plan_t p;
+    begin();serial(0,false);serial(1,true);serial(2,true);serial(3,true);serial(4,true);
+    assert(plan(0x2c7c,0x0125,CELL_USB_IFACE_AUTO,&p)==2&&p.how==CELL_USB_HOW_KNOWN&&order(&p,2,(const uint8_t[]){3,2}));
+    /* Same layout, unknown ids: status-endpoint ports first, diagnostics last. */
+    assert(plan(0x1234,0x5678,CELL_USB_IFACE_AUTO,&p)==5&&p.how==CELL_USB_HOW_PROBE&&order(&p,5,(const uint8_t[]){1,2,3,4,0}));
+    /* Manual choice: only that interface, only if it is a serial interface. */
+    assert(plan(0x2c7c,0x0125,2,&p)==1&&p.how==CELL_USB_HOW_MANUAL&&p.iface[0]==2);
+    assert(plan(0x2c7c,0x0125,7,&p)==0&&p.how==CELL_USB_HOW_MANUAL&&!p.network_only);
+    /* SIMCom SIM7600: diag, NMEA, AT, modem, audio, rmnet. */
+    begin();for(uint8_t i=0;i<6;i++)serial(i,i!=0);
+    assert(plan(0x1e0e,0x9001,CELL_USB_IFACE_AUTO,&p)==2&&p.how==CELL_USB_HOW_KNOWN&&order(&p,2,(const uint8_t[]){3,2}));
+    /* Known ids in another composition (no interface 3): the generic order. */
+    begin();serial(0,false);serial(1,true);serial(2,true);
+    assert(plan(0x2c7c,0x0125,CELL_USB_IFACE_AUTO,&p)==1&&p.how==CELL_USB_HOW_KNOWN&&p.iface[0]==2);
+    begin();serial(0,false);serial(1,true);
+    assert(plan(0x2c7c,0x0125,CELL_USB_IFACE_AUTO,&p)==2&&p.how==CELL_USB_HOW_PROBE&&order(&p,2,(const uint8_t[]){1,0}));
+    /* Standard CDC-ACM (IAD, functional descriptors): the control interface. */
+    begin();acm(0);
+    assert(plan(0x0403,0x6015,CELL_USB_IFACE_AUTO,&p)==1&&p.how==CELL_USB_HOW_ACM&&p.iface[0]==0);
+    assert(plan(0x0403,0x6015,0,&p)==1&&plan(0x0403,0x6015,1,&p)==0);    /* the data interface is not a choice */
+    begin();acm(0);acm(2);
+    assert(plan(0x1111,0x2222,CELL_USB_IFACE_AUTO,&p)==2&&order(&p,2,(const uint8_t[]){0,2}));
+    /* Network-only modems (RNDIS, ECM, NCM, MBIM, wireless RNDIS): refused with a reason. */
+    begin();rndis();assert(plan(0x1e0e,0x9011,CELL_USB_IFACE_AUTO,&p)==0&&p.network_only);
+    begin();iface(0,0,2,6,0,1);ep(0x81,3);iface(1,0,0x0a,0,0,0);iface(1,1,0x0a,0,0,2);ep(0x82,2);ep(0x02,2);
+    assert(plan(0x1111,0x2222,CELL_USB_IFACE_AUTO,&p)==0&&p.network_only);
+    begin();iface(0,0,2,0x0d,0,1);ep(0x81,3);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==0&&p.network_only);
+    begin();iface(0,0,2,0x0e,0,1);ep(0x81,3);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==0&&p.network_only);
+    begin();iface(0,0,0xe0,1,3,1);ep(0x81,3);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==0&&p.network_only);
+    /* RNDIS plus vendor serial ports (A7670-style): the serial ports, never RNDIS as ACM. */
+    begin();rndis();serial(2,false);serial(3,true);serial(4,true);
+    assert(plan(0x1e0e,0x9011,CELL_USB_IFACE_AUTO,&p)==3&&p.how==CELL_USB_HOW_PROBE&&!p.network_only&&order(&p,3,(const uint8_t[]){3,4,2}));
+    /* Nothing serial at all, nothing network: no candidates, no network flag. */
+    begin();iface(0,0,8,6,0x50,2);ep(0x81,2);ep(0x02,2);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==0&&!p.network_only);
+    /* Only alternate setting 0 counts; endpoints of alt 1 are not a serial port. */
+    begin();iface(0,0,0xff,0,0,0);iface(0,1,0xff,0,0,2);ep(0x81,2);ep(0x01,2);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==0);
+    /* One direction only is not a serial port. */
+    begin();iface(0,0,0xff,0,0,1);ep(0x81,2);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==0);
+    /* Bounded: at most CELL_USB_MAX_CANDIDATES; interface numbers >= 32 ignored. */
+    begin();for(uint8_t i=0;i<12;i++)serial(i,true);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==CELL_USB_MAX_CANDIDATES);
+    begin();serial(40,true);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==0);assert(plan(1,2,15,&p)==0);
+    /* Malformed descriptors: refused, never guessed. */
+    begin();serial(2,true);size_t n=end();
+    assert(cell_usb_plan(1,2,NULL,n,CELL_USB_IFACE_AUTO,&p)==-1&&cell_usb_plan(1,2,D,n,CELL_USB_IFACE_AUTO,NULL)==-1);
+    assert(cell_usb_plan(1,2,D,8,CELL_USB_IFACE_AUTO,&p)==-1);              /* shorter than a config descriptor */
+    assert(cell_usb_plan(1,2,D,n-1,CELL_USB_IFACE_AUTO,&p)==-1);            /* truncated copy (wTotalLength > len) */
+    assert(cell_usb_plan(1,2,D,n+50,CELL_USB_IFACE_AUTO,&p)==1);            /* trailing bytes beyond wTotalLength ignored */
+    D[1]=4;assert(cell_usb_plan(1,2,D,n,CELL_USB_IFACE_AUTO,&p)==-1);D[1]=2;
+    D[0]=8;assert(cell_usb_plan(1,2,D,n,CELL_USB_IFACE_AUTO,&p)==-1);D[0]=9;
+    D[2]=8;D[3]=0;assert(cell_usb_plan(1,2,D,n,CELL_USB_IFACE_AUTO,&p)==-1);
+    begin();uint8_t zero[2]={0,4};put(zero,2);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==-1);           /* bLength 0: no endless loop */
+    begin();uint8_t over[3]={40,4,0};put(over,3);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==-1);        /* runs past the end */
+    begin();uint8_t shorti[5]={5,4,0,0,2};put(shorti,5);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==-1);  /* short interface */
+    begin();iface(0,0,0xff,0,0,1);uint8_t shorte[4]={4,5,0x81,2};put(shorte,4);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==-1);
+    begin();uint8_t one[1]={1};put(one,1);assert(plan(1,2,CELL_USB_IFACE_AUTO,&p)==-1);
+    /* Deterministic fuzz: bounded result, candidates always real interface numbers. */
+    uint32_t seed=12345;
+    for(int round=0;round<20000;round++){
+        size_t len=9+(size_t)((seed=seed*1103515245u+12345u)>>16)%300;
+        for(size_t i=0;i<len;i++){seed=seed*1103515245u+12345u;D[i]=(uint8_t)(seed>>16);}
+        if(round%3){for(size_t i=9;i+2<len;i+=1+((seed>>8)%9)){D[i]=(uint8_t)(2+((seed=seed*1103515245u+12345u)>>16)%12);D[i+1]=(uint8_t)(4+((seed>>20)&1));}}
+        D[0]=9;D[1]=2;size_t total=round%5?len:len+9;D[2]=(uint8_t)(total&255);D[3]=(uint8_t)(total>>8);
+        uint8_t ov=round%7==0?(uint8_t)(seed%20):CELL_USB_IFACE_AUTO;
+        int r=cell_usb_plan((uint16_t)seed,(uint16_t)(seed>>16),D,len,ov,&p);
+        assert(r>=-1&&r<=CELL_USB_MAX_CANDIDATES);
+        if(r>0){assert(p.count==r);for(int i=0;i<r;i++)assert(p.iface[i]<32);}
+    }
+
+    /* Record load: a checksummed, valid v2 record, or a v1 record migrated
+     * as a UART modem; anything else is OFF. */
     cell_config_t g=good(),out;strcpy(g.pin,"4321");
-    cell_record_t r={.magic=CELL_MAGIC,.version=1,.config=g};r.checksum=record_checksum(&r);
+    cell_record_t r;memset(&r,0,sizeof r);r.magic=CELL_MAGIC;r.version=2;memcpy(&r.config,&g,sizeof g);r.checksum=record_checksum(&r);
     memcpy(blob,&r,sizeof r);blob_size=sizeof r;load(&out);assert(!memcmp(&out,&g,sizeof g));
+    cell_record_t u=r;u.config.transport=CELL_TRANSPORT_USB;u.config.usb_iface=3;u.config.tx=33;u.checksum=record_checksum(&u);
+    memcpy(blob,&u,sizeof u);load(&out);assert(out.enabled&&out.transport==CELL_TRANSPORT_USB&&out.usb_iface==3);
+    u.config.usb_iface=20;u.checksum=record_checksum(&u);memcpy(blob,&u,sizeof u);load(&out);assert(!out.enabled&&out.transport==CELL_TRANSPORT_UART);
     cell_record_t bad=r;bad.checksum^=1;memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
-    bad=r;bad.version=2;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
+    bad=r;bad.version=3;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
+    bad=r;bad.version=1;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);   /* v1 tag, v2 size */
+    bad=r;bad.magic^=1;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
+    /* Version 1 (3.0.24 and earlier) migrates: same fields, UART, automatic USB. */
+    cell_record_v1_t v1;memset(&v1,0,sizeof v1);v1.magic=CELL_MAGIC;v1.version=1;
+    v1.config=(cell_config_v1_t){.enabled=1,.uart=2,.mode=CELL_MODE_PRIMARY,.roaming=1,.data_ack=1,.pwrkey_active_high=1,.tx=4,.rx=5,.rts=6,.cts=7,.pwrkey=8,.baud=921600};
+    strcpy(v1.config.apn,"apn.v1");strcpy(v1.config.user,"u1");strcpy(v1.config.password,"pw1");strcpy(v1.config.pin,"2468");
+    v1.checksum=cell_fnv(&v1,offsetof(cell_record_v1_t,checksum));
+    memcpy(blob,&v1,sizeof v1);blob_size=sizeof v1;load(&out);
+    assert(out.enabled&&out.uart==2&&out.mode==CELL_MODE_PRIMARY&&out.roaming&&out.data_ack&&out.pwrkey_active_high);
+    assert(out.tx==4&&out.rx==5&&out.rts==6&&out.cts==7&&out.pwrkey==8&&out.baud==921600);
+    assert(!strcmp(out.apn,"apn.v1")&&!strcmp(out.user,"u1")&&!strcmp(out.password,"pw1")&&!strcmp(out.pin,"2468"));
+    assert(out.transport==CELL_TRANSPORT_UART&&out.usb_iface==CELL_USB_IFACE_AUTO);
+    cell_record_v1_t v1b=v1;v1b.checksum^=1;memcpy(blob,&v1b,sizeof v1b);load(&out);assert(!out.enabled);
+    v1b=v1;v1b.version=2;v1b.checksum=cell_fnv(&v1b,offsetof(cell_record_v1_t,checksum));memcpy(blob,&v1b,sizeof v1b);load(&out);assert(!out.enabled);
+    v1b=v1;v1b.config.tx=33;v1b.checksum=cell_fnv(&v1b,offsetof(cell_record_v1_t,checksum));memcpy(blob,&v1b,sizeof v1b);load(&out);assert(!out.enabled);
+    blob_size=sizeof v1-1;memcpy(blob,&v1,sizeof v1);load(&out);assert(!out.enabled);
+    blob_size=sizeof r;
     bad=r;bad.config.data_ack=0;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
     bad=r;bad.config.tx=33;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
     blob_size=sizeof r-1;memcpy(blob,&r,sizeof r);load(&out);assert(!out.enabled);
     blob_size=0;load(&out);assert(!out.enabled);open_fail=1;blob_size=sizeof r;load(&out);assert(!out.enabled);
-    puts("PASS: actual cellular validation (pins, APN/user/password quoting, PIN, data notice), AT parsers, failover/primary selection, fail-closed record load (no modem)");
+    puts("PASS: actual cellular validation per transport (UART pins, USB), AT parsers and line classifier, USB interface plan (known, ACM, probe, manual, RNDIS/ECM refusal, malformed, fuzz), failover/primary selection, fail-closed record load and v1 migration (no modem)");
 }
 '''
 
@@ -125,7 +252,7 @@ HTTP = COMMON + r'''
 #include "cJSON.h"
 #include "json_guard.h"
 #define HTTPD_400_BAD_REQUEST 400
-typedef struct {int content_len,offset,status;const char *body;bool authorized;char reply[1024];} httpd_req_t;
+typedef struct {int content_len,offset,status;const char *body;bool authorized;char reply[2048];} httpd_req_t;
 struct in_addr {uint32_t s_addr;};
 static char *inet_ntoa_r(struct in_addr a,char *b,size_t n){uint32_t x=a.s_addr;snprintf(b,n,"%u.%u.%u.%u",x&255,(x>>8)&255,(x>>16)&255,x>>24);return b;}
 static const char *esp_err_to_name(esp_err_t e){(void)e;return "ESP_FAIL";}
@@ -143,7 +270,7 @@ static cell_config_t stored;static cell_status_t status;static int saves;static 
 static void cell_uplink_get_config(cell_config_t *out){*out=stored;}
 static void cell_uplink_get_status(cell_status_t *out){*out=status;}
 static esp_err_t cell_uplink_set_config(const cell_config_t *c,char *why,size_t n){if(!cell_config_valid(c,why,n))return ESP_ERR_INVALID_ARG;saves++;if(save_result)return save_result;stored=*c;return ESP_OK;}
-''' + 'static const char *const STATE_NAMES[] = {"off", "powering", "sync", "sim", "registering", "dialing", "connected", "backoff", "stopped"};\n' \
+''' + 'static const char *const STATE_NAMES' + source.split('static const char *const STATE_NAMES', 1)[1].split('\nstatic esp_err_t send_json(', 1)[0] + '\n' \
     + ''.join(function(source, s) for s in ('static esp_err_t send_json(', 'static esp_err_t get_cellular(', 'static bool json_int(',
                                              'static bool json_text(', 'static bool json_secret(', 'static esp_err_t post_cellular(')) + r'''
 static httpd_req_t post(const char *body){httpd_req_t r={.content_len=(int)strlen(body),.body=body,.authorized=true};post_cellular(&r);return r;}
@@ -151,6 +278,7 @@ static httpd_req_t get(void){httpd_req_t r={.authorized=true};get_cellular(&r);r
 #define PINS "\"uart\":1,\"baud\":115200,\"tx\":17,\"rx\":18,\"rts\":-1,\"cts\":-1,\"pwrkey\":-1,\"pwrkey_active_high\":false"
 #define ON "{\"enabled\":true,\"data_ack\":true,\"roaming\":false,\"mode\":\"failover\"," PINS ",\"apn\":\"internet.example\",\"user\":\"\""
 int main(void){
+    stored.usb_iface=CELL_USB_IFACE_AUTO;   /* the loaded defaults */
     httpd_req_t r=post(ON ",\"pin\":\"1234\",\"password\":\"s3cret-pw\"}");
     assert(r.status==200&&strstr(r.reply,"restart_required")&&stored.enabled&&!strcmp(stored.pin,"1234")&&!strcmp(stored.password,"s3cret-pw"));
     /* GET never returns the secrets, only their presence. */
@@ -161,6 +289,41 @@ int main(void){
     r=post(ON ",\"pin\":\"\",\"password\":\"\"}");assert(r.status==200&&!strcmp(stored.pin,"1234"));
     r=post(ON ",\"clear_pin\":true,\"clear_password\":true}");assert(r.status==200&&!stored.pin[0]&&!stored.password[0]);
     r=post(ON ",\"pin\":\"9876\",\"mode\":\"primary\"}");assert(r.status==400);      /* duplicate key refused by json_guard */
+    /* Transport: absent keeps the saved choice (older clients), "usb" selects
+     * the USB port, usb_interface -1 is automatic. */
+    r=get();assert(strstr(r.reply,"\"transport\":\"uart\"")&&strstr(r.reply,"\"usb_interface\":-1")&&strstr(r.reply,"\"usb\":null"));
+    r=post(ON ",\"transport\":\"usb\",\"usb_interface\":3}");assert(r.status==200&&stored.transport==CELL_TRANSPORT_USB&&stored.usb_iface==3);
+    r=post(ON "}");assert(r.status==200&&stored.transport==CELL_TRANSPORT_USB&&stored.usb_iface==3);
+    r=get();assert(strstr(r.reply,"\"transport\":\"usb\"")&&strstr(r.reply,"\"usb_interface\":3"));
+    r=post(ON ",\"usb_interface\":-1}");assert(r.status==200&&stored.usb_iface==CELL_USB_IFACE_AUTO);
+    /* usb_mode: auto (default), serial, network; absent keeps it. */
+    r=get();assert(strstr(r.reply,"\"usb_mode\":\"auto\""));
+    r=post(ON ",\"usb_mode\":\"network\"}");assert(r.status==200&&stored.usb_mode==2);
+    r=post(ON "}");assert(r.status==200&&stored.usb_mode==2);
+    r=get();assert(strstr(r.reply,"\"usb_mode\":\"network\""));
+    r=post(ON ",\"usb_mode\":\"serial\"}");assert(r.status==200&&stored.usb_mode==1);
+    r=post(ON ",\"usb_mode\":\"auto\"}");assert(r.status==200&&stored.usb_mode==0);
+    /* USB ignores the UART pins, but the stored ones stay valid numbers. */
+    r=post("{\"enabled\":true,\"data_ack\":true,\"roaming\":false,\"mode\":\"failover\",\"transport\":\"usb\",\"uart\":1,\"baud\":115200,\"tx\":19,\"rx\":20,\"rts\":-1,\"cts\":-1,\"pwrkey\":-1,\"pwrkey_active_high\":false,\"apn\":\"x\",\"user\":\"\"}");
+    assert(r.status==200&&stored.tx==19);
+    r=post(ON ",\"transport\":\"uart\"}");assert(r.status==200&&stored.transport==CELL_TRANSPORT_UART&&stored.tx==17);
+    cell_config_t before_usb=stored;
+    const char *bad_usb[]={ON ",\"transport\":\"bluetooth\"}",ON ",\"transport\":1}",ON ",\"transport\":null}",ON ",\"usb_interface\":16}",
+        ON ",\"usb_interface\":-2}",ON ",\"usb_interface\":1.5}",ON ",\"usb_interface\":\"2\"}",
+        ON ",\"usb_mode\":\"qmi\"}",ON ",\"usb_mode\":2}",ON ",\"usb_mode\":\"\"}",
+        "{\"enabled\":true,\"data_ack\":true,\"roaming\":false,\"mode\":\"failover\",\"transport\":\"usb\",\"uart\":1,\"baud\":115200,\"tx\":17,\"rx\":18,\"rts\":-1,\"cts\":-1,\"pwrkey\":20,\"pwrkey_active_high\":false,\"apn\":\"x\",\"user\":\"\"}"};
+    for(unsigned i=0;i<sizeof bad_usb/sizeof *bad_usb;i++){r=post(bad_usb[i]);assert(r.status==400&&!memcmp(&stored,&before_usb,sizeof stored));}
+    /* USB status: device id, chosen interface and how, drops. */
+    status.enabled_at_boot=true;status.transport=CELL_TRANSPORT_USB;status.usb_present=true;status.usb_vid=0x2c7c;status.usb_pid=0x125;
+    status.usb_iface=3;status.usb_how=CELL_USB_HOW_KNOWN;status.usb_rx_dropped=7;
+    status.usb_action=1;status.usb_switches=2;
+    r=get();assert(strstr(r.reply,"\"id\":\"2c7c:0125\"")&&strstr(r.reply,"\"interface\":3")&&strstr(r.reply,"\"chosen_by\":\"known\"")&&strstr(r.reply,"\"rx_dropped\":7"));
+    assert(strstr(r.reply,"\"mode\":\"serial\"")&&strstr(r.reply,"\"network\":\"none\"")&&strstr(r.reply,"\"switches\":2"));
+    status.usb_action=2;status.usb_net=2;r=get();assert(strstr(r.reply,"\"mode\":\"network\"")&&strstr(r.reply,"\"network\":\"ncm\""));
+    status.usb_action=7;status.usb_net=9;r=get();assert(strstr(r.reply,"\"mode\":\"none\"")&&strstr(r.reply,"\"network\":\"none\""));
+    status.usb_present=false;status.usb_iface=0xff;status.usb_how=9;
+    r=get();assert(strstr(r.reply,"\"present\":false")&&strstr(r.reply,"\"id\":\"\"")&&strstr(r.reply,"\"interface\":-1")&&strstr(r.reply,"\"chosen_by\":\"none\""));
+    status=(cell_status_t){0};
     cell_config_t keep=stored;
     const char *bad[]={
         "{\"enabled\":true,\"data_ack\":false,\"roaming\":false,\"mode\":\"failover\"," PINS ",\"apn\":\"internet.example\",\"user\":\"\"}",
@@ -173,7 +336,7 @@ int main(void){
     save_result=ESP_FAIL;r=post(ON ",\"pin\":\"5555\"}");assert(r.status==500&&!memcmp(&stored,&keep,sizeof keep));save_result=ESP_OK;
     httpd_req_t denied={.content_len=2,.body="{}",.authorized=false};int before=saves;post_cellular(&denied);assert(denied.status==401&&saves==before);
     char big[900];memset(big,' ',sizeof big-1);big[sizeof big-1]=0;r=post(big);assert(r.status==400);
-    puts("PASS: actual cellular API: typed fields, real validation, write-only SIM PIN/password (kept, replaced, cleared, never returned), 400/500/401 without saved-state change (fixtures)");
+    puts("PASS: actual cellular API: typed fields, UART/USB transport and USB interface (optional, kept, validated), USB status, real validation, write-only SIM PIN/password (kept, replaced, cleared, never returned), 400/500/401 without saved-state change (fixtures)");
 }
 '''
 

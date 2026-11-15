@@ -84,8 +84,10 @@ with tempfile.TemporaryDirectory(prefix='index-variants-') as d:
     # Soft budget for the page every visitor downloads from the gateway. Raised
     # from 170000 for the first-boot choices grouped by goal, the clearer
     # Tailscale and gateway Wi-Fi steps, the open-network switch on the
-    # Network page and the touch top bar (about 3.1 KB); the 3584 KiB app
-    # slots keep more than 1 MiB free.
-    assert page_gz < 174000, page_gz
+    # Network page and the touch top bar (about 3.1 KB); then from 174000 for
+    # the USB connection of the cellular and Ethernet uplinks (about 1.2 KB,
+    # long explanations kept in the docs); the 3584 KiB app slots keep more
+    # than 1 MiB free.
+    assert page_gz < 175000, page_gz
 print(f'PASS: actual page generator: page with {len(langs)} languages as separate scripts ({page_gz} gzip bytes), '
       f'English-only page without them and otherwise identical, C arrays decode to the page and scripts (host)')

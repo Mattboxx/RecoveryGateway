@@ -36,6 +36,13 @@ bool netif_hooks_eth_ready(void);
 struct netif;
 struct pbuf;
 bool netif_hooks_install_ppp(struct netif *nif);
+/* Optional USB network stick of the cellular uplink (an Ethernet-type
+ * netif): register before lwIP adds it; the ACL input/output hooks are then
+ * installed on every add, like the STA, AP and Ethernet netifs. false means
+ * the netif must not start. */
+bool netif_hooks_register_usbnet(struct netif *nif);
+uint64_t netif_hooks_get_usbnet_bytes_in(void);
+uint64_t netif_hooks_get_usbnet_bytes_out(void);
 /* TCP/IP context: false when the ACL drops a packet received on the PPP
  * netif; true for every other interface. Counts PPP input bytes. */
 bool netif_hooks_ppp_input_allowed(struct pbuf *p, struct netif *input);

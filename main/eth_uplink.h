@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * Copyright (C) 2026 Mattboxx. ESP32 Tailnet Gateway, Mattboxx Edition: see LICENSE
  * and LICENSE-EXCEPTION.md. */
-/* Conditional SPI Ethernet uplink (W5500) for explicitly wired ESP32-S3 boards.
- * OFF by default: a WiFi-only board never touches SPI/GPIO and keeps the STA
- * route path unchanged. Pins and IP settings apply at the next boot. This is
+/* Conditional Ethernet uplink: a W5500 module wired to SPI pins, or a USB
+ * Ethernet adapter / phone USB tethering on the native USB port (CDC-ECM,
+ * CDC-NCM or RNDIS through usb_port.c).
+ * OFF by default: a WiFi-only board never touches SPI/GPIO/USB and keeps the
+ * STA route path unchanged. Pins and IP settings apply at the next boot. This is
  * not a claim that any ESP32-S3 has Ethernet, and it is not physically
  * qualified. Original implementation, Mattboxx Edition. MIT. */
 #pragma once
@@ -17,10 +19,12 @@
 enum {ETH_CHIP_W5500 = 1};
 enum {ETH_PREF_WIFI_FIRST = 0, ETH_PREF_ETHERNET_FIRST = 1};
 enum {ETH_CHOICE_LEGACY = 0, ETH_CHOICE_STA = 1, ETH_CHOICE_ETH = 2};
+enum {ETH_TRANSPORT_SPI = 0, ETH_TRANSPORT_USB = 1};
 
 typedef struct {
     uint8_t enabled, chip, spi_host, spi_mhz, ip_static, preference;
     int8_t sclk, mosi, miso, cs, intr, rst;  /* -1: not connected (intr/rst only) */
+    uint8_t transport, reserved[3];          /* ETH_TRANSPORT_*; reserved: 0 */
     uint32_t ip, mask, gw, dns;              /* network byte order, static mode */
 } eth_config_t;
 
@@ -28,7 +32,11 @@ typedef struct {
     bool compiled, enabled_at_boot, driver_started, link_up, has_ip, selected, restart_required;
     uint32_t ip, mask, gw;                   /* network byte order */
     uint32_t link_changes;
-    char error[64];
+    char error[96];
+    /* USB transport. */
+    uint8_t transport, usb_net;              /* USBP_NET_* in use */
+    bool usb_present;
+    uint16_t usb_vid, usb_pid;
 } eth_status_t;
 
 /* Uplink selection with a short stability window before moving to Ethernet;
