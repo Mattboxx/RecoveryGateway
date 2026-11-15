@@ -64,6 +64,7 @@
 #include "snmp_ops.h"
 #include "eth_uplink.h"
 #include "cell_uplink.h"
+#include "wifi_usb_budget.h"
 #include "uplink_services.h"
 #include "layout_migration.h"
 #include "service_check.h"
@@ -194,6 +195,7 @@ static volatile bool     s_ap_auto_off = false;
 #define AP_FALLBACK_DELAY_MS 60000u
 
 ESP_EVENT_DEFINE_BASE(UPLINK_SERVICES_EVENT);
+bool wifi_rx_lean_for_usb;
 
 esp_netif_t *uplink_internet_netif(void)
 {
@@ -1247,6 +1249,13 @@ void app_main(void)
 
     /*Initialize WiFi */
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    /* The optional USB connection needs internal DMA RAM (the ESP32-S3 USB
+     * cannot use PSRAM). Only while it is enabled, the Wi-Fi keeps 16 static
+     * receive buffers instead of 24 (about 12.8 KB of internal RAM back; the
+     * pre-2026-05-24 value, RX_BA_WIN 32 <= 2 x 16 still holds). Without a
+     * USB connection the Wi-Fi configuration is exactly the usual one. */
+    wifi_rx_lean_for_usb = wifi_lean_rx_for_usb(cell_uplink_usb_configured() || eth_uplink_usb_configured(), &cfg);
+    if (wifi_rx_lean_for_usb) ESP_LOGI(TAG_AP, "USB connection on: Wi-Fi static RX buffers %d", cfg.static_rx_buf_num);
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));

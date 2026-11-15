@@ -14,6 +14,8 @@ source = (ROOT / 'main/eth_uplink.c').read_text(encoding='utf-8')
 header = (ROOT / 'main/eth_uplink.h').read_text(encoding='utf-8')
 types = 'enum {ETH_CHIP_W5500' + header.split('enum {ETH_CHIP_W5500', 1)[1].split('bool eth_config_valid', 1)[0]
 core = source.split('/* --- eth core (begin) --- */', 1)[1].split('/* --- eth core (end) --- */', 1)[0]
+_at = source.index('bool eth_uplink_usb_configured(')
+usb_configured = source[_at:source.index('\n}', _at) + 2] + '\n'
 record = '#define ETH_MAGIC' + source.split('#define ETH_MAGIC', 1)[1].split('static void ensure_lock', 1)[0]
 
 PROGRAM = r'''
@@ -37,7 +39,7 @@ static unsigned char blob[256];static size_t blob_size;static int open_fail;
 static esp_err_t nvs_open(const char *ns,int mode,nvs_handle_t *h){(void)ns;(void)mode;*h=1;return open_fail?ESP_FAIL:ESP_OK;}
 static esp_err_t nvs_get_blob(nvs_handle_t h,const char *k,void *out,size_t *n){(void)h;assert(!strcmp(k,"eth_cfg"));if(!blob_size)return ESP_FAIL;if(*n<blob_size){*n=blob_size;return ESP_FAIL;}memcpy(out,blob,blob_size);*n=blob_size;return ESP_OK;}
 static void nvs_close(nvs_handle_t h){(void)h;}
-''' + record + r'''
+''' + record + usb_configured + r'''
 static eth_config_t good(void){eth_config_t c;defaults(&c);c.enabled=1;return c;}
 static bool valid(eth_config_t c){char why[96]="";bool ok=eth_config_valid(&c,why,sizeof why);assert(ok||why[0]);return ok;}
 int main(void){
@@ -108,6 +110,8 @@ int main(void){
     memcpy(blob,&enc,es);blob_size=es;load(&out);assert(!memcmp(&out,&s,sizeof s));
     eth_config_t su=s;su.transport=ETH_TRANSPORT_USB;es=record_encode(&su,&enc);
     assert(es==sizeof(eth_record_t)&&enc.v2.version==2);memcpy(blob,&enc,es);blob_size=es;load(&out);assert(!memcmp(&out,&su,sizeof su));
+    assert(eth_uplink_usb_configured());su.enabled=0;es=record_encode(&su,&enc);memcpy(blob,&enc,es);blob_size=es;assert(!eth_uplink_usb_configured());
+    es=record_encode(&s,&enc);memcpy(blob,&enc,es);blob_size=es;assert(!eth_uplink_usb_configured());
     blob_size=sizeof r;
     bad=r;bad.config.sclk=33;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled); /* valid checksum, unsafe pins */
     blob_size=sizeof r-1;memcpy(blob,&r,sizeof r);load(&out);assert(!out.enabled);

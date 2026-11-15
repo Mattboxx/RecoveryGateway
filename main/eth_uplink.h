@@ -51,6 +51,8 @@ int eth_uplink_choose(eth_selector_t *s, bool enabled, uint8_t preference, bool 
 
 /* Boot: prepare (before netif_hooks_init), then start (after it). */
 void eth_uplink_init(void);
+/* Before Wi-Fi starts: true when the saved settings enable the USB connection. */
+bool eth_uplink_usb_configured(void);
 void eth_uplink_start(void);
 void eth_uplink_get_config(eth_config_t *out);
 esp_err_t eth_uplink_set_config(const eth_config_t *c, char *why, size_t why_size);

@@ -56,7 +56,7 @@ static esp_err_t nvs_open(const char *ns,int mode,nvs_handle_t *h){(void)ns;(voi
 static esp_err_t nvs_get_blob(nvs_handle_t h,const char *k,void *out,size_t *n){(void)h;assert(!strcmp(k,"cell_cfg"));if(!blob_size)return ESP_FAIL;if(*n<blob_size){*n=blob_size;return ESP_FAIL;}memcpy(out,blob,blob_size);*n=blob_size;return ESP_OK;}
 static void nvs_close(nvs_handle_t h){(void)h;}
 ''' + records + ''.join(function(source, s) for s in ('static void defaults(', 'static uint32_t cell_fnv(', 'static uint32_t record_checksum(',
-                                                    'static void migrate_v1(', 'static size_t record_encode(', 'static void load(')) + r'''
+                                                    'static void migrate_v1(', 'static size_t record_encode(', 'static void load(', 'bool cell_uplink_usb_configured(')) + r'''
 static cell_config_t good(void){cell_config_t c;defaults(&c);c.enabled=1;c.data_ack=1;strcpy(c.apn,"internet.example");return c;}
 /* Synthetic USB configuration descriptors. */
 static uint8_t D[1200];static size_t DL;
@@ -254,6 +254,11 @@ int main(void){
     u2=u1;u2.usb_mode=2;es=record_encode(&u2,&enc);assert(es==sizeof(cell_record_t));   /* a USB choice kept even on UART */
     memcpy(blob,&enc,es);load(&out);assert(out.usb_mode==2&&out.transport==CELL_TRANSPORT_UART);
     u2=u1;u2.usb_iface=3;assert(record_encode(&u2,&enc)==sizeof(cell_record_t));
+    /* Before Wi-Fi starts: only an enabled USB connection counts. */
+    u2=u1;u2.transport=CELL_TRANSPORT_USB;es=record_encode(&u2,&enc);memcpy(blob,&enc,es);blob_size=es;assert(cell_uplink_usb_configured());
+    u2.enabled=0;es=record_encode(&u2,&enc);memcpy(blob,&enc,es);blob_size=es;assert(!cell_uplink_usb_configured());
+    es=record_encode(&u1,&enc);memcpy(blob,&enc,es);blob_size=es;assert(!cell_uplink_usb_configured());   /* UART */
+    blob_size=0;assert(!cell_uplink_usb_configured());
     blob_size=sizeof r;
     bad=r;bad.config.data_ack=0;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
     bad=r;bad.config.tx=33;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);

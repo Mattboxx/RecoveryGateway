@@ -915,6 +915,15 @@ retry:
 
 #endif /* CONFIG_LWIP_PPP_SUPPORT */
 
+bool cell_uplink_usb_configured(void)
+{
+    cell_config_t c;
+    load(&c);
+    bool usb = c.enabled && c.transport == CELL_TRANSPORT_USB;
+    memset(&c, 0, sizeof c);   /* it held the SIM PIN and APN password */
+    return usb;
+}
+
 void cell_uplink_init(void)
 {
     ensure_lock();

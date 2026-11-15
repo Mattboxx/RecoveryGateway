@@ -51,6 +51,13 @@ before, 44.3 KB after, minimum since boot 39.8 KB), Tailnet and the Web UI
 unaffected. Beta.4 adds a lean session (one transfer per direction, about
 2.7 KB for a serial port, 5 KB for a network function) used when the full one
 (about 4.4 KB / 8.6 KB with two transfers per direction) would cross the floor.
+Beta.5, on the owner's request ("with USB, speed can give way; otherwise
+unchanged"): only when a USB connection is enabled at boot, the Wi-Fi uses 16
+static receive buffers instead of 24 (`main/wifi_usb_budget.h`), about 12.8 KB
+of internal RAM for the USB device. 16 was the value before 2026-05-24; the
+known cost is less headroom for receive bursts such as a phone speed test's
+parallel upload start through the access point. `/api/status` reports it as
+`wifi_rx_lean_for_usb`.
 
 ## ADR-035 — Compromised CA keys are refused on every TLS connection (2026-11-04)
 

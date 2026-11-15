@@ -100,6 +100,7 @@
 /* Globals owned by main.c — link status flags rendered in /api/status. */
 #include "upstream_validation.h"
 #include "boot_timeline.h"
+#include "wifi_usb_budget.h"
 #include "esp_attr.h"
 extern volatile int ap_connect;
 extern volatile int connect_count;
@@ -508,6 +509,8 @@ static esp_err_t status_handler(httpd_req_t *req)
             cJSON_AddNumberToObject(root, "tx_power", live_pwr);
         }
     }
+    /* Fewer Wi-Fi receive buffers while a USB connection is enabled. */
+    cJSON_AddBoolToObject(root, "wifi_rx_lean_for_usb", wifi_rx_lean_for_usb);
 
     /* Tailscale (microlink) — runtime state from tailscale_config.h.
      * tailscale_is_connected() polls microlink + refreshes the cached

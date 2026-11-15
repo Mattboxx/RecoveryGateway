@@ -2266,5 +2266,6 @@
  "the device has no serial (AT) interface: set the USB mode to automatic or network": "设备没有串口（AT）接口：请将 USB 模式设为自动或网络",
  "the device has no USB network interface: set the USB mode to automatic or serial": "设备没有 USB 网络接口：请将 USB 模式设为自动或串口",
  "{} advanced section is hidden in simple mode. Settings keep working.": "简易模式下隐藏了 {} 个高级部分。设置仍然有效。",
- "{} advanced sections are hidden in simple mode. Settings keep working.": "简易模式下隐藏了 {} 个高级部分。设置仍然有效。"
+ "{} advanced sections are hidden in simple mode. Settings keep working.": "简易模式下隐藏了 {} 个高级部分。设置仍然有效。",
+ "While a USB connection is on, the gateway's Wi-Fi keeps fewer receive buffers to make room in internal RAM: Wi-Fi traffic peaks are a little slower. With the pins nothing changes.": "USB 连接启用期间，网关的 Wi-Fi 会保留较少的接收缓冲区以腾出内部 RAM：Wi-Fi 流量峰值会稍慢。使用引脚连接时没有任何变化。"
 }

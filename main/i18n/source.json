@@ -1840,6 +1840,7 @@
 "When the control plane is unreachable",
 "Where the forwarder sends queries it cannot answer locally. Leave empty to follow the uplink DHCP lease, or enter a resolver on your LAN.",
 "Where the target may be: any route, only your home network, or only a Tailnet address (100.x).",
+"While a USB connection is on, the gateway's Wi-Fi keeps fewer receive buffers to make room in internal RAM: Wi-Fi traffic peaks are a little slower. With the pins nothing changes.",
 "Who",
 "Wi-Fi",
 "Wi-Fi for IoT devices",

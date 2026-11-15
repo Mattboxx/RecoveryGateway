@@ -87,6 +87,8 @@ int cell_usb_plan(uint16_t vid, uint16_t pid, const uint8_t *config, size_t len,
 
 /* Boot: after netif_hooks_init (the ACL hooks are a start condition). */
 void cell_uplink_init(void);
+/* Before Wi-Fi starts: true when the saved settings enable the USB connection. */
+bool cell_uplink_usb_configured(void);
 /* Secrets (password, PIN) are never returned by the HTTP API. */
 void cell_uplink_get_config(cell_config_t *out);
 esp_err_t cell_uplink_set_config(const cell_config_t *c, char *why, size_t why_size);

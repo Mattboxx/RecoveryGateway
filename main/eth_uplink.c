@@ -426,6 +426,13 @@ static void usb_task(void *arg)
 }
 #endif
 
+bool eth_uplink_usb_configured(void)
+{
+    eth_config_t c;
+    load(&c);
+    return c.enabled && c.transport == ETH_TRANSPORT_USB;
+}
+
 void eth_uplink_init(void)
 {
     ensure_lock();

@@ -31,6 +31,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The Cellular and Ethernet cards show their states and the firmware's
   messages in the chosen language, and a "Waiting" badge between attempts.
 - The simple-mode note ("N advanced sections are hidden") is translated.
+- Only while a USB connection is enabled, the Wi-Fi keeps 16 static receive
+  buffers instead of 24, giving about 12.8 KB of internal RAM to the USB
+  device (Wi-Fi traffic peaks a little slower). Without USB nothing changes.
 
 ### Changed
 

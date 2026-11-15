@@ -2267,5 +2267,6 @@
  "the device has no serial (AT) interface: set the USB mode to automatic or network": "Il dispositivo non ha un'interfaccia seriale (AT): imposta la modalità USB su automatica o rete",
  "the device has no USB network interface: set the USB mode to automatic or serial": "Il dispositivo non ha un'interfaccia di rete USB: imposta la modalità USB su automatica o seriale",
  "{} advanced section is hidden in simple mode. Settings keep working.": "{} sezione avanzata è nascosta in modalità semplice. Le impostazioni continuano a funzionare.",
- "{} advanced sections are hidden in simple mode. Settings keep working.": "{} sezioni avanzate sono nascoste in modalità semplice. Le impostazioni continuano a funzionare."
+ "{} advanced sections are hidden in simple mode. Settings keep working.": "{} sezioni avanzate sono nascoste in modalità semplice. Le impostazioni continuano a funzionare.",
+ "While a USB connection is on, the gateway's Wi-Fi keeps fewer receive buffers to make room in internal RAM: Wi-Fi traffic peaks are a little slower. With the pins nothing changes.": "Mentre un collegamento USB è attivo, il Wi-Fi del gateway tiene meno buffer di ricezione per liberare RAM interna: i picchi di traffico Wi-Fi sono un po' più lenti. Con i pin non cambia nulla."
 }

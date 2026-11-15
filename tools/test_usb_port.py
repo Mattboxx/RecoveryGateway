@@ -23,6 +23,9 @@ PROGRAM = r'''
 #define USBP_HOST_TEST 1
 #include <assert.h>
 #include "usb_port.c"
+#include "wifi_usb_budget.h"
+bool wifi_rx_lean_for_usb;
+typedef struct {int static_rx_buf_num, dynamic_rx_buf_num, rx_ba_win;} fake_wifi_cfg_t;
 
 static uint8_t D[1600];static size_t DL;
 static void begin(void){memset(D,0,sizeof D);D[0]=9;D[1]=2;DL=9;}
@@ -249,6 +252,13 @@ int main(void){
     begin();iface(0,0,0xff,0,0,2);ep(0x81,2,0);ep(0x01,2,64);sl=end();assert(usbp_serial_find(D,sl,0,&sp)==0);   /* MPS 0 */
     begin();uint8_t badl[2]={0,4};put(badl,2);sl=end();assert(usbp_serial_find(D,sl,0,&sp)==-1);
     assert(usbp_serial_find(NULL,9,0,&sp)==-1&&usbp_serial_find(D,sl,0,NULL)==-1&&usbp_serial_find(D,8,0,&sp)==-1);
+    /* Wi-Fi receive buffers: fewer only with a USB connection, never more. */
+    fake_wifi_cfg_t w={24,48,32};
+    assert(!wifi_lean_rx_for_usb(false,&w)&&w.static_rx_buf_num==24&&w.rx_ba_win==32);
+    assert(wifi_lean_rx_for_usb(true,&w)&&w.static_rx_buf_num==16&&w.rx_ba_win==32&&w.dynamic_rx_buf_num==48);
+    assert(!wifi_lean_rx_for_usb(true,&w)&&w.static_rx_buf_num==16);                       /* already lean */
+    w=(fake_wifi_cfg_t){10,32,6};assert(!wifi_lean_rx_for_usb(true,&w)&&w.static_rx_buf_num==10);   /* never raised */
+    w=(fake_wifi_cfg_t){24,48,48};assert(wifi_lean_rx_for_usb(true,&w)&&w.rx_ba_win==32);   /* BA window <= 2 x static RX */
     /* The 40 KB internal RAM floor. */
     assert(usbp_fits(60*1024,10*1024)&&usbp_fits(50*1024,10*1024)&&!usbp_fits(50*1024-1,10*1024));
     assert(!usbp_fits(46*1024,8*1024)&&usbp_fits(46*1024,6*1024)&&!usbp_fits(1000,2000)&&usbp_fits(40*1024,0)&&!usbp_fits(40*1024-1,0));
