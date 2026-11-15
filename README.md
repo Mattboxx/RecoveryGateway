@@ -2,7 +2,7 @@
 
 <img src="assets/brand/png/banner.png" alt="ESP32 Tailnet Gateway — Mattboxx Edition. One ESP32. Multiple Tailnet roles. Enable only what you need." width="100%">
 
-# ESP32 Tailnet Gateway — Mattboxx Edition
+# ESP32 Tailnet Gateway 
 
 **Mattboxx Edition · One ESP32. Multiple Tailnet roles. Enable only what you need.**
 
