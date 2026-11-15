@@ -2264,5 +2264,7 @@
  "the modem offers only a USB network interface (RNDIS/ECM/NCM/MBIM): switch it to a USB mode with serial AT ports": "调制解调器只提供 USB 网络接口（RNDIS/ECM/NCM/MBIM）：请将其切换到带 AT 串口的 USB 模式",
  "the device's USB network function (for example MBIM) is not supported: use a mode with serial AT ports or RNDIS/ECM/NCM": "不支持该设备的 USB 网络功能（例如 MBIM）：请使用带 AT 串口或 RNDIS/ECM/NCM 的模式",
  "the device has no serial (AT) interface: set the USB mode to automatic or network": "设备没有串口（AT）接口：请将 USB 模式设为自动或网络",
- "the device has no USB network interface: set the USB mode to automatic or serial": "设备没有 USB 网络接口：请将 USB 模式设为自动或串口"
+ "the device has no USB network interface: set the USB mode to automatic or serial": "设备没有 USB 网络接口：请将 USB 模式设为自动或串口",
+ "{} advanced section is hidden in simple mode. Settings keep working.": "简易模式下隐藏了 {} 个高级部分。设置仍然有效。",
+ "{} advanced sections are hidden in simple mode. Settings keep working.": "简易模式下隐藏了 {} 个高级部分。设置仍然有效。"
 }

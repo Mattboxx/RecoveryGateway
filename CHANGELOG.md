@@ -30,6 +30,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   with real modems, sticks, adapters or phones.
 - The Cellular and Ethernet cards show their states and the firmware's
   messages in the chosen language, and a "Waiting" badge between attempts.
+- The simple-mode note ("N advanced sections are hidden") is translated.
 
 ### Changed
 

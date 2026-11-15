@@ -1395,7 +1395,7 @@ async function main() {
     await f.page.evaluate(() => { location.hash = 'firewall'; });
     await f.page.waitForFunction(() => document.getElementById('page-firewall').classList.contains('active'));
     assert.equal(await f.page.locator('#fw-lists').isHidden(), true);
-    assert.match(await f.page.locator('#page-firewall .adv-note').textContent(), /hidden in simple mode/);
+    assert.match(await f.page.locator('#page-firewall .adv-note').textContent(), /^\d+ advanced sections? (is|are) hidden in simple mode/);
     await f.page.locator('#page-firewall .adv-note button').click();
     assert.equal(await f.page.locator('body.ui-simple').count(), 0); assert.equal(await f.page.locator('#page-firewall .adv-note').isHidden(), true);
     assert.equal(await f.page.evaluate(() => localStorage.getItem('ui-advanced')), '1');
@@ -1404,6 +1404,11 @@ async function main() {
     assert.equal(await f.page.locator('#ui-advanced-toggle').isChecked(), true);
     await f.page.locator('#ui-mode-card .feature-switch').click();
     assert.equal(await f.page.locator('body.ui-simple').count(), 1);
+    assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // The simple-mode note keeps its number in Italian.
+    f = await fixture(browser, { page: 'firewall', locale: 'it-IT', simpleMode: true });
+    await f.page.waitForFunction(() => document.documentElement.lang === 'it' && /modalità semplice/.test((document.querySelector('#page-firewall .adv-note') || {}).textContent || ''));
+    assert.match(await f.page.locator('#page-firewall .adv-note').textContent(), /^\d+ sezion[ei] avanzat[ae] (è nascosta|sono nascoste) in modalità semplice/);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
     // Translations: browser language detection, manual switch, technical values untouched, English fallback.
     f = await fixture(browser, { page: 'network/services', locale: 'it-IT', forwardBody: { rules: [tfRule()], max: 8, uplink_ip: '192.0.2.20', observation: 'passive_snapshot' } });

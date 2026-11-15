@@ -2217,5 +2217,7 @@
  "the modem offers only a USB network interface (RNDIS/ECM/NCM/MBIM): switch it to a USB mode with serial AT ports": "Le modem n'offre qu'une interface réseau USB (RNDIS/ECM/NCM/MBIM) : passez-le dans un mode USB avec des ports série AT",
  "the device's USB network function (for example MBIM) is not supported: use a mode with serial AT ports or RNDIS/ECM/NCM": "La fonction réseau USB de l'appareil (par exemple MBIM) n'est pas prise en charge : utilisez un mode avec ports série AT ou RNDIS/ECM/NCM",
  "the device has no serial (AT) interface: set the USB mode to automatic or network": "L'appareil n'a pas d'interface série (AT) : réglez le mode USB sur automatique ou réseau",
- "the device has no USB network interface: set the USB mode to automatic or serial": "L'appareil n'a pas d'interface réseau USB : réglez le mode USB sur automatique ou série"
+ "the device has no USB network interface: set the USB mode to automatic or serial": "L'appareil n'a pas d'interface réseau USB : réglez le mode USB sur automatique ou série",
+ "{} advanced section is hidden in simple mode. Settings keep working.": "{} section avancée est masquée en mode simple. Les réglages restent actifs.",
+ "{} advanced sections are hidden in simple mode. Settings keep working.": "{} sections avancées sont masquées en mode simple. Les réglages restent actifs."
 }

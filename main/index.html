@@ -7236,7 +7236,8 @@
           note.appendChild(wzEl('span'));var b=wzEl('button','Show advanced settings');b.type='button';b.className='btn btn-secondary btn-sm';
           b.addEventListener('click',function(){setUiAdvanced(true);});note.appendChild(b);
           var head=sec.querySelector('.page-header');if(head&&head.nextSibling)sec.insertBefore(note,head.nextSibling);else sec.appendChild(note);}
-        note.firstChild.textContent=n+(n===1?' advanced section is':' advanced sections are')+' hidden in simple mode. Settings keep working.';
+        var hiddenText=n===1?'{} advanced section is hidden in simple mode. Settings keep working.':'{} advanced sections are hidden in simple mode. Settings keep working.';
+        note.firstChild.textContent=(window.I18N?I18N.t(hiddenText):hiddenText).replace('{}',n);
         note.hidden=adv;
       });
       if(typeof subnav!=='undefined')subnav.refresh();
