@@ -69,7 +69,13 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.23
+## What's new in Firmware 3.0.24
+
+- Gateway Wi-Fi validates the network name and password before saving.
+- Backup restore applies encrypted AP passwords with their security mode
+  and stops on a rejected write before issuing a reboot.
+
+### Also in 3.0.23
 
 - **Network → Gateway Wi-Fi** can make the gateway's own Wi-Fi an open network
   and close it again with a password, as first boot can.

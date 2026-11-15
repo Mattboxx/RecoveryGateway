@@ -11378,7 +11378,14 @@
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify(body)
-        }).then(function (r) { if (!r.ok) throw new Error(url); return r; });
+        }).then(async function (r) {
+          if (!r.ok) throw new Error(url);
+          var body = (await r.text()).trim();
+          if (body.startsWith('{')) {
+            var result = JSON.parse(body);
+            if (result.ok === false || result.error) throw new Error(url);
+          }
+        });
       }
 
       var steps = [];
@@ -11446,11 +11453,18 @@
        * slots the credentials belong to. */
       var prelude = Promise.resolve(null);
       if (includeSecrets) {
-        prelude = decryptSecretsBundle(data.secrets_encrypted, passphrase).then(function (sec) {
-          steps.push({ name: 'secrets', url: '/api/system/secrets', body: sec });
-          return sec;
-        }).catch(function () {
+        prelude = decryptSecretsBundle(data.secrets_encrypted, passphrase).catch(function () {
           throw new Error('Decryption failed — wrong passphrase?');
+        }).then(function (sec) {
+          var ap = data.network && data.network.ap;
+          if (ap && sec.ap_password) {
+            if (ap.open === true) throw new Error('Open Wi-Fi cannot have a saved password.');
+            // The authenticated secrets write protects the AP and stores its
+            // password together. Leave its security mode alone until then.
+            steps[0].body = Object.assign({}, data.network, { ap: Object.assign({}, ap) });
+            delete steps[0].body.ap.open;
+          }
+          steps.push({ name: 'secrets', url: '/api/system/secrets', body: sec });
         });
       }
 

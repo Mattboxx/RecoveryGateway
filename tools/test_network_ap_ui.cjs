@@ -30,6 +30,37 @@ async function open(browser, ap) {
   return { context, page, errors, sent };
 }
 
+async function restore(browser, response) {
+  const f = await open(browser, { open: true });
+  const sent = [];
+  for (const path of ['/api/network', '/api/system/secrets', '/api/system/restart']) {
+    await f.page.route('http://esp32.test' + path, route => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      sent.push({ path, body: route.request().postDataJSON() });
+      return route.fulfill({ json: path === '/api/network' ? response : { ok: true } });
+    });
+  }
+  const finished = response.ok ? f.page.waitForResponse(r => r.url().endsWith('/api/system/restart'))
+    : f.page.getByText('Restore failed', { exact: true }).waitFor();
+  await f.page.evaluate(async () => {
+    const passphrase = 'synthetic-backup-passphrase';
+    const secrets = await encryptSecretsBundle({ ap_password: 'synthetic-gateway-password' }, passphrase);
+    _runConfigRestore({ network: { ap: { ssid: 'GatewayExample', open: false } }, secrets_encrypted: secrets }, true, passphrase);
+  });
+  await finished;
+  await f.page.waitForFunction(() => !document.getElementById('sys-config-restore').disabled);
+
+  assert.deepEqual(sent, [
+    { path: '/api/network', body: { ap: { ssid: 'GatewayExample' } } },
+    ...(response.ok ? [
+      { path: '/api/system/secrets', body: { ap_password: 'synthetic-gateway-password' } },
+      { path: '/api/system/restart', body: {} }
+    ] : []),
+  ]);
+  assert.deepEqual(f.errors, []);
+  await f.context.close();
+}
+
 (async () => {
   const browser = await chromium.launch({ channel: process.env.TEST_BROWSER_CHANNEL || 'chrome' });
   try {
@@ -74,6 +105,8 @@ async function open(browser, ap) {
       assert.deepEqual(f.errors, []);
       await f.context.close();
     }
+    await restore(browser, { ok: true });
+    await restore(browser, { ok: false });
   } finally { await browser.close(); }
   console.log('PASS: Network page opens and closes the gateway Wi-Fi like first boot: warning and switch, password required to close, mode sent only when changed (synthetic, Chromium)');
 })().catch(e => { console.error(e); process.exit(1); });

@@ -89,6 +89,7 @@
 #include "esp_ota_ops.h"
 #include "task_reaper.h"
 #include "first_boot.h"
+#include "first_boot_core.h"
 #include "boot_timeline.h"
 #include "lan_name.h"
 
@@ -748,10 +749,16 @@ esp_netif_t *wifi_init_softap(void)
 
     char *nvs_ssid = nvs_param_get_str("ap_ssid");
     char *nvs_pw   = nvs_param_get_str("ap_passwd");
-    const char *use_ssid = (nvs_ssid && nvs_ssid[0]) ? nvs_ssid : EXAMPLE_ESP_WIFI_AP_SSID;
+    const char *use_ssid = fb_check_ap_ssid(nvs_ssid) ? EXAMPLE_ESP_WIFI_AP_SSID : nvs_ssid;
     uint8_t ap_open = 0;
-    nvs_param_get_u8("ap_open", &ap_open);    /* chosen in setup: no password at all */
-    const char *use_pw   = (nvs_pw   && nvs_pw[0])   ? nvs_pw   : (ap_open ? "" : EXAMPLE_ESP_WIFI_AP_PASSWD);
+    nvs_param_get_u8("ap_open", &ap_open);
+    const char *use_pw = EXAMPLE_ESP_WIFI_AP_PASSWD;
+    if (nvs_pw && nvs_pw[0]) {
+        if (!fb_check_ap_password(nvs_pw)) use_pw = nvs_pw;
+        else ESP_LOGW(TAG_AP, "Invalid saved AP password; using the protected default");
+    } else if (ap_open == 1) {
+        use_pw = "";
+    }
     /* Unconfigured device: open, recognisable setup AP (no shared default
      * password); pairing and sealed requests protect the setup itself. */
     char setup_ssid[40];
@@ -806,7 +813,7 @@ esp_netif_t *wifi_init_softap(void)
             .ssid_hidden = hidden ? 1 : 0,
         },
     };
-    strlcpy((char*)wifi_ap_config.ap.ssid,     use_ssid, sizeof wifi_ap_config.ap.ssid);
+    memcpy(wifi_ap_config.ap.ssid, use_ssid, wifi_ap_config.ap.ssid_len);
     strlcpy((char*)wifi_ap_config.ap.password, use_pw,   sizeof wifi_ap_config.ap.password);
     if (use_pw[0] == '\0') wifi_ap_config.ap.authmode = WIFI_AUTH_OPEN;
 
