@@ -75,10 +75,11 @@ hub support**. Unplugging and plugging back is handled (the device is detected
 again and the connection restarts), but it is **not qualified on hardware**:
 restart the gateway if a device does not come back.
 
-**Power:** the board does not supply 5 V on its USB port by default (on most
-boards an "USB-OTG"/"IN-OUT" solder pad must be bridged, which also changes
-how the board itself is powered). Feed the device's 5 V from a suitable
-supply, for example a powered OTG Y-cable, and share ground with the board.
+**Power:** the board does not supply 5 V on its USB port by default. The
+device needs 5 V on its USB connector: a powered OTG Y-cable, a separate
+supply for the device, or the board's "USB-OTG" solder pad with a strong
+enough supply. **[USB devices](USB-DEVICES.md)** explains ports, adapters,
+cables and each power option step by step.
 
 **LTE modems draw up to 2 A in bursts.** Never feed one from the board's 3.3 V
 or 5 V pins; brownouts reset the gateway (the reset reason shows `BROWNOUT`).

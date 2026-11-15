@@ -4,7 +4,8 @@
 
 - Branch `feat/usb-cellular-20261115` (worktree `.codex/workspaces/tailnet-usb-cell-20261115`), source `9ff75d3`; MicroLink unchanged (`763f5d4`). Not pushed. ADR-036, docs/CELLULAR.md, docs/ETHERNET.md.
 - Board B runs it with the USB connection off. Next: a hardware test with a real device, owner-guided: power board B from its COM (UART) port or a 5 V supply instead of the native USB port, plug the device (with its own 5 V) into the native port, enable Cellular → USB or Ethernet → USB, restart, read the card status (device id, interface or network kind, reason). Record descriptors of untested devices (the status shows vendor:product) and extend the known tables only from evidence.
-- Then: unplug/replug, a stick in CD-ROM mode, an RTL8153 adapter (configuration change), Android tethering, internal heap and task stacks while enabled, throughput, full `validate_all.py --build --browser`.
+- Then: unplug/replug, a stick in CD-ROM mode, an RTL8153 adapter (configuration change), Android tethering, internal heap and task stacks while enabled, throughput.
+- Before stable (owner, 2026-11-15): a clear connection and power guide on the website and in the README (from docs/USB-DEVICES.md, with photos of the Y-cable and the board's USB-OTG pad once tested), and a link to it from the USB hints on the Network page and in first-boot setup.
 
 ## Released — 3.0.22 first-boot choices by goal
 
