@@ -111,7 +111,7 @@ typedef struct {
 typedef void (*usbp_link_cb_t)(bool up, void *ctx);
 
 /* Internal RAM measured around the USB host start and the last session. */
-typedef struct {uint32_t free_at_start, host_bytes, session_bytes, free_now, min_free;} usbp_memory_t;
+typedef struct {uint32_t free_at_start, host_bytes, session_bytes, free_now, min_free; bool lean;} usbp_memory_t;
 
 /* Installs the USB host stack, its event task and the gateway's own USB host
  * client (PSRAM stacks), only if USBP_INTERNAL_FLOOR stays free. Once per

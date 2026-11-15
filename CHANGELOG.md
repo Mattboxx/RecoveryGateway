@@ -25,7 +25,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the USB port becomes a USB host only when one of them is enabled with its
   USB connection. The USB connection always leaves 40 KB of internal RAM to
   the rest of the gateway; if that is not possible, the card says how much is
-  needed and free. Not yet tested with real modems, sticks, adapters or phones.
+  needed and free. When internal RAM is short, a USB device runs with one
+  transfer per direction (slower) instead of being refused. Not yet tested
+  with real modems, sticks, adapters or phones.
+- The Cellular and Ethernet cards show their states and the firmware's
+  messages in the chosen language, and a "Waiting" badge between attempts.
 
 ### Changed
 

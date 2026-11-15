@@ -424,6 +424,30 @@ async function main() {
       assert.equal(f.state.savedCellular.tx, 17);   /* pins kept for a later switch back */
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
+    // Cellular over USB waiting for a device, then refused for internal RAM: a
+    // "Waiting" badge (not "Connecting"), and firmware messages in Italian with
+    // their numbers kept.
+    {
+      const cellConfig = {enabled: true, mode: 'failover', roaming: false, data_ack: true, transport: 'usb', usb_mode: 'auto', usb_interface: -1,
+        uart: 1, baud: 115200, tx: 17, rx: 18, rts: -1, cts: -1, pwrkey: -1, pwrkey_active_high: false, apn: '', user: '', has_password: false, has_pin: false};
+      const status = (error, present) => ({enabled_at_boot: true, task_running: true, state: 'backoff', registration: null, rssi_dbm: null, model: '', operator: '',
+        ip: '', has_ip: false, selected_uplink: false, restart_required: false, connects: 0, bytes_in: 0, bytes_out: 0, error, transport: 'usb',
+        usb: {present, id: present ? '2c7c:0125' : '', interface: -1, chosen_by: 'none', rx_dropped: 0, mode: 'none', network: 'none', switches: 0,
+          internal_ram: {usb_host_bytes: 3344, usb_session_bytes: 0, free_bytes: 44331, min_free_bytes: 39828, lean_session: false}}});
+      f = await fixture(browser, { page: 'network', cellularBody: {config: cellConfig,
+        status: status("no USB device on the USB port: check the cable, the OTG port and the device's 5 V supply", false)} });
+      await f.page.waitForFunction(() => document.getElementById('cell-badge').textContent === 'Waiting');
+      assert.match(await f.page.locator('#cell-status').textContent(), /^Waiting before the next attempt · No USB device — no USB device on the USB port/);
+      await f.context.close();
+      f = await fixture(browser, { page: 'network', locale: 'it-IT', cellularBody: {config: cellConfig,
+        status: status('not enough internal RAM for this USB device: about 5 KB needed, 43 KB free, 40 KB kept for the rest of the gateway; turn off unused features', true)} });
+      await f.page.waitForFunction(() => document.documentElement.lang === 'it' && document.getElementById('cell-badge').textContent === 'In attesa');
+      const it = await f.page.locator('#cell-status').textContent();
+      assert.match(it, /Dispositivo USB 2c7c:0125/);
+      assert.match(it, /RAM interna insufficiente per questo dispositivo USB: servono circa 5 KB, liberi 43 KB/);
+      assert.ok(!/not enough|Waiting before/.test(it), it);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Layout migration card: only on the 2.x table, explicit confirmation, progress.
     f = await fixture(browser, { page: 'system/maintenance' });
     await f.page.waitForFunction(() => document.getElementById('sys-updates-reload'));

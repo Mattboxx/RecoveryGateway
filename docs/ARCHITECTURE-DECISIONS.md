@@ -45,7 +45,12 @@ the API (`usb.internal_ram`).
 
 Beta.3 (owner's daily board, 46 KB free with its features on): Espressif's
 CDC-ACM host driver was dropped because its task needs a 4 KB internal stack;
-serial ports use the same session code as the network path.
+serial ports use the same session code as the network path. Measured there
+with beta.3: the USB host start costs 3344 B of internal RAM (48.7 KB free
+before, 44.3 KB after, minimum since boot 39.8 KB), Tailnet and the Web UI
+unaffected. Beta.4 adds a lean session (one transfer per direction, about
+2.7 KB for a serial port, 5 KB for a network function) used when the full one
+(about 4.4 KB / 8.6 KB with two transfers per direction) would cross the floor.
 
 ## ADR-035 — Compromised CA keys are refused on every TLS connection (2026-11-04)
 

@@ -38,6 +38,7 @@ typedef struct {
     bool usb_present;
     uint16_t usb_vid, usb_pid;
     uint32_t usb_ram_host, usb_ram_session, usb_ram_free, usb_ram_min;   /* measured internal RAM, bytes */
+    bool usb_ram_lean;                    /* the session runs with one transfer per direction */
 } eth_status_t;
 
 /* Uplink selection with a short stability window before moving to Ethernet;

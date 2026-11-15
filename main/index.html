@@ -7272,19 +7272,29 @@
     var ETH_FIELDS=['eth-enabled','eth-transport','eth-pref','eth-host','eth-mhz','eth-sclk','eth-mosi','eth-miso','eth-cs','eth-int','eth-rst','eth-static','eth-ip','eth-mask','eth-gw','eth-dns'];
     var s_eth_loaded=false;
     function ethStatusText(st){
-      if(!st.compiled)return 'Not available in this firmware build (WiFi-only image).';
-      if(!st.enabled_at_boot)return 'Off'+(st.restart_required?' · saved settings apply after restart':'')+'.';
-      var t=st.driver_started?(st.link_up?'Link up':'Link down'):'Driver not started'+(st.error?': '+st.error:'');
+      if(!st.compiled)return UT('Not available in this firmware build (WiFi-only image).');
+      if(!st.enabled_at_boot)return UT('Off')+(st.restart_required?' · '+UT('saved settings apply after restart'):'')+'.';
+      var t=st.driver_started?UT(st.link_up?'Link up':'Link down'):UT('Driver not started')+(st.error?': '+usbMsg(st.error):'');
       if(st.transport==='usb'&&st.usb){
         t+=' · '+(st.usb.present?UT('USB device')+' '+st.usb.id:UT('No USB device'));
         if(st.usb.network&&st.usb.network!=='none')t+=' ('+(USB_NET_NAMES[st.usb.network]||st.usb.network)+')';
-        if(st.driver_started&&st.error)t+=' — '+st.error;
+        if(st.driver_started&&st.error)t+=' — '+usbMsg(st.error);
       }
-      if(st.has_ip)t+=' · '+st.ip+' via '+(st.gateway||'no gateway');
-      t+=st.selected_uplink?' · current uplink':' · not the current uplink';
-      return t+(st.restart_required?' · saved changes apply after restart':'')+'. Link changes this boot: '+st.link_changes+'.';
+      if(st.has_ip)t+=' · '+st.ip+' '+UT('via')+' '+(st.gateway||UT('no gateway'));
+      t+=' · '+UT(st.selected_uplink?'current uplink':'not the current uplink');
+      return t+(st.restart_required?' · '+UT('saved changes apply after restart'):'')+'. '+UT('Link changes this boot:')+' '+st.link_changes+'.';
     }
     function UT(s){return window.I18N?I18N.t(s):s;}
+    /* Firmware status messages are English; translate the known ones, keeping
+     * the numbers of the internal RAM message. */
+    function usbMsg(s){
+      if(!s)return s;
+      var pre=/^(USB not started|not started): /.exec(s);
+      if(pre)return UT(pre[1]+':')+' '+usbMsg(s.slice(pre[0].length));
+      var m=/^not enough internal RAM for this USB device: about (\d+) KB needed, (\d+) KB free, 40 KB kept for the rest of the gateway; turn off unused features$/.exec(s);
+      if(m)return UT('not enough internal RAM for this USB device: about {} KB needed, {} KB free, 40 KB kept for the rest of the gateway; turn off unused features').replace('{}',m[1]).replace('{}',m[2]);
+      return UT(s);
+    }
     var USB_NET_NAMES={ecm:'CDC-ECM',ncm:'CDC-NCM',rndis:'RNDIS',unsupported:'unsupported'};
     /* Shows the USB or the wired-pin fields of a card. */
     function usbView(p){var usb=document.getElementById(p+'-transport').value==='usb';
@@ -7301,7 +7311,7 @@
         set('eth-static',c.static_ip);set('eth-ip',c.ip);set('eth-mask',c.netmask);set('eth-gw',c.gateway);set('eth-dns',c.dns);
         document.getElementById('eth-status').textContent=ethStatusText(st);
         var badge=document.getElementById('eth-badge');
-        badge.textContent=!st.compiled?'Not compiled':!st.enabled_at_boot?'Off':st.has_ip?'Connected':st.driver_started?'No link':'Error';
+        badge.textContent=UT(!st.compiled?'Not compiled':!st.enabled_at_boot?'Off':st.has_ip?'Connected':st.driver_started?'No link':'Error');
         badge.className='badge '+(st.has_ip?'badge-success':st.enabled_at_boot&&st.compiled?'badge-warning':'badge-neutral');
         s_eth_loaded=st.compiled;
       }).catch(function(e){document.getElementById('eth-status').textContent='Ethernet settings unavailable: '+e.message;});
@@ -7331,22 +7341,22 @@
     document.getElementById('cell-transport').addEventListener('change',cellTransportView);
     for(var ui=0;ui<16;ui++){var uo=document.createElement('option');uo.textContent=String(ui);document.getElementById('cell-usb-iface').appendChild(uo);}
     function cellStatusText(st,c){
-      if(!st.enabled_at_boot)return c.enabled?'Enabled: starts after a restart.':'Off.';
-      var parts=[CELL_STATES[st.state]||st.state];
+      if(!st.enabled_at_boot)return UT(c.enabled?'Enabled: starts after a restart.':'Off.');
+      var parts=[CELL_STATES[st.state]?UT(CELL_STATES[st.state]):st.state];
       if(st.operator)parts.push(st.operator);
       if(typeof st.rssi_dbm==='number')parts.push(st.rssi_dbm+' dBm');
       if(st.ip)parts.push('IP '+st.ip);
-      if(st.selected_uplink)parts.push('carrying Internet traffic');
+      if(st.selected_uplink)parts.push(UT('carrying Internet traffic'));
       if(st.bytes_in||st.bytes_out)parts.push('data '+formatTraffic(st.bytes_in,st.bytes_out));
       if(st.model)parts.push(st.model);
       if(st.transport==='usb'&&st.usb){
         var u=st.usb;
         parts.push(u.present?UT('USB device')+' '+u.id:UT('No USB device'));
-        if(u.mode==='serial'&&u.interface>=0)parts.push(UT('serial interface')+' '+u.interface+' ('+(CELL_USB_HOW[u.chosen_by]||u.chosen_by)+')');
+        if(u.mode==='serial'&&u.interface>=0)parts.push(UT('serial interface')+' '+u.interface+' ('+(CELL_USB_HOW[u.chosen_by]?UT(CELL_USB_HOW[u.chosen_by]):u.chosen_by)+')');
         else if(u.mode==='network')parts.push(UT('USB network')+' '+(USB_NET_NAMES[u.network]||u.network));
         else if(u.mode==='switching')parts.push(UT('switching the stick to modem mode'));
       }
-      return parts.join(' · ')+(st.error?' — '+st.error:'')+(st.restart_required?' · restart to apply the saved settings':'');
+      return parts.join(' · ')+(st.error?' — '+usbMsg(st.error):'')+(st.restart_required?' · '+UT('restart to apply the saved settings'):'');
     }
     function loadCellular(){
       s_cell_loaded=false;document.getElementById('cell-save').disabled=true;
@@ -7363,7 +7373,8 @@
         set('cell-usb-iface',String(typeof c.usb_interface==='number'?c.usb_interface:-1));cellTransportView();
         document.getElementById('cell-status').textContent=cellStatusText(st,c);
         var badge=document.getElementById('cell-badge');
-        badge.textContent=st.compiled===false?'Not compiled':!st.enabled_at_boot?'Off':st.state==='connected'?'Connected':st.state==='stopped'?'Stopped':'Connecting…';
+        /* Waiting: between attempts, for example while no USB device is plugged in. */
+        badge.textContent=UT(st.compiled===false?'Not compiled':!st.enabled_at_boot?'Off':st.state==='connected'?'Connected':st.state==='stopped'?'Stopped':st.state==='backoff'?'Waiting':'Connecting…');
         badge.className='badge '+(st.state==='connected'?'badge-success':st.state==='stopped'?'badge-danger':st.enabled_at_boot?'badge-warning':'badge-neutral');
         s_cell_loaded=true;
       }).catch(function(e){document.getElementById('cell-status').textContent='Cellular settings unavailable: '+e.message;});

@@ -1019,7 +1019,7 @@ void cell_uplink_get_status(cell_status_t *out)
         usb_port_counters(&net_rx_dropped, NULL, NULL, NULL);
         usb_port_memory(&m);
         out->usb_ram_host = m.host_bytes; out->usb_ram_session = m.session_bytes;
-        out->usb_ram_free = m.free_now; out->usb_ram_min = m.min_free;
+        out->usb_ram_free = m.free_now; out->usb_ram_min = m.min_free; out->usb_ram_lean = m.lean;
     }
     out->usb_rx_dropped = net_rx_dropped;
 #endif
@@ -1138,6 +1138,7 @@ static esp_err_t get_cellular(httpd_req_t *req)
                 cJSON_AddNumberToObject(ram, "usb_session_bytes", s.usb_ram_session);
                 cJSON_AddNumberToObject(ram, "free_bytes", s.usb_ram_free);
                 cJSON_AddNumberToObject(ram, "min_free_bytes", s.usb_ram_min);
+                cJSON_AddBoolToObject(ram, "lean_session", s.usb_ram_lean);
             }
         }
     }

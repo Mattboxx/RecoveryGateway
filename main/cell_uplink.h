@@ -52,6 +52,7 @@ typedef struct {
     uint16_t usb_vid, usb_pid;
     uint32_t usb_rx_dropped, usb_switches;
     uint32_t usb_ram_host, usb_ram_session, usb_ram_free, usb_ram_min;   /* measured internal RAM, bytes */
+    bool usb_ram_lean;                    /* the session runs with one transfer per direction */
 } cell_status_t;
 
 /* How the USB serial interface was chosen. */

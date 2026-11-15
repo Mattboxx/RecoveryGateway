@@ -560,7 +560,7 @@ void eth_uplink_get_status(eth_status_t *out)
         out->usb_present = usb_port_device(&d, NULL, 0, NULL);
         usb_port_memory(&m);
         out->usb_ram_host = m.host_bytes; out->usb_ram_session = m.session_bytes;
-        out->usb_ram_free = m.free_now; out->usb_ram_min = m.min_free;
+        out->usb_ram_free = m.free_now; out->usb_ram_min = m.min_free; out->usb_ram_lean = m.lean;
     }
 #endif
 }
@@ -668,6 +668,7 @@ static esp_err_t get_ethernet(httpd_req_t *req)
                 cJSON_AddNumberToObject(ram, "usb_session_bytes", s.usb_ram_session);
                 cJSON_AddNumberToObject(ram, "free_bytes", s.usb_ram_free);
                 cJSON_AddNumberToObject(ram, "min_free_bytes", s.usb_ram_min);
+                cJSON_AddBoolToObject(ram, "lean_session", s.usb_ram_lean);
             }
         }
     }

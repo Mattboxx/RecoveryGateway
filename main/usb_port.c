@@ -399,7 +399,9 @@ int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *
 /* USB host library objects, enumeration buffers and FIFO setup before any
  * device: an estimate, refined by the measurement in usb_port_memory(). */
 #define USBP_HOST_ESTIMATE (6 * 1024)
-#define USBP_TRANSFER_OVERHEAD 256     /* per transfer: URB and DMA descriptors (estimate) */
+#define USBP_TRANSFER_OVERHEAD 128     /* per transfer: URB and heap headers (estimate) */
+#define USBP_PIPE_OVERHEAD 1024        /* endpoint pipes, descriptor lists, interface claims (estimate) */
+#define USBP_SERIAL_OUT_LEAN 512
 
 static SemaphoreHandle_t s_lock, s_changed, s_done;   /* created by usb_port_start only */
 static usb_host_client_handle_t s_client;
@@ -422,7 +424,7 @@ static usbp_memory_t s_mem;            /* measured internal RAM use */
  * the client task. */
 static struct {
     usb_device_handle_t dev;
-    uint8_t kind, ctrl, data, data_alt, ep_in, ep_out, ep_notify, mac_index, n_out;
+    uint8_t kind, ctrl, data, data_alt, ep_in, ep_out, ep_notify, mac_index, n_in, n_out;
     esp_netif_t *netif;
     StreamBufferHandle_t rx;           /* serial only */
     usb_transfer_t *in[2], *out[2], *notify, *ctrl_xfer;
@@ -900,13 +902,16 @@ static esp_err_t net_init(const char **why)
     return ESP_OK;
 }
 
-/* Internal RAM the session's transfers need (buffers plus an overhead estimate). */
-static size_t session_need(uint8_t kind, bool notify)
+/* Internal RAM a session needs: its DMA buffers plus overhead estimates.
+ * Full: two receive (and, for networks, two send) transfers for throughput;
+ * lean: one each, for gateways that already use most of their internal RAM. */
+static size_t session_rx(uint8_t kind) {return kind == USBP_SERIAL ? USBP_SERIAL_IN : kind == USBP_NET_NCM ? USBP_NCM_RX : USBP_FRAME_RX;}
+static size_t session_tx(uint8_t kind, bool lean) {return kind == USBP_SERIAL ? (lean ? USBP_SERIAL_OUT_LEAN : USBP_SERIAL_OUT) : USBP_TX_SIZE;}
+static size_t session_need(uint8_t kind, bool notify, bool lean)
 {
-    size_t rx = kind == USBP_SERIAL ? USBP_SERIAL_IN : kind == USBP_NET_NCM ? USBP_NCM_RX : USBP_FRAME_RX;
-    size_t need = 2 * rx + USBP_CTRL_SIZE + (kind == USBP_SERIAL ? USBP_SERIAL_OUT : 2 * USBP_TX_SIZE)
-                  + (notify ? USBP_NOTIFY_SIZE : 0);
-    return need + 6 * USBP_TRANSFER_OVERHEAD;
+    unsigned n_in = lean ? 1 : 2, n_out = kind == USBP_SERIAL || lean ? 1 : 2;
+    return n_in * session_rx(kind) + n_out * session_tx(kind, lean) + USBP_CTRL_SIZE + (notify ? USBP_NOTIFY_SIZE : 0)
+           + (n_in + n_out + 1 + (notify ? 1 : 0)) * USBP_TRANSFER_OVERHEAD + USBP_PIPE_OVERHEAD;
 }
 
 static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_netif_t *netif,
@@ -916,7 +921,9 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
     *why = "USB device not ready";
     if (s_poisoned) {*why = "the USB device stopped answering: restart the gateway to retry"; return ESP_ERR_INVALID_STATE;}
     bool serial = f->kind == USBP_SERIAL, notify = !serial && f->ep_notify;
-    size_t need = session_need(f->kind, notify), before = internal_free();
+    size_t before = internal_free();
+    bool lean = !usbp_fits(before, session_need(f->kind, notify, false));
+    size_t need = session_need(f->kind, notify, lean);
     if (!usbp_fits(before, need)) {
         static char text[160];
         snprintf(text, sizeof text, "not enough internal RAM for this USB device: about %u KB needed, %u KB free, 40 KB kept for the rest of the gateway; turn off unused features",
@@ -924,6 +931,7 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
         *why = text;
         return ESP_ERR_NO_MEM;
     }
+    s_mem.lean = lean;
     s_net.kind = f->kind; s_net.ctrl = f->ctrl; s_net.data = f->data; s_net.data_alt = f->data_alt;
     s_net.ep_in = f->ep_in; s_net.ep_out = f->ep_out; s_net.ep_notify = notify ? f->ep_notify : 0; s_net.mac_index = f->mac_index;
     s_net.netif = netif;
@@ -971,11 +979,12 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
         esp_netif_set_mac(netif, mac);
     }
     if (s_net.leaked) {*why = "USB device stopped answering"; err = ESP_FAIL; goto fail;}
-    size_t rx = serial ? USBP_SERIAL_IN : f->kind == USBP_NET_NCM ? USBP_NCM_RX : USBP_FRAME_RX;
-    s_net.n_out = serial ? 1 : 2;
-    if (serial) s_net.out_max = USBP_SERIAL_OUT;
-    for (int i = 0; i < 2 && err == ESP_OK; i++) err = alloc(rx, &s_net.in[i], f->ep_in, in_cb, i);
-    for (int i = 0; i < s_net.n_out && err == ESP_OK; i++) err = alloc(serial ? USBP_SERIAL_OUT : USBP_TX_SIZE, &s_net.out[i], f->ep_out, out_cb, i);
+    size_t rx = session_rx(f->kind), tx = session_tx(f->kind, lean);
+    s_net.n_in = lean ? 1 : 2;
+    s_net.n_out = serial || lean ? 1 : 2;
+    if (serial) s_net.out_max = tx;
+    for (int i = 0; i < s_net.n_in && err == ESP_OK; i++) err = alloc(rx, &s_net.in[i], f->ep_in, in_cb, i);
+    for (int i = 0; i < s_net.n_out && err == ESP_OK; i++) err = alloc(tx, &s_net.out[i], f->ep_out, out_cb, i);
     if (err == ESP_OK && notify) err = alloc(USBP_NOTIFY_SIZE, &s_net.notify, f->ep_notify, notify_cb, 0);
     if (err != ESP_OK) {*why = "no memory for the USB transfers"; goto fail;}
     atomic_store(&s_net.out_busy[0], false);
@@ -983,14 +992,14 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
     s_net.opened = xTaskGetTickCount();
     atomic_store(&s_net.running, true);
     if (!serial) esp_netif_action_start(netif, NULL, 0, NULL);
-    for (int i = 0; i < 2; i++) resubmit(s_net.in[i]);
+    for (int i = 0; i < s_net.n_in; i++) resubmit(s_net.in[i]);
     if (s_net.notify) resubmit(s_net.notify);
     if (!serial && (f->kind == USBP_NET_RNDIS || !notify)) set_link(true);
     size_t after = internal_free();
     s_mem.session_bytes = (uint32_t)(before > after ? before - after : 0);
-    ESP_LOGI(TAG, "%04x:%04x %s on interface %u: %u bytes of internal RAM, %u free", d->vid, d->pid,
+    ESP_LOGI(TAG, "%04x:%04x %s on interface %u (%s): %u bytes of internal RAM, %u free", d->vid, d->pid,
              serial ? "serial port" : f->kind == USBP_NET_ECM ? "CDC-ECM" : f->kind == USBP_NET_NCM ? "CDC-NCM" : "RNDIS",
-             f->data, (unsigned)s_mem.session_bytes, (unsigned)after);
+             f->data, lean ? "lean" : "full", (unsigned)s_mem.session_bytes, (unsigned)after);
     return ESP_OK;
 fail:
     usb_port_net_close();
@@ -1023,7 +1032,7 @@ int usb_port_serial_write(const void *data, size_t len, uint32_t timeout_ms)
             continue;
         }
         usb_transfer_t *t = s_net.out[0];
-        size_t n = len - done < USBP_SERIAL_OUT ? len - done : USBP_SERIAL_OUT;
+        size_t n = len - done < s_net.out_max ? len - done : s_net.out_max;
         memcpy(t->data_buffer, p + done, n);
         t->num_bytes = (int)n;
         t->flags = 0;
