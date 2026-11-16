@@ -33,10 +33,21 @@ the version 1 record that 3.0.24 reads (rollback unchanged); only settings
 that use USB are written as version 2, which older firmware refuses (that
 uplink off, fail closed). First-boot setup offers the same pins/USB choice.
 
-Cost while off: no task, heap, USB stack or PHY change; measured against
-3.0.24, the image uses about 2.8 KB more internal RAM (IRAM +2192 B, mostly the
-USB component's `IRAM_ATTR` transfer code, which moves DRAM by 2048 B; static
-DRAM about +0.8 KB of state and longer status messages). When enabled: two
+Cost while off: no task, heap, USB stack or PHY change. Up to beta.6 the image
+still took 2.6 KB more internal RAM than 3.0.24 (measured on board A and from the
+ELF): the USB driver's `IRAM_ATTR` buffer fill/execute code (1.5 KB), FreeRTOS
+stream-buffer functions pulled into IRAM, and plain USB/cellular/Ethernet state.
+Since beta.7, `main/usb_flash.lf` maps the driver's `hcd_dwc` IRAM sections to
+flash without changing its source (safe because the gateway installs the USB
+interrupt without `ESP_INTR_FLAG_IRAM`, and that interrupt already calls the
+driver's flash functions), the serial receive buffer uses the ESP-IDF byte ring
+buffer already linked by 3.0.24, and plain state (`s_saved`, `s_running`,
+`s_status`, device and memory records) is `EXT_RAM_BSS_ATTR`. Atomics and
+spinlocks stay internal (no atomics in PSRAM on the ESP32-S3), as does
+`xTimerGenericCommand` (106 B), which the driver's `usb_host.c` uses and
+FreeRTOS keeps in IRAM. Result: the beta.7 heap starts 416 B lower than 3.0.24,
+so it leaves more internal RAM than 3.0.24; `tools/check_usb_ram_placement.py`
+checks the placement in every `validate_all.py --build`. When enabled: two
 tasks with PSRAM stacks and the USB transfers, which must be internal DMA RAM
 on the ESP32-S3 (serial session about 4 KB, network session 6-8 KB). Every
 start and session is refused when it would leave less than 40 KB of internal

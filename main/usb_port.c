@@ -377,12 +377,13 @@ int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *
 #include "sdkconfig.h"
 #if CONFIG_SOC_USB_OTG_SUPPORTED
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif_net_stack.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/stream_buffer.h"
+#include "freertos/ringbuf.h"
 #include "freertos/task.h"
 #include "usb/usb_host.h"
 
@@ -393,7 +394,7 @@ int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *
 #define USBP_TX_SIZE 1664              /* a frame plus RNDIS/NCM headers (26 x 64) */
 #define USBP_SERIAL_IN 512
 #define USBP_SERIAL_OUT 1600
-#define USBP_SERIAL_RX_BUFFER 4096     /* PSRAM stream buffer */
+#define USBP_SERIAL_RX_BUFFER 4096     /* PSRAM byte ring buffer */
 #define USBP_NOTIFY_SIZE 64
 #define USBP_CTRL_SIZE (8 + 256)
 /* USB host library objects, enumeration buffers and FIFO setup before any
@@ -406,18 +407,20 @@ int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *
 static SemaphoreHandle_t s_lock, s_changed, s_done;   /* created by usb_port_start only */
 static usb_host_client_handle_t s_client;
 static bool s_started;
-static usbp_device_t s_dev;            /* under s_lock */
+/* Plain state lives in PSRAM so the USB code costs no internal RAM while it
+ * is off; atomics and spinlocks stay internal (no atomics in PSRAM on S3). */
+EXT_RAM_BSS_ATTR static usbp_device_t s_dev;   /* under s_lock */
 static uint8_t *s_cfg;
 static size_t s_cfg_len;
 static portMUX_TYPE s_choice_mux = portMUX_INITIALIZER_UNLOCKED;
-static struct {uint16_t vid, pid; uint8_t config, tries;} s_choice[4];
-static struct {uint16_t vid, pid;} s_switched[4];
+EXT_RAM_BSS_ATTR static struct {uint16_t vid, pid; uint8_t config, tries;} s_choice[4];
+EXT_RAM_BSS_ATTR static struct {uint16_t vid, pid;} s_switched[4];
 static unsigned s_switched_count;
 /* A transfer that never completed may still be owned by the stack: it is
  * never freed or reused, and no new session starts until restart (bounded
  * loss instead of a leak per retry). */
 static bool s_poisoned;
-static usbp_memory_t s_mem;            /* measured internal RAM use */
+EXT_RAM_BSS_ATTR static usbp_memory_t s_mem;   /* measured internal RAM use */
 
 /* One data session at a time: a serial (AT/PPP) port or a network function.
  * State is written by the open/close owner task; transfer callbacks run in
@@ -426,7 +429,7 @@ static struct {
     usb_device_handle_t dev;
     uint8_t kind, ctrl, data, data_alt, ep_in, ep_out, ep_notify, mac_index, n_in, n_out;
     esp_netif_t *netif;
-    StreamBufferHandle_t rx;           /* serial only */
+    RingbufHandle_t rx;                /* serial only */
     usb_transfer_t *in[2], *out[2], *notify, *ctrl_xfer;
     atomic_bool out_busy[2], running, gone, link, link_known;
     atomic_int inflight;
@@ -438,6 +441,14 @@ static struct {
     void *ctx;
 } s_net;
 static atomic_uint s_rx_dropped, s_tx_dropped, s_rx_errors;
+
+/* Discards everything waiting in the serial receive ring. */
+static void serial_drain(void)
+{
+    size_t n;
+    void *item;
+    while ((item = xRingbufferReceiveUpTo(s_net.rx, &n, 0, USBP_SERIAL_RX_BUFFER)) != NULL) vRingbufferReturnItem(s_net.rx, item);
+}
 static atomic_ullong s_rx_bytes, s_tx_bytes;
 
 /* --- Detection --- */
@@ -534,6 +545,7 @@ esp_err_t usb_port_start(const char **why)
     s_done = xSemaphoreCreateBinary();
     s_cfg = heap_caps_malloc(USBP_CFG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_lock || !s_changed || !s_done || !s_cfg) {*why = "no memory for the USB port"; return ESP_ERR_NO_MEM;}
+    /* No ESP_INTR_FLAG_IRAM: usb_flash.lf keeps the driver's buffer code in flash. */
     usb_host_config_t host = {.skip_phy_setup = false, .intr_flags = ESP_INTR_FLAG_LOWMED};
 #if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
     host.enum_filter_cb = enum_filter;
@@ -691,7 +703,7 @@ bool usb_port_next_config(const usbp_device_t *d)
 
 /* --- esp_netif glue (network sessions) --- */
 typedef struct {esp_netif_driver_base_t base;} usbp_glue_t;
-static usbp_glue_t s_glue;
+EXT_RAM_BSS_ATTR static usbp_glue_t s_glue;
 
 static void out_cb(usb_transfer_t *t)
 {
@@ -782,7 +794,8 @@ static void in_cb(usb_transfer_t *t)
         const uint8_t *frame;
         size_t flen;
         if (s_net.kind == USBP_SERIAL) {
-            size_t sent = xStreamBufferSend(s_net.rx, t->data_buffer, n, 0);
+            size_t room = xRingbufferGetCurFreeSize(s_net.rx), sent = n < room ? n : room;
+            if (sent && xRingbufferSend(s_net.rx, t->data_buffer, sent, 0) != pdTRUE) sent = 0;
             if (sent < n) atomic_fetch_add(&s_rx_dropped, (unsigned)(n - sent));   /* PPP/TCP recover */
         } else if (s_net.kind == USBP_NET_ECM) deliver(t->data_buffer, n);
         else if (s_net.kind == USBP_NET_NCM) {
@@ -925,7 +938,7 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
     bool lean = !usbp_fits(before, session_need(f->kind, notify, false));
     size_t need = session_need(f->kind, notify, lean);
     if (!usbp_fits(before, need)) {
-        static char text[160];
+        EXT_RAM_BSS_ATTR static char text[160];
         snprintf(text, sizeof text, "not enough internal RAM for this USB device: about %u KB needed, %u KB free, 40 KB kept for the rest of the gateway; turn off unused features",
                  (unsigned)((need + 1023) / 1024), (unsigned)(before / 1024));
         *why = text;
@@ -956,10 +969,9 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
         esp_err_t r;
         /* CDC-ACM: DTR and RTS on; many modems ignore data without DTR. */
         if (f->ctrl != f->data && !control(s_net.ctrl_xfer, 0x21, 0x22, 0x0003, f->ctrl, NULL, 0, &r)) s_net.leaked = true;
-        if (!s_net.rx) s_net.rx = xStreamBufferCreateWithCaps(USBP_SERIAL_RX_BUFFER, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_net.rx) s_net.rx = xRingbufferCreateWithCaps(USBP_SERIAL_RX_BUFFER, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_net.rx) {*why = "no memory for the USB serial buffer"; err = ESP_ERR_NO_MEM; goto fail;}
-        uint8_t sink[64];
-        while (xStreamBufferReceive(s_net.rx, sink, sizeof sink, 0) > 0) {}
+        serial_drain();
     } else {
         uint8_t mac[6];
         if (!device_mac(mac)) {
@@ -1050,14 +1062,25 @@ int usb_port_serial_write(const void *data, size_t len, uint32_t timeout_ms)
 int usb_port_serial_read(uint8_t *buf, size_t cap, uint32_t timeout_ms)
 {
     if (s_net.kind != USBP_SERIAL || !s_net.rx || !atomic_load(&s_net.running) || atomic_load(&s_net.gone)) return -1;
-    return (int)xStreamBufferReceive(s_net.rx, buf, cap, pdMS_TO_TICKS(timeout_ms));
+    if (!cap) return 0;
+    size_t n = 0;
+    uint8_t *item = xRingbufferReceiveUpTo(s_net.rx, &n, pdMS_TO_TICKS(timeout_ms), cap);
+    if (!item) return 0;
+    memcpy(buf, item, n);
+    vRingbufferReturnItem(s_net.rx, item);
+    /* The ring may wrap: take what follows the wrap point without waiting. */
+    size_t more = 0;
+    if (n < cap && (item = xRingbufferReceiveUpTo(s_net.rx, &more, 0, cap - n)) != NULL) {
+        memcpy(buf + n, item, more);
+        vRingbufferReturnItem(s_net.rx, item);
+        n += more;
+    }
+    return (int)n;
 }
 
 void usb_port_serial_flush(void)
 {
-    uint8_t sink[64];
-    if (!s_net.rx) return;
-    while (xStreamBufferReceive(s_net.rx, sink, sizeof sink, 0) > 0) {}
+    if (s_net.rx) serial_drain();
 }
 
 bool usb_port_net_alive(void)

@@ -28,6 +28,7 @@ PROGRAM = r'''
 #include <string.h>
 typedef int esp_err_t;
 #define ESP_OK 0
+#define EXT_RAM_BSS_ATTR   /* PSRAM placement: no effect on the host */
 #define ESP_FAIL -1
 #define NVS_READONLY 0
 #define NVS_NAMESPACE "tsr"
@@ -145,6 +146,7 @@ HTTP = r'''
 #include "json_guard.h"
 typedef int esp_err_t;
 #define ESP_OK 0
+#define EXT_RAM_BSS_ATTR   /* PSRAM placement: no effect on the host */
 #define ESP_FAIL -1
 #define ESP_ERR_INVALID_ARG 0x102
 #define AF_INET 2

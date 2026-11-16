@@ -1,0 +1,14 @@
+# The USB host driver marks its buffer fill and execute functions IRAM_ATTR so
+# that an IRAM interrupt can run them while the flash cache is off. The gateway
+# installs the USB interrupt without ESP_INTR_FLAG_IRAM (usb_port.c), and the
+# same interrupt already calls the driver's flash-resident functions, so these
+# can live in flash too: about 1.5 KB of internal RAM is not taken while USB
+# is off. The driver source stays as published (espressif/usb 1.6.0).
+[scheme:gateway_usb_iram_in_flash]
+entries:
+    iram -> flash_text
+
+[mapping:gateway_usb_hcd_flash]
+archive: libespressif__usb.a
+entries:
+    hcd_dwc (gateway_usb_iram_in_flash)

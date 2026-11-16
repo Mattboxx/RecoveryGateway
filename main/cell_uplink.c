@@ -13,6 +13,7 @@
 #include "driver/uart.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "sdkconfig.h"
@@ -287,8 +288,10 @@ typedef struct {uint32_t magic, version; cell_config_v1_t config; uint32_t check
 
 static SemaphoreHandle_t s_lock;
 static StaticSemaphore_t s_lock_storage;
-static cell_config_t s_saved, s_running;
-static cell_status_t s_status;
+/* Plain data under s_lock, read by tasks only: PSRAM keeps it out of
+ * internal RAM (the 40 KB floor) whether or not the uplink is used. */
+EXT_RAM_BSS_ATTR static cell_config_t s_saved, s_running;
+EXT_RAM_BSS_ATTR static cell_status_t s_status;
 static atomic_bool s_has_ip;
 static atomic_bool s_selected_cell;
 static atomic_bool s_link_dead __attribute__((unused));   /* PPP builds only */

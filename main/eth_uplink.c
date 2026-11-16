@@ -13,6 +13,7 @@
 #include "netif_hooks.h"
 #include "portmap.h"
 #include "esp_event.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -112,8 +113,10 @@ typedef struct {uint32_t magic, version; eth_config_v1_t config; uint32_t checks
 
 static SemaphoreHandle_t s_lock;
 static StaticSemaphore_t s_lock_storage;
-static eth_config_t s_saved, s_running;
-static eth_status_t s_status;
+/* Plain data under s_lock, read by tasks only: PSRAM keeps it out of
+ * internal RAM (the 40 KB floor) whether or not the uplink is used. */
+EXT_RAM_BSS_ATTR static eth_config_t s_saved, s_running;
+EXT_RAM_BSS_ATTR static eth_status_t s_status;
 static atomic_bool s_link, s_has_ip;
 static struct netif *s_lwip;           /* read in TCP/IP context only after start */
 static eth_selector_t s_selector;      /* TCP/IP context only */

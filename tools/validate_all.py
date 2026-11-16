@@ -120,7 +120,10 @@ def main():
         pio=shutil.which('platformio') or str(Path.home()/'.platformio/penv/Scripts/platformio.exe')
         env.setdefault('PLATFORMIO_BUILD_DIR',str(Path(os.environ.get('TEMP','/tmp'))/'mattboxx-esp32-build-0114'))
         run('firmware-build',[pio,'run','-e','esp32-s3'],900)
-        if results[-1]['status']=='PASS':run('image-provenance',[sys.executable,'tools/check_image_provenance.py',str(Path(env['PLATFORMIO_BUILD_DIR'])/'esp32-s3')])
+        if results[-1]['status']=='PASS':
+            out=str(Path(env['PLATFORMIO_BUILD_DIR'])/'esp32-s3')
+            run('image-provenance',[sys.executable,'tools/check_image_provenance.py',out])
+            run('usb-ram-placement',[sys.executable,'tools/check_usb_ram_placement.py',out])
     selected=args.only.split(',') if args.only else DRIVERS
     if any(name not in DRIVERS for name in selected):parser.error('Unknown offline driver')
     if {'first_boot','password_crypto'}.intersection(selected) and env.get('MBEDTLS_DIR'):

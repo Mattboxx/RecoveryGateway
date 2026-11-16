@@ -141,7 +141,7 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
                                   esp_eth esp_driver_spi esp_driver_gpio esp_driver_uart
                                   esp_driver_tsens
                     INCLUDE_DIRS "."
-                    LDFRAGMENTS "freertos_queue_iram.lf")
+                    LDFRAGMENTS "freertos_queue_iram.lf" "usb_flash.lf")
 
 # Phase 1.9k: wrap ip_napt_forward to skip NAPT for tailnet CGNAT
 # (100.64/10) destinations. Otherwise NAPT rewrites the AP-client
