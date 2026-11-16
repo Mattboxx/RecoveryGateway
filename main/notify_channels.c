@@ -677,8 +677,22 @@ EXT_RAM_BSS_ATTR static uint8_t s_mail_level = NOTIFY_PROBLEMS;
 
 static uint8_t channels_locked(void) {return (s_cfg.tg_enabled ? CH_TG : 0) | (s_cfg.mail_enabled ? CH_MAIL : 0);}
 
+/* A Wi-Fi station drop is a cause, not an outage: when the uplink stays down
+ * the connectivity episode below reports it after its grace period, and short
+ * drops (a router pausing its beacons) stay in local history. Sent only to
+ * channels that asked for all events. */
+static bool station_drop(unsigned kind, unsigned level, const char *text)
+{
+    static const char base[] = "Wi-Fi station disconnected";
+    return kind == HIST_EV_UPLINK && level == HIST_WARN && text &&
+           !strncmp(text, base, sizeof base - 1) && (text[sizeof base - 1] == '\0' || text[sizeof base - 1] == ' ');
+}
+
 static uint8_t wanted_channels_locked(unsigned kind, unsigned level, const char *text)
 {
+    if (station_drop(kind, level, text))
+        return (s_cfg.tg_enabled && s_cfg.level == NOTIFY_ALL ? CH_TG : 0) |
+               (s_cfg.mail_enabled && s_mail_level == NOTIFY_ALL ? CH_MAIL : 0);
     /* Normal starts are independently selectable. Crash/WDT/brownout starts
      * remain errors, so opting out here cannot silence the crash path. */
     if (kind == HIST_EV_BOOT && level == HIST_INFO) {

@@ -421,6 +421,9 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     cJSON_AddNumberToObject(sta, "bytes_in",  (double)netif_hooks_get_sta_bytes_in());
     cJSON_AddNumberToObject(sta, "bytes_out", (double)netif_hooks_get_sta_bytes_out());
+    uint16_t beacon_timeout = 0;
+    if (esp_wifi_get_inactive_time(WIFI_IF_STA, &beacon_timeout) == ESP_OK)
+        cJSON_AddNumberToObject(sta, "beacon_timeout_s", beacon_timeout);   /* as the driver holds it */
     {
         char lan[LAN_NAME_MAX + 1];
         lan_name_active(lan, sizeof lan);

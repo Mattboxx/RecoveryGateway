@@ -1300,6 +1300,17 @@ void app_main(void)
      * sustained LAN/AP-to-Tailnet throughput at the cost of higher power
      * consumption. A saved wifi_ps setting can opt into modem sleep. */
     ESP_ERROR_CHECK(wifi_power_save_init());
+    /* Beacon timeout of the uplink station. The driver drops the association
+     * after 6 s without a beacon. On the owner's gateway (2026-11-13..16, also
+     * with 3.0.24) that happened every ~12 h 06 min with reason 200 while the
+     * router answered again within ~3 s: a periodic pause of the router's
+     * beacons (likely its channel scan) that the other clients ride through.
+     * Each drop cost a DHCP round, a Tailnet control reconnect and a warning.
+     * 15 s rides such pauses through; a router that is really gone is noticed
+     * 9 s later, and a deauthentication still ends the association at once. */
+    esp_err_t beacon_err = esp_wifi_set_inactive_time(WIFI_IF_STA, WIFI_STA_BEACON_TIMEOUT_S);
+    if (beacon_err != ESP_OK)
+        ESP_LOGW(TAG_STA, "beacon timeout %d s not set: %s", WIFI_STA_BEACON_TIMEOUT_S, esp_err_to_name(beacon_err));
 
 
     /* Optional TX-power override. NVS "tx_pwr" is a u8 in 0.25 dBm

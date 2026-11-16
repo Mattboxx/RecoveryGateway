@@ -62,6 +62,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Short Wi-Fi drops about twice a day** ("Wi-Fi station disconnected
+  (reason 200)", also with 3.0.24). The router paused its beacons every
+  ~12 h 06 min and the gateway gave up after 6 s, then repeated DHCP and the
+  Tailnet control connection. It now waits 15 s for beacons (`/api/status`
+  `sta.beacon_timeout_s`), so such pauses pass without a drop; a router that
+  is really gone is noticed 9 s later.
+- With notifications on *Problems*, a Wi-Fi station drop is no longer sent by
+  itself: an uplink that stays down is still reported after the grace period
+  ("Internet uplink lost"), and *All events* still sends every drop. The drop
+  stays in the local event history.
 - Validate gateway Wi-Fi names and passwords before saving. A 32-byte network
   name now keeps its final byte.
 - Restore encrypted Wi-Fi credentials with the matching access-point mode.

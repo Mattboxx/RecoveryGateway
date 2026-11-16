@@ -13,6 +13,10 @@
 
 #define WIFI_USB_STATIC_RX 16
 
+/* Seconds without a beacon before the uplink station gives up (driver default
+ * 6; see main.c). Not related to USB; kept with the other Wi-Fi start values. */
+#define WIFI_STA_BEACON_TIMEOUT_S 15
+
 /* Works on any struct with the esp_wifi_init fields static_rx_buf_num and
  * rx_ba_win (wifi_init_config_t). True when the configuration was reduced. */
 #define wifi_lean_rx_for_usb(usb, cfg) wifi_lean_rx_apply((usb), &(cfg)->static_rx_buf_num, &(cfg)->rx_ba_win)

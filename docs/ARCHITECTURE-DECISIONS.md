@@ -2,6 +2,26 @@
 
 Decisions are explicit, revisable with evidence and never remove approved scope.
 
+## ADR-037 — The uplink station waits 15 s for beacons (2026-11-16)
+
+Evidence (owner's board A, persisted event history 2026-11-13..16, 3.0.24 and
+3.0.25 betas): "Wi-Fi station disconnected (reason 200)" (beacon timeout) at
+18:41, 18:59, 07:05, 19:11 and 07:17, i.e. every ~12 h 06 min, independent of
+the ESP's boot time (2 h and 1 h after a restart), RSSI -50..-62 dBm, power
+save off, one BSSID for the SSID. The station had an address again ~3 s after
+the event, so the router was back almost at once: a periodic pause of its
+beacons, most likely its automatic channel scan. The driver's default gives up
+after 6 s; each drop then cost DHCP, a Tailnet control reconnect (code 5/113)
+and a Telegram warning. Decision: `esp_wifi_set_inactive_time(WIFI_IF_STA, 15)`
+after `esp_wifi_start()`, reported as `/api/status` `sta.beacon_timeout_s`.
+Cost: a router that is really gone is noticed 9 s later (a deauthentication
+still ends the association at once). Separately, with notifications on
+*Problems* a station drop is no longer sent by itself: the connectivity
+episode with its grace period reports an uplink that stays down. Validation:
+watch the next expected pause (~19:23 on 2026-11-16) on board A; if drops
+continue with longer pauses, raise the value only with evidence, or fix the
+router's channel.
+
 ## ADR-036 — One USB port module, an in-house ECM/NCM/RNDIS path (2026-11-15)
 
 The owner asked for USB modems and sticks on the cellular uplink, then USB

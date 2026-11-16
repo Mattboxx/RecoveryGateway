@@ -87,7 +87,9 @@ with tempfile.TemporaryDirectory(prefix='index-variants-') as d:
     # Network page and the touch top bar (about 3.1 KB); then from 174000 for
     # the pins/USB choice of the cellular and Ethernet uplinks in setup and on
     # the Network page, with their device lists (about 2.4 KB; owner: clarity
-    # before the budget); the 3584 KiB app slots keep more than 1 MiB free.
-    assert page_gz < 176000, page_gz
+    # before the budget); then from 176000 for the USB power warnings and the
+    # titled pins/USB step in setup (about 1.1 KB, owner 2026-11-16: explain
+    # power clearly); the 3584 KiB app slots keep more than 1 MiB free.
+    assert page_gz < 178500, page_gz
 print(f'PASS: actual page generator: page with {len(langs)} languages as separate scripts ({page_gz} gzip bytes), '
       f'English-only page without them and otherwise identical, C arrays decode to the page and scripts (host)')
