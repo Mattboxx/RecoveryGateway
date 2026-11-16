@@ -24,7 +24,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Both are off by default and cost no task, heap or USB host stack while off,
   and since beta.7 no internal RAM either: the USB driver's transfer code runs
   from flash and USB, cellular and Ethernet state is kept in PSRAM, so 3.0.25
-  leaves about 0.4 KB more internal RAM free than 3.0.24;
+  leaves about 0.6 KB more internal RAM free than 3.0.24;
   the USB port becomes a USB host only when one of them is enabled with its
   USB connection. The USB connection always leaves 40 KB of internal RAM to
   the rest of the gateway; if that is not possible, the card says how much is

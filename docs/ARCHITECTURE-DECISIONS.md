@@ -46,7 +46,8 @@ buffer already linked by 3.0.24, and plain state (`s_saved`, `s_running`,
 spinlocks stay internal (no atomics in PSRAM on the ESP32-S3), as does
 `xTimerGenericCommand` (106 B), which the driver's `usb_host.c` uses and
 FreeRTOS keeps in IRAM. Result: the beta.7 heap starts 416 B lower than 3.0.24,
-so it leaves more internal RAM than 3.0.24; `tools/check_usb_ram_placement.py`
+so it leaves more internal RAM than 3.0.24 (measured on board A with USB off:
+51443 B free against 50823 B); `tools/check_usb_ram_placement.py`
 checks the placement in every `validate_all.py --build`. When enabled: two
 tasks with PSRAM stacks and the USB transfers, which must be internal DMA RAM
 on the ESP32-S3 (serial session about 4 KB, network session 6-8 KB). Every
