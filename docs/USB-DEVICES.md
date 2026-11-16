@@ -167,6 +167,7 @@ for testing, not tested results yet:
 | Use | Device | Why |
 |---|---|---|
 | Ethernet over USB | **TP-Link UE300** or another USB-A adapter with a **Realtek RTL8153** chip | its standard CDC-ECM configuration is selected automatically |
+| Ethernet over USB, also for a computer | a **USB-C 2.5 Gbit/s** adapter with a **Realtek RTL8156BG** chip (for example Cudy UE25C), plus a passive **USB-A (male) to USB-C (female)** adapter for the Y-cable | 2.5 Gbit/s on a computer; on the gateway about 10 Mbit/s. Whether a USB 3 adapter works on the full-speed port is part of the test |
 | Mobile network, 4G stick | **Huawei E3372h-320** (HiLink) | starts as a CD-ROM, is switched to network mode automatically, then connects by itself |
 | Mobile network, AT modem | **SIMCom SIM7600E-H / SIM7600G-H USB dongle** | uses the gateway's AT/PPP path with SIM PIN and APN |
 | Power | **USB-C OTG Y-cable with a power input** and a **5 V 3 A charger** | the board does not supply 5 V on its USB port |
