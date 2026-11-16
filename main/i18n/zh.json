@@ -2276,5 +2276,17 @@
  "connection error": "连接错误",
  "unknown error": "未知错误",
  "Rebooting…": "正在重启…",
- "Reloading…": "正在重新加载…"
+ "Reloading…": "正在重新加载…",
+ "Power the USB device correctly": "正确为 USB 设备供电",
+ "The board does not supply 5 V on its USB port: without its own power the device stays off.": "开发板的 USB 接口不提供 5 V：没有独立供电，设备不会启动。",
+ "Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).": "最简单：带供电口的 USB-C OTG Y 型线，配 5 V 充电器（调制解调器或 4G 上网棒至少 2.5 A，以太网适配器或手机 1 A）。",
+ "Or the device's own 5 V supply, with its ground connected to the board's ground.": "或者使用设备自带的 5 V 电源，并将其地线与开发板地线相连。",
+ "Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.": "短接开发板的 USB-OTG 焊盘仅适合专业人士：短接期间切勿将该接口连接电脑或充电器。",
+ "LTE modems draw up to 2 A in bursts: a computer's USB port or a weak charger makes the modem reset or the gateway restart (reset reason BROWNOUT).": "LTE 调制解调器峰值电流可达 2 A：电脑的 USB 接口或功率不足的充电器会导致调制解调器或网关重启（重启原因 BROWNOUT）。",
+ "While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.": "启用 USB 连接时，网关的 Wi-Fi 使用 16 个接收缓冲区而不是 24 个，为设备留出内部 RAM：Wi-Fi 突发流量（例如通过网关接入点的测速）可能更慢或丢包更多。使用引脚连接时没有任何变化。",
+ "USB connection and power guide": "USB 连接与供电指南",
+ "How is Ethernet connected?": "以太网如何连接？",
+ "Choose the technology you have: a W5500 module wired to the pins, or an adapter or phone on the USB port.": "选择你使用的方式：接在引脚上的 W5500 模块，或接在 USB 接口上的适配器或手机。",
+ "How is the modem connected?": "调制解调器如何连接？",
+ "Choose the technology you have: a modem board wired to the pins, or a USB modem or 4G stick on the USB port.": "选择你使用的方式：接在引脚上的调制解调器板，或接在 USB 接口上的 USB 调制解调器或 4G 上网棒。"
 }

@@ -2277,5 +2277,17 @@
  "connection error": "errore di connessione",
  "unknown error": "errore sconosciuto",
  "Rebooting…": "Riavvio in corso…",
- "Reloading…": "Ricaricamento…"
+ "Reloading…": "Ricaricamento…",
+ "Power the USB device correctly": "Alimenta correttamente il dispositivo USB",
+ "The board does not supply 5 V on its USB port: without its own power the device stays off.": "La scheda non fornisce 5 V sulla sua porta USB: senza un'alimentazione propria il dispositivo resta spento.",
+ "Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).": "Il modo più semplice: un cavo OTG USB-C a Y alimentato, con un caricatore da 5 V (almeno 2,5 A per un modem o una chiavetta 4G, 1 A per un adattatore Ethernet o un telefono).",
+ "Or the device's own 5 V supply, with its ground connected to the board's ground.": "Oppure l'alimentazione da 5 V propria del dispositivo, con la massa collegata alla massa della scheda.",
+ "Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.": "Ponticellare il pad USB-OTG della scheda è solo per esperti: non collegare mai quella porta a un computer o a un caricatore mentre è ponticellato.",
+ "LTE modems draw up to 2 A in bursts: a computer's USB port or a weak charger makes the modem reset or the gateway restart (reset reason BROWNOUT).": "I modem LTE assorbono fino a 2 A a picchi: la porta USB di un computer o un caricatore debole fanno riavviare il modem o il gateway (motivo del riavvio BROWNOUT).",
+ "While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.": "Mentre una connessione USB è attiva, il Wi-Fi del gateway usa 16 buffer di ricezione invece di 24 per lasciare RAM interna al dispositivo: i picchi di traffico Wi-Fi, come uno speed test attraverso l'access point del gateway, possono essere più lenti o perdere più pacchetti. Con i pin non cambia nulla.",
+ "USB connection and power guide": "Guida al collegamento e all'alimentazione USB",
+ "How is Ethernet connected?": "Come è collegato l'Ethernet?",
+ "Choose the technology you have: a W5500 module wired to the pins, or an adapter or phone on the USB port.": "Scegli la tecnologia che hai: un modulo W5500 collegato ai pin, oppure un adattatore o un telefono sulla porta USB.",
+ "How is the modem connected?": "Come è collegato il modem?",
+ "Choose the technology you have: a modem board wired to the pins, or a USB modem or 4G stick on the USB port.": "Scegli la tecnologia che hai: una scheda modem collegata ai pin, oppure un modem USB o una chiavetta 4G sulla porta USB."
 }

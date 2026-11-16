@@ -48,6 +48,10 @@ port; a hub (powered or not) is not supported.
 
 ## 3. Power: the device needs 5 V on its USB connector
 
+> **Get this right before plugging anything in.** A modem without enough
+> current resets in a loop or restarts the gateway; two 5 V sources connected
+> together can damage the board, the computer or the charger.
+
 A USB device only starts when it sees 5 V on the VBUS pin of its connector.
 **The board does not supply 5 V on its USB port by default**, so you must
 provide it. How much current the device needs:
@@ -128,6 +132,49 @@ otherwise.
 - Long, thin USB cables for modems: they drop voltage at 2 A; keep the modem
   cable short.
 
+## Wi-Fi while a USB connection is on
+
+The USB port's transfers must use the chip's **internal RAM** (the ESP32-S3
+USB controller cannot reach PSRAM), the same RAM where the Wi-Fi keeps its
+receive buffers. So, **only while the Cellular or Ethernet uplink is set to the
+USB port**, the gateway starts its Wi-Fi with **16 receive buffers instead of
+24**. That frees about 12.8 KB of internal RAM for the USB device. The System
+page and `/api/status` show it as `wifi_rx_lean_for_usb: true`.
+
+What it can change:
+
+- **Bursts of incoming Wi-Fi traffic** fill 16 buffers sooner. When they are
+  full, further frames are dropped and TCP has to resend them: a short drop in
+  speed, slightly higher latency peaks.
+- It shows most with **speed tests or large uploads from phones or laptops
+  connected to the gateway's own access point**, with several devices sending
+  at once on that access point, and with a weak Wi-Fi signal (more resent
+  frames).
+- Ordinary use (Web UI, MQTT, notifications, Tailnet, ping) was unchanged in
+  the measurements on a fully configured gateway.
+- Over USB the uplink itself is limited to about 10 Mbit/s (USB full speed), so
+  on a USB uplink the Wi-Fi buffers are rarely the narrowest point.
+
+With the pins (W5500, UART modem), or with both uplinks off, the Wi-Fi keeps
+24 buffers exactly as before. Setting the uplink back to the pins and
+restarting restores them.
+
+## Suggested devices for a first test
+
+These match the firmware's tables and are easy to find. They are suggestions
+for testing, not tested results yet:
+
+| Use | Device | Why |
+|---|---|---|
+| Ethernet over USB | **TP-Link UE300** or another USB-A adapter with a **Realtek RTL8153** chip | its standard CDC-ECM configuration is selected automatically |
+| Mobile network, 4G stick | **Huawei E3372h-320** (HiLink) | starts as a CD-ROM, is switched to network mode automatically, then connects by itself |
+| Mobile network, AT modem | **SIMCom SIM7600E-H / SIM7600G-H USB dongle** | uses the gateway's AT/PPP path with SIM PIN and APN |
+| Power | **USB-C OTG Y-cable with a power input** and a **5 V 3 A charger** | the board does not supply 5 V on its USB port |
+
+Avoid adapters with **ASIX AX88179/AX88772** or **Microchip LAN78xx** chips and
+modems that offer only MBIM or QMI. Listings often hide the chip: look for
+"RTL8153" in the description.
+
 ## 4. Wiring a bare module directly (advanced)
 
 For a modem module without a USB socket, wire its USB pins to a USB-A socket
@@ -170,3 +217,4 @@ the pins option, save and restart.
 | "not supported (vendor-only chip …)" | that Ethernet adapter uses a vendor protocol (ASIX, Microchip): use an RTL8152/RTL8153 or CDC-ECM/NCM adapter |
 | A phone is not seen | use an OTG adapter, enable USB tethering after plugging, unlock the phone |
 | About 10 Mbit/s at most | expected: the ESP32-S3 USB port is full speed (12 Mbit/s) |
+| Wi-Fi speed tests through the access point slower than before | expected while USB is on: fewer Wi-Fi receive buffers (see *Wi-Fi while a USB connection is on*) |

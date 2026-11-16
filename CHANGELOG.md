@@ -39,6 +39,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Only while a USB connection is enabled, the Wi-Fi keeps 16 static receive
   buffers instead of 24, giving about 12.8 KB of internal RAM to the USB
   device (Wi-Fi traffic peaks a little slower). Without USB nothing changes.
+- When USB is chosen for Ethernet or the mobile network, first-boot setup and
+  the Network page show a power warning: the board does not supply 5 V on its
+  USB port, how to power the device (powered OTG Y-cable, its own supply, the
+  USB-OTG pad for experts only), the 2 A peaks of LTE modems and what the
+  fewer Wi-Fi receive buffers mean, with a link to the USB guide. In setup, a
+  titled step separates the choice of uplink from the choice of pins or USB.
+- USB connection and power guide on the website (*USB modems, sticks and
+  Ethernet adapters*) and in the README, with suggested devices for a first
+  test.
 
 ### Changed
 

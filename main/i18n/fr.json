@@ -2229,5 +2229,17 @@
  "connection error": "erreur de connexion",
  "unknown error": "erreur inconnue",
  "Rebooting…": "Redémarrage…",
- "Reloading…": "Rechargement…"
+ "Reloading…": "Rechargement…",
+ "Power the USB device correctly": "Alimenter correctement l'appareil USB",
+ "The board does not supply 5 V on its USB port: without its own power the device stays off.": "La carte ne fournit pas de 5 V sur son port USB : sans sa propre alimentation, l'appareil reste éteint.",
+ "Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).": "Le plus simple : un câble OTG USB-C en Y alimenté, avec un chargeur 5 V (au moins 2,5 A pour un modem ou une clé 4G, 1 A pour un adaptateur Ethernet ou un téléphone).",
+ "Or the device's own 5 V supply, with its ground connected to the board's ground.": "Ou l'alimentation 5 V propre de l'appareil, avec sa masse reliée à la masse de la carte.",
+ "Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.": "Ponter le pad USB-OTG de la carte est réservé aux experts : ne branchez jamais ce port à un ordinateur ou à un chargeur tant qu'il est ponté.",
+ "LTE modems draw up to 2 A in bursts: a computer's USB port or a weak charger makes the modem reset or the gateway restart (reset reason BROWNOUT).": "Les modems LTE consomment jusqu'à 2 A en pointe : le port USB d'un ordinateur ou un chargeur faible fait redémarrer le modem ou la passerelle (raison du redémarrage BROWNOUT).",
+ "While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.": "Tant qu'une connexion USB est active, le Wi-Fi de la passerelle garde 16 tampons de réception au lieu de 24 pour laisser de la RAM interne à l'appareil : les pointes de trafic Wi-Fi, comme un test de débit via le point d'accès de la passerelle, peuvent être plus lentes ou perdre plus de paquets. Avec les broches, rien ne change.",
+ "USB connection and power guide": "Guide de branchement et d'alimentation USB",
+ "How is Ethernet connected?": "Comment l'Ethernet est-il branché ?",
+ "Choose the technology you have: a W5500 module wired to the pins, or an adapter or phone on the USB port.": "Choisissez la technologie dont vous disposez : un module W5500 relié aux broches, ou un adaptateur ou un téléphone sur le port USB.",
+ "How is the modem connected?": "Comment le modem est-il branché ?",
+ "Choose the technology you have: a modem board wired to the pins, or a USB modem or 4G stick on the USB port.": "Choisissez la technologie dont vous disposez : une carte modem reliée aux broches, ou un modem USB ou une clé 4G sur le port USB."
 }

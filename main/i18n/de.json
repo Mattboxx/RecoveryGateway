@@ -2229,5 +2229,17 @@
  "connection error": "Verbindungsfehler",
  "unknown error": "unbekannter Fehler",
  "Rebooting…": "Neustart…",
- "Reloading…": "Wird neu geladen…"
+ "Reloading…": "Wird neu geladen…",
+ "Power the USB device correctly": "USB-Gerät richtig mit Strom versorgen",
+ "The board does not supply 5 V on its USB port: without its own power the device stays off.": "Die Platine liefert an ihrem USB-Anschluss keine 5 V: ohne eigene Stromversorgung bleibt das Gerät aus.",
+ "Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).": "Am einfachsten: ein USB-C-OTG-Y-Kabel mit Stromeingang und einem 5-V-Netzteil (mindestens 2,5 A für ein Modem oder einen 4G-Stick, 1 A für einen Ethernet-Adapter oder ein Telefon).",
+ "Or the device's own 5 V supply, with its ground connected to the board's ground.": "Oder die eigene 5-V-Versorgung des Geräts, mit der Masse an der Masse der Platine.",
+ "Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.": "Das Brücken des USB-OTG-Pads der Platine ist nur für Fachleute: diesen Anschluss nie mit einem Computer oder Netzteil verbinden, solange er gebrückt ist.",
+ "LTE modems draw up to 2 A in bursts: a computer's USB port or a weak charger makes the modem reset or the gateway restart (reset reason BROWNOUT).": "LTE-Modems ziehen in Spitzen bis zu 2 A: ein USB-Anschluss eines Computers oder ein schwaches Netzteil lässt das Modem oder das Gateway neu starten (Neustartgrund BROWNOUT).",
+ "While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.": "Solange eine USB-Verbindung aktiv ist, nutzt das WLAN des Gateways 16 statt 24 Empfangspuffer, um internen RAM für das Gerät freizuhalten: WLAN-Verkehrsspitzen, etwa ein Speedtest über den Access Point des Gateways, können langsamer sein oder mehr Pakete verlieren. Mit den Pins ändert sich nichts.",
+ "USB connection and power guide": "Anleitung zu USB-Anschluss und Stromversorgung",
+ "How is Ethernet connected?": "Wie ist Ethernet angeschlossen?",
+ "Choose the technology you have: a W5500 module wired to the pins, or an adapter or phone on the USB port.": "Wähle die Technik, die du hast: ein W5500-Modul an den Pins oder einen Adapter bzw. ein Telefon am USB-Anschluss.",
+ "How is the modem connected?": "Wie ist das Modem angeschlossen?",
+ "Choose the technology you have: a modem board wired to the pins, or a USB modem or 4G stick on the USB port.": "Wähle die Technik, die du hast: eine Modemplatine an den Pins oder ein USB-Modem bzw. einen 4G-Stick am USB-Anschluss."
 }

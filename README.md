@@ -119,6 +119,33 @@ quad flash**:
 
 Details and community reports: [Hardware](docs/HARDWARE.md).
 
+### USB modems, 4G sticks and Ethernet adapters (beta, from 3.0.25)
+
+Besides a W5500 module or a modem wired to the pins, the gateway can use one
+USB device on the board's **USB** port (not the COM port): a USB LTE modem or
+4G stick with a SIM, a USB Ethernet adapter (Realtek RTL8152/8153/8156,
+CDC-ECM/NCM) or Android USB tethering. Choose *USB* in first-boot setup or on
+the Network page, save, restart, then plug the device. Not yet tested with real
+devices.
+
+- **The board does not supply 5 V on its USB port.** Use a powered USB-C OTG
+  Y-cable with a 5 V charger (at least 2.5 A for a modem or stick), or the
+  device's own 5 V supply with grounds connected. LTE modems draw **up to 2 A**
+  in bursts: a computer's USB port is not enough (modem resets, reset reason
+  BROWNOUT).
+- Never connect two 5 V sources together: if you bridge the board's USB-OTG
+  pad, never plug that port into a computer or charger.
+- After the restart the USB port is a USB host: flash, logs and power go
+  through the COM port. One device, no hubs, about 10 Mbit/s at most.
+- **While a USB connection is on, the Wi-Fi keeps 16 receive buffers instead of
+  24** to leave internal RAM for the device. Bursts of Wi-Fi traffic, such as
+  a speed test from a phone on the gateway's access point, can be slower or
+  lose more packets; ordinary use was unchanged in measurements. With the pins
+  or with these uplinks off, nothing changes.
+
+Full guide: [USB devices](https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/)
+· [docs/USB-DEVICES.md](docs/USB-DEVICES.md).
+
 ## Documentation
 
 | Area | Start here |

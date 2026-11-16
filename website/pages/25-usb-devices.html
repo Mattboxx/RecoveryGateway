@@ -1,0 +1,110 @@
+<!--
+slug: usb-devices/
+title: USB modems, sticks and Ethernet adapters
+description: Connect a USB LTE modem, 4G stick, USB Ethernet adapter or phone to ESP32 Tailnet Gateway: which port, safe power, and what changes on Wi-Fi.
+group: Guides
+order: 25
+-->
+<h1>USB modems, sticks and Ethernet adapters</h1>
+<p>From firmware 3.0.25 the gateway can use <strong>one USB device</strong> on the board's own USB port: a USB LTE modem or 4G stick for the <strong>mobile network (SIM)</strong> uplink, or a USB Ethernet adapter or Android USB tethering for the <strong>Ethernet</strong> uplink. The W5500 module and the modem wired to the pins keep working as before.</p>
+<p class="note"><strong>Experimental.</strong> These USB connections have not been tested with real devices yet. If you try one, report your board, cable and device: the Network page shows the device as <code>vendor:product</code>.</p>
+
+<h2 id="port">1. Which port</h2>
+<p>Most ESP32-S3 N8R8/N16R8 boards have two USB-C sockets:</p>
+<table>
+  <thead><tr><th>Label (varies)</th><th>What it is</th><th>Use it for</th></tr></thead>
+  <tbody>
+    <tr><td><strong>COM</strong>, UART, CH343, CP2102</td><td>a USB-serial chip</td><td>flashing, logs, the browser installer, powering the board</td></tr>
+    <tr><td><strong>USB</strong>, OTG, ESP32-S3</td><td>the chip's own USB (GPIO19/20)</td><td><strong>the USB device</strong></td></tr>
+  </tbody>
+</table>
+<p>When a USB connection is enabled, the firmware turns the <strong>USB</strong> port into a USB host at boot. From then on, flash, read logs and power the board through the <strong>COM</strong> port or the 5V/GND pins. A computer plugged into the USB port no longer sees the board.</p>
+<ul>
+  <li><strong>USB-A devices</strong> (most sticks and adapters): a short USB-C (male) to USB-A (female) <strong>OTG adapter</strong>.</li>
+  <li><strong>USB-C devices and phones</strong>: the same OTG adapter plus the device's own USB-A to USB-C cable. A plain USB-C to USB-C cable usually does not work.</li>
+  <li><strong>One device at a time, no USB hubs.</strong></li>
+</ul>
+
+<h2 id="power">2. Power: get this right first</h2>
+<p class="note"><strong>The board does not supply 5 V on its USB port.</strong> Without its own power the device stays off. A modem without enough current resets in a loop or restarts the gateway; two 5 V sources connected together can damage the board, a computer or a charger.</p>
+<table>
+  <thead><tr><th>Device</th><th>Typical current</th></tr></thead>
+  <tbody>
+    <tr><td>USB Ethernet adapter</td><td>150–350 mA</td></tr>
+    <tr><td>Phone (USB tethering)</td><td>0–500 mA or more (it may try to charge)</td></tr>
+    <tr><td>4G stick</td><td>300–800 mA, peaks above 1 A</td></tr>
+    <tr><td>LTE modem (SIM7600, EC25 …)</td><td><strong>peaks up to 2 A</strong></td></tr>
+  </tbody>
+</table>
+<p>A computer's USB port gives 500–900 mA: <strong>not enough for a modem or 4G stick</strong>. Too little current shows up as modem resets, failed data calls or the gateway restarting with reset reason <code>BROWNOUT</code> (System page).</p>
+
+<h3 id="power-y-cable">A. Powered OTG Y-cable (recommended, no soldering)</h3>
+<pre>5 V charger (at least 2.5 A for a modem or stick, 1 A otherwise)
+        | power input
+        v
+ [ Y-cable ]-- USB-C plug --&gt; board's USB port (data + 5 V)
+ [         ]-- USB-A socket &lt;-- modem / stick / adapter / phone cable</pre>
+<ul>
+  <li>The cable must pass <strong>data</strong> to the USB-C plug and <strong>power</strong> to the USB-A socket. Charge-only splitters do not work.</li>
+  <li>The charger powers the device and usually the board too. The COM port can stay connected to a computer for logs.</li>
+</ul>
+
+<h3 id="power-own-supply">B. The device's own 5 V supply</h3>
+<ul>
+  <li>Power the modem board from a <strong>5 V supply able to deliver 2 A peaks</strong>.</li>
+  <li>Connect its USB D+, D− and GND to the board's USB port; the modem's USB VBUS must see 5 V from the same supply, or it never shows up on USB.</li>
+  <li><strong>Always connect the grounds</strong> of the supply, the modem and the board.</li>
+</ul>
+
+<h3 id="power-otg-pad">C. Bridging the board's USB-OTG pad (experts only)</h3>
+<p>Many boards have a solder jumper labelled <strong>USB-OTG</strong> that connects the board's 5 V to the USB port. Only bridge it if your board's documentation says so, if the board is powered by a 5 V supply strong enough for board and device together, and if you will <strong>never connect that USB port to a computer or charger while it is bridged</strong>. Leave the IN-OUT jumper as it is.</p>
+
+<h3 id="power-never">Never</h3>
+<ul>
+  <li>Power an LTE modem from the board's 3.3 V pin.</li>
+  <li>Use a USB hub to inject power (hubs are not supported).</li>
+  <li>Use long, thin cables for a modem: they drop voltage at 2 A.</li>
+</ul>
+
+<h2 id="wifi">3. Wi-Fi while a USB connection is on</h2>
+<p>The USB transfers must use the chip's internal RAM, the same RAM where the Wi-Fi keeps its receive buffers. So, <strong>only while the cellular or Ethernet uplink is set to the USB port</strong>, the Wi-Fi starts with <strong>16 receive buffers instead of 24</strong>, about 12.8 KB of internal RAM for the USB device.</p>
+<ul>
+  <li><strong>Bursts of incoming Wi-Fi traffic</strong> fill the buffers sooner; extra frames are dropped and TCP resends them: short speed dips and higher latency peaks.</li>
+  <li>It shows most with <strong>speed tests or large uploads from devices on the gateway's own access point</strong>, several devices sending at once, or a weak signal.</li>
+  <li>Ordinary use (Web UI, MQTT, notifications, Tailnet, ping) was unchanged in the measurements.</li>
+  <li>The USB uplink itself tops out at about <strong>10 Mbit/s</strong> (USB full speed), so it is usually the narrower point.</li>
+</ul>
+<p>With the pins, or with both uplinks off, the Wi-Fi keeps 24 buffers exactly as before. The System page and <code>/api/status</code> report it as <code>wifi_rx_lean_for_usb</code>.</p>
+
+<h2 id="setup">4. Setting it up</h2>
+<ol>
+  <li>In <strong>first-boot setup</strong> choose <em>Ethernet cable</em> or <em>Mobile network (SIM)</em> and then the USB option; on an installed gateway use <strong>Network → Ethernet</strong> or <strong>Network → Cellular</strong>, <em>How … is connected</em> → USB port. Save.</li>
+  <li>Restart the gateway.</li>
+  <li>Plug the device, powered as above. The card shows the device, the USB network type (RNDIS, CDC-ECM, CDC-NCM) or serial port in use, a mode switch of a stick that started as a CD-ROM, or why it cannot be used.</li>
+</ol>
+<p>Only one of the two uplinks can use the USB port. To go back, choose the pins option, save and restart.</p>
+
+<h2 id="devices">5. Devices</h2>
+<table>
+  <thead><tr><th></th><th>Ethernet over USB</th><th>Mobile network over USB</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Expected</th><td>Realtek RTL8152, RTL8153, RTL8156 adapters; CDC-ECM and CDC-NCM adapters and docks</td><td>SIMCom SIM7600; Quectel EC25, EG25-G, EC21, EG91, EG95, BG96; modems with a standard CDC-ACM port</td></tr>
+    <tr><th scope="row">Likely</th><td>Android USB tethering (RNDIS or NCM)</td><td>SIMCom A7670, SIM7070/7080; Quectel EC200, EG800; Huawei E3372h and E8372h HiLink, ZTE MF79U and MF833, Alcatel Link Key and other RNDIS/ECM/NCM sticks</td></tr>
+    <tr><th scope="row">Not supported</th><td>ASIX AX88179/AX88772, Microchip LAN78xx, iPhone tethering</td><td>modems with only MBIM or QMI and no AT port</td></tr>
+  </tbody>
+</table>
+<p><strong>For a first test</strong>: a TP-Link UE300 or another USB-A adapter with an RTL8153 chip; a Huawei E3372h-320 stick or a SIMCom SIM7600 USB dongle; a USB-C OTG Y-cable with a power input and a 5 V 3 A charger.</p>
+
+<h2 id="troubleshooting">6. Troubleshooting</h2>
+<table>
+  <thead><tr><th>What you see</th><th>Try</th></tr></thead>
+  <tbody>
+    <tr><td>No USB device on the USB port</td><td>the device has no 5 V, it is on the COM port, or a charge-only cable or adapter is in the way</td></tr>
+    <tr><td>The device appears and disappears</td><td>not enough current: stronger supply, shorter cable, or solution B</td></tr>
+    <tr><td>Gateway restarts, reset reason BROWNOUT</td><td>the modem draws from the board's supply: power it separately</td></tr>
+    <tr><td>Stick stays in storage mode</td><td>switch it once to modem mode on a computer and report its <code>vendor:product</code></td></tr>
+    <tr><td>Adapter "not supported (vendor-only chip)"</td><td>use an RTL8152/RTL8153 or a CDC-ECM/NCM adapter</td></tr>
+    <tr><td>Wi-Fi speed tests through the access point slower</td><td>expected while USB is on (section 3)</td></tr>
+  </tbody>
+</table>
+<p>Full wiring details, including a bare module wired to GPIO19/20: <a href="{{repo}}/blob/Main/docs/USB-DEVICES.md">docs/USB-DEVICES.md</a>.</p>

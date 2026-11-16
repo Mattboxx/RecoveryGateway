@@ -184,8 +184,18 @@ async function uplinkFlows(context) {
   ({ page, g } = await paired(context));
   await page.check('input[name="fb-up"][value="ethernet"]');
   assert.equal(await page.isChecked('input[name="fb-eth-conn"][value="spi"]'), true, 'pins stay the default');
+  assert.equal(await page.isVisible('#fb-eth-usb-power'), false, 'pins: no USB power warning');
   await page.check('input[name="fb-eth-conn"][value="usb"]');
   assert.equal(await page.isVisible('#fb-eth-wiring'), false, 'USB: no wiring to fill in');
+  assert.equal(await page.isVisible('#fb-eth-usb-power'), true, 'USB: power warning shown');
+  const ethPower = await page.textContent('#fb-eth-usb-power');
+  assert.match(ethPower, /does not supply 5 V/); assert.match(ethPower, /16 receive buffers instead of 24/); assert.doesNotMatch(ethPower, /2 A in bursts/);
+  const guide = '#fb-eth-usb-power a.usb-guide-link';
+  assert.equal(await page.getAttribute(guide, 'href'), 'https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/', 'a non-pre-release keeps the website guide');
+  await page.evaluate(() => window.setUsbGuideLinks('3.0.25-beta.8'));
+  assert.equal(await page.getAttribute(guide, 'href'), 'https://github.com/Mattboxx/esp32-tailnet-gateway/blob/v3.0.25-beta.8/docs/USB-DEVICES.md', 'a pre-release links to the guide of its own tag');
+  await page.evaluate(() => { window.setUsbGuideLinks('3.0.26'); window.setUsbGuideLinks('1.0.0-beta"><x'); window.setUsbGuideLinks(undefined); });
+  assert.match(await page.getAttribute(guide, 'href'), /blob\/v3\.0\.25-beta\.8\//, 'stable or malformed versions change nothing');
   await page.evaluate(() => { const c = document.getElementById('fb-eth-cs'); c.value = '11'; c.dispatchEvent(new Event('input')); });   /* hidden pins: not checked or sent */
   assert.equal(await page.isEnabled('#fb-next'), true);
   await page.click('#fb-next'); await page.waitForSelector('#fb-ts-later', { state: 'visible' });
@@ -203,11 +213,14 @@ async function uplinkFlows(context) {
   await page.check('input[name="fb-cell-conn"][value="usb"]');
   assert.equal(await page.isVisible('#fb-cell-wiring'), false);
   assert.equal(await page.isVisible('#fb-apn-usb-hint'), true); assert.equal(await page.isVisible('#fb-apn-hint'), false);
+  assert.equal(await page.isVisible('#fb-cell-usb-power'), true, 'USB modem: power warning shown');
+  assert.match(await page.textContent('#fb-cell-usb-power'), /up to 2 A in bursts/);
   await page.check('#fb-data-ack');
   assert.equal(await page.isEnabled('#fb-next'), true, 'over USB the APN is optional');
   await page.check('input[name="fb-cell-conn"][value="uart"]');
   assert.equal(await page.isEnabled('#fb-next'), false, 'wired modem: the APN is required again');
   assert.equal(await page.isVisible('#fb-cell-wiring'), true);
+  assert.equal(await page.isVisible('#fb-cell-usb-power'), false, 'wired modem: no USB power warning');
   await page.check('input[name="fb-cell-conn"][value="usb"]');
   await page.fill('#fb-apn', 'bad apn!');
   assert.equal(await page.isEnabled('#fb-next'), false, 'a given APN is still checked');

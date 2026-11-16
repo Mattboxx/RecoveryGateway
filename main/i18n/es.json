@@ -2276,5 +2276,17 @@
  "connection error": "error de conexión",
  "unknown error": "error desconocido",
  "Rebooting…": "Reiniciando…",
- "Reloading…": "Recargando…"
+ "Reloading…": "Recargando…",
+ "Power the USB device correctly": "Alimenta correctamente el dispositivo USB",
+ "The board does not supply 5 V on its USB port: without its own power the device stays off.": "La placa no suministra 5 V en su puerto USB: sin alimentación propia el dispositivo permanece apagado.",
+ "Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).": "Lo más sencillo: un cable OTG USB-C en Y con alimentación y un cargador de 5 V (al menos 2,5 A para un módem o un pincho 4G, 1 A para un adaptador Ethernet o un teléfono).",
+ "Or the device's own 5 V supply, with its ground connected to the board's ground.": "O la alimentación de 5 V propia del dispositivo, con su masa conectada a la masa de la placa.",
+ "Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.": "Puentear el pad USB-OTG de la placa es solo para expertos: nunca conectes ese puerto a un ordenador o a un cargador mientras esté puenteado.",
+ "LTE modems draw up to 2 A in bursts: a computer's USB port or a weak charger makes the modem reset or the gateway restart (reset reason BROWNOUT).": "Los módems LTE consumen hasta 2 A en picos: el puerto USB de un ordenador o un cargador débil hacen que el módem o la pasarela se reinicien (motivo de reinicio BROWNOUT).",
+ "While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.": "Mientras una conexión USB está activa, el Wi-Fi de la pasarela usa 16 búferes de recepción en lugar de 24 para dejar RAM interna al dispositivo: los picos de tráfico Wi-Fi, como un test de velocidad a través del punto de acceso de la pasarela, pueden ser más lentos o perder más paquetes. Con los pines no cambia nada.",
+ "USB connection and power guide": "Guía de conexión y alimentación USB",
+ "How is Ethernet connected?": "¿Cómo está conectado Ethernet?",
+ "Choose the technology you have: a W5500 module wired to the pins, or an adapter or phone on the USB port.": "Elige la tecnología que tienes: un módulo W5500 conectado a los pines, o un adaptador o un teléfono en el puerto USB.",
+ "How is the modem connected?": "¿Cómo está conectado el módem?",
+ "Choose the technology you have: a modem board wired to the pins, or a USB modem or 4G stick on the USB port.": "Elige la tecnología que tienes: una placa de módem conectada a los pines, o un módem USB o un pincho 4G en el puerto USB."
 }
