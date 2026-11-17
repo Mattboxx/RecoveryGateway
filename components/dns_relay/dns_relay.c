@@ -457,14 +457,14 @@ static bool dns_reply_matches(const uint8_t *r, int rlen, const uint8_t *q, int 
 /* Receive the upstream answer to q: only from the server it was sent to,
  * only a matching reply. Stray datagrams are discarded (bounded). Returns
  * the length, 0 when none arrived in time, -1 on a socket error. */
-static int upstream_recv(int up, uint8_t *rbuf, const uint8_t *q, int qlen, const struct sockaddr_in *server)
+static int upstream_recv(int up, uint8_t *rbuf, int cap, const uint8_t *q, int qlen, const struct sockaddr_in *server)
 {
-    /* rbuf holds DNS_RELAY_BUF_SIZE + 1 bytes: a longer answer is detected
-     * (lwIP cuts a datagram to the buffer) instead of being passed on cut. */
+    /* cap is one byte more than the largest answer passed on: a longer one is
+     * detected (lwIP cuts a datagram to the buffer), never passed on cut. */
     for (int stray = 0; stray <= DNS_RELAY_MAX_STRAY; stray++) {
         struct sockaddr_in from = {0};
         socklen_t from_len = sizeof from;
-        int rlen = recvfrom(up, rbuf, DNS_RELAY_BUF_SIZE + 1, 0, (struct sockaddr *)&from, &from_len);
+        int rlen = recvfrom(up, rbuf, (size_t)cap, 0, (struct sockaddr *)&from, &from_len);
         if (rlen <= 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
         if (from.sin_addr.s_addr == server->sin_addr.s_addr && from.sin_port == server->sin_port &&
             dns_reply_matches(rbuf, rlen, q, qlen))
@@ -534,6 +534,22 @@ static int tcp_connect(uint32_t upstream, int ms)
     return u;
 }
 
+/* The query over UDP with room for a large answer (most home routers answer
+ * DNS over UDP only). The answer's length, or 0: none, truncated (TC) or
+ * filling the buffer (possibly cut). */
+static int udp_ask(uint32_t upstream, uint8_t *q, int qlen, uint8_t *answer, int cap)
+{
+    int u = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (u < 0) return 0;
+    struct timeval to = {.tv_sec = 2, .tv_usec = 0};
+    setsockopt(u, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof to);
+    (void)dns_edns_clamp(q, qlen, (uint16_t)(cap - 1));
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(DNS_RELAY_PORT), .sin_addr.s_addr = upstream};
+    int rl = sendto(u, q, (size_t)qlen, 0, (struct sockaddr *)&a, sizeof a) == qlen ? upstream_recv(u, answer, cap, q, qlen, &a) : 0;
+    close(u);
+    return rl > 0 && rl < cap && !(answer[2] & 0x02) ? rl : 0;
+}
+
 /* Answers one query of an accepted TCP connection: tailnet names locally,
  * anything else through the same resolver choice as UDP, over TCP. Not
  * cached (TCP answers may exceed a cache slot). Closes the connection. */
@@ -558,12 +574,23 @@ static void tcp_serve(dns_work_t *w, uint8_t *answer)
     dns_relay_route_cb_t route = s_route_cb;
     uint32_t upstream = route ? route(w->q, qlen) : 0;
     if (!upstream) upstream = pick_upstream();
-    if (!upstream || (up = tcp_connect(upstream, DNS_TCP_UPSTREAM_MS)) < 0) goto done;
+    if (!upstream) goto done;
     st_misses++;
     uint8_t client_id[2] = {w->q[0], w->q[1]};
     uint32_t up_id = esp_random();
     w->q[0] = (uint8_t)(up_id >> 8);
     w->q[1] = (uint8_t)up_id;
+    /* UDP first with a 4 KB answer buffer (works with resolvers that refuse
+     * TCP, like many home routers); TCP to the resolver only when even that
+     * answer is truncated. */
+    rl = udp_ask(upstream, w->q, qlen, answer, DNS_TCP_MAX_ANSWER);
+    if (rl > 0) {
+        answer[0] = client_id[0];
+        answer[1] = client_id[1];
+        (void)tcp_write_msg(fd, answer, rl, deadline);
+        goto done;
+    }
+    if ((up = tcp_connect(upstream, DNS_TCP_UPSTREAM_MS)) < 0) goto done;
     if (!tcp_write_msg(up, w->q, qlen, deadline)) goto done;
     rl = tcp_read_msg(up, answer, DNS_TCP_MAX_ANSWER, deadline);
     if (rl < 12 || !dns_reply_matches(answer, rl, w->q, qlen)) goto done;
@@ -648,7 +675,7 @@ static void worker_task(void *arg)
             heap_caps_free(w);
             continue;
         }
-        int rlen = upstream_recv(up, rbuf, w->q, w->qlen, &up_addr);
+        int rlen = upstream_recv(up, rbuf, DNS_RELAY_BUF_SIZE + 1, w->q, w->qlen, &up_addr);
         if (rlen <= 0) {
             if (rlen < 0) { close(up); up = -1; }
             heap_caps_free(w);

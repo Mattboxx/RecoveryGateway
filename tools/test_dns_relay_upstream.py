@@ -27,6 +27,12 @@ cached under the new question. Checked with a scripted recvfrom():
 - DNS over TCP: length-prefixed messages read across partial segments,
   over-long or short lengths refused, a silent client bounded by the
   deadline, the reply written with its length prefix.
+- tcp_serve (actual): a query over TCP is asked upstream over UDP with a
+  4 KB answer buffer first (home routers often refuse DNS over TCP, found on
+  board A with 3.0.25-beta.10) and the whole answer goes back with the
+  client's ID, no TCP connection to the resolver; a truncated UDP answer
+  falls back to TCP; local (tailnet) names are answered without upstream;
+  the connection is always closed and the TCP slot released.
 """
 import os
 from pathlib import Path
@@ -45,9 +51,8 @@ def function(signature):
 
 worker = function('static void worker_task(void *arg)')
 assert 'uint32_t up_id = esp_random();' in worker and 'rbuf[0] = client_id[0];' in worker
-assert 'upstream_recv(up, rbuf, w->q, w->qlen, &up_addr)' in worker
 assert 'recvfrom(up, rbuf, DNS_RELAY_BUF_SIZE, 0, NULL, NULL)' not in source
-assert 'recvfrom(up, rbuf, DNS_RELAY_BUF_SIZE + 1, 0,' in source
+assert 'upstream_recv(up, rbuf, DNS_RELAY_BUF_SIZE + 1, w->q, w->qlen, &up_addr)' in worker
 assert '(void)dns_edns_clamp(w->q, w->qlen, DNS_RELAY_BUF_SIZE);' in worker
 assert 'dns_truncated_reply(rbuf, rlen, w->q, w->qlen)' in worker
 
@@ -141,7 +146,7 @@ static void build_r(uint32_t ttl) {           /* answer to q: one A record via p
 static void add(const uint8_t *d, int len, uint32_t ip, uint16_t port) {
     dgram_t *g = &script[nscript++]; memcpy(g->d, d, len); g->len = len; g->ip = ip; g->port = port; g->err = 0;
 }
-static int recv_now(uint8_t *buf) { struct sockaddr_in srv = {2, 53, {0x0101A8C0}}; return upstream_recv(1, buf, q, qlen, &srv); }
+static int recv_now(uint8_t *buf) { struct sockaddr_in srv = {2, 53, {0x0101A8C0}}; return upstream_recv(1, buf, DNS_RELAY_BUF_SIZE + 1, q, qlen, &srv); }
 int main(void) {
     uint8_t buf[DNS_RELAY_BUF_SIZE + 1];
     const uint32_t SRV = 0x0101A8C0; const uint16_t P53 = 53;
@@ -325,3 +330,176 @@ for old, new in (('type == 41 && size > max', 'type == 41 && size > max && !rrs 
         bad = run(checked.replace(old, new))
     assert bad.returncode != 0, 'mutant survived: ' + old
 print('dns relay 3.0.25: EDNS size clamped, oversized answers made truncated replies, TC not cached, TCP framing bounded')
+
+# ---- tcp_serve against scripted sockets ----
+serve_code = (function('static int dns_question_len(') + function('static int dns_skip_name(') + function('static bool dns_edns_clamp(')
+              + function('static bool dns_reply_matches(') + function('static int upstream_recv(') + function('static bool tcp_all(')
+              + function('static int tcp_read_msg(') + function('static bool tcp_write_msg(') + function('static void tcp_timeouts(')
+              + function('static int tcp_connect(') + function('static int udp_ask(') + function('static void tcp_serve('))
+SERVE = r"""
+#include <errno.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define DNS_RELAY_PORT 53
+#define DNS_RELAY_BUF_SIZE 1024
+#define DNS_CACHE_KEY_MAX 256
+#define DNS_RELAY_MAX_STRAY 8
+#define DNS_TCP_MAX_ANSWER 4096
+#define DNS_TCP_CLIENT_MS 1500
+#define DNS_TCP_UPSTREAM_MS 3500
+#define AF_INET 2
+#define SOCK_DGRAM 2
+#define SOCK_STREAM 1
+#define IPPROTO_UDP 17
+#define IPPROTO_TCP 6
+#define SOL_SOCKET 1
+#define SO_RCVTIMEO 2
+#define SO_SNDTIMEO 3
+#define SO_ERROR 4
+#define F_GETFL 3
+#define F_SETFL 4
+#define O_NONBLOCK 1
+#ifndef EINPROGRESS
+#define EINPROGRESS 115
+#endif
+#ifndef EWOULDBLOCK
+#define EWOULDBLOCK EAGAIN
+#endif
+typedef unsigned socklen_t;
+struct timeval {long tv_sec, tv_usec;};
+struct in_addr_ {uint32_t s_addr;};
+struct sockaddr {int x;};
+struct sockaddr_in {uint16_t sin_family; uint16_t sin_port; struct in_addr_ sin_addr;};
+typedef struct {int n;} fd_set;
+#define FD_ZERO(s) ((s)->n = 0)
+#define FD_SET(f, s) ((s)->n = (f))
+static uint16_t htons(uint16_t v) {return (uint16_t)(v << 8 | v >> 8);}
+static volatile uint32_t st_stray, st_queries, st_tcp, st_hits, st_misses;
+static atomic_int s_tcp_active;
+static volatile uint32_t s_captive_nbo;
+typedef int (*dns_relay_local_cb_t)(const uint8_t *q, int len, uint8_t *out, int cap);
+typedef uint32_t (*dns_relay_route_cb_t)(const uint8_t *q, int len);
+static volatile dns_relay_local_cb_t s_local_cb;
+static volatile dns_relay_route_cb_t s_route_cb;
+static uint32_t pick_upstream(void) {return 0x0101A8C0;}
+static uint32_t esp_random(void) {return 0xA5A5;}
+static int64_t now_us = 1000000;
+static int64_t esp_timer_get_time(void) {return now_us += 1000;}
+/* fd 3: client TCP; fd 7: upstream UDP; fd 9: upstream TCP */
+static uint8_t client_in[600]; static int client_in_len, client_in_pos;
+static uint8_t client_out[8192]; static int client_out_len;
+static uint8_t udp_answer[5000]; static int udp_answer_len;
+static int tcp_connects, closes, udp_sends;
+static uint8_t last_udp_query[600]; static int last_udp_len;
+static int socket(int d, int type, int p) {(void)d; (void)p; return type == SOCK_DGRAM ? 7 : 9;}
+static int setsockopt(int f, int l, int o, const void *v, socklen_t n) {(void)f; (void)l; (void)o; (void)v; (void)n; return 0;}
+static int getsockopt(int f, int l, int o, void *v, socklen_t *n) {(void)f; (void)l; (void)o; (void)n; *(int *)v = 0; return 0;}
+static int fcntl(int f, int c, int v) {(void)f; (void)c; (void)v; return 0;}
+static int connect(int f, const struct sockaddr *a, socklen_t n) {(void)f; (void)a; (void)n; tcp_connects++; errno = 111; return -1;}
+static int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *t) {(void)n; (void)r; (void)w; (void)e; (void)t; return 0;}
+static int close(int f) {(void)f; closes++; return 0;}
+static int sendto(int f, const void *b, size_t n, int fl, const struct sockaddr *a, socklen_t l)
+{(void)f; (void)fl; (void)a; (void)l; udp_sends++; memcpy(last_udp_query, b, n); last_udp_len = (int)n; return (int)n;}
+static int recvfrom(int f, void *b, size_t cap, int fl, struct sockaddr *from, socklen_t *fl_)
+{
+    (void)f; (void)fl; (void)fl_;
+    if (!udp_answer_len) {errno = EAGAIN; return -1;}
+    int n = udp_answer_len < (int)cap ? udp_answer_len : (int)cap;
+    memcpy(b, udp_answer, (size_t)n);
+    udp_answer[0] = last_udp_query[0]; udp_answer[1] = last_udp_query[1];   /* the resolver echoes our ID */
+    memcpy(b, udp_answer, 2);
+    struct sockaddr_in *s = (struct sockaddr_in *)from; s->sin_addr.s_addr = 0x0101A8C0; s->sin_port = htons(53);
+    udp_answer_len = 0;
+    return n;
+}
+static int recv(int f, void *b, size_t n, int fl)
+{
+    (void)fl;
+    if (f != 3) {errno = EBADF; return -1;}
+    if (client_in_pos >= client_in_len) return 0;
+    int k = client_in_len - client_in_pos; if (k > (int)n) k = (int)n;
+    memcpy(b, client_in + client_in_pos, (size_t)k); client_in_pos += k; return k;
+}
+static int send(int f, const void *b, size_t n, int fl)
+{(void)fl; if (f != 3) return -1; memcpy(client_out + client_out_len, b, n); client_out_len += (int)n; return (int)n;}
+typedef struct {int tcp; int qlen; uint8_t q[DNS_RELAY_BUF_SIZE];} dns_work_t;
+@@SERVE@@
+#define CHECK(c) do { if (!(c)) { printf("FAIL line %d\n", __LINE__); return 1; } } while (0)
+static uint8_t q[128]; static int qlen;
+static void build(uint16_t id, const char *name)
+{
+    q[0] = (uint8_t)(id >> 8); q[1] = (uint8_t)id; q[2] = 1; q[3] = 0; q[4] = 0; q[5] = 1; memset(q + 6, 0, 6); q[11] = 1; qlen = 12;
+    for (const char *s = name; *s;) {const char *d = strchr(s, '.'); int l = d ? (int)(d - s) : (int)strlen(s);
+        q[qlen++] = (uint8_t)l; memcpy(q + qlen, s, (size_t)l); qlen += l; s += l; if (*s) s++;}
+    q[qlen++] = 0; q[qlen++] = 0; q[qlen++] = 16; q[qlen++] = 0; q[qlen++] = 1;
+    uint8_t opt[] = {0, 0, 41, 0x10, 0x00, 0, 0, 0, 0, 0, 0}; memcpy(q + qlen, opt, sizeof opt); qlen += sizeof opt;
+    client_in[0] = (uint8_t)(qlen >> 8); client_in[1] = (uint8_t)qlen; memcpy(client_in + 2, q, (size_t)qlen);
+    client_in_len = qlen + 2; client_in_pos = 0; client_out_len = 0;
+}
+static void answer_of(int size, bool tc)
+{
+    memcpy(udp_answer, q, (size_t)qlen - 11); udp_answer_len = qlen - 11;      /* header + question */
+    udp_answer[2] = (uint8_t)(0x81 | (tc ? 0x02 : 0)); udp_answer[3] = 0x80; udp_answer[7] = 1; udp_answer[11] = 0;
+    while (udp_answer_len < size) udp_answer[udp_answer_len++] = 'x';
+}
+static int local_name(const uint8_t *qq, int len, uint8_t *out, int cap) {(void)cap; memcpy(out, qq, (size_t)len); out[2] = 0x84; return len;}
+int main(void)
+{
+    static dns_work_t w;
+    static uint8_t ans[DNS_TCP_MAX_ANSWER];
+    /* 1. a 2.5 KB answer over UDP comes back whole over TCP, no TCP upstream */
+    build(0x1234, "big.example.com"); answer_of(2500, false);
+    w.tcp = 3; atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(udp_sends == 1 && tcp_connects == 0);
+    CHECK(client_out_len == 2 + 2500 && client_out[0] == (2500 >> 8) && client_out[1] == (2500 & 255));
+    CHECK(client_out[2] == 0x12 && client_out[3] == 0x34);                          /* the client's ID */
+    CHECK(atomic_load(&s_tcp_active) == 0 && closes >= 2);
+    CHECK(last_udp_query[last_udp_len - 8] == 0x0f && last_udp_query[last_udp_len - 7] == 0xff);   /* EDNS 4095 */
+    /* 2. truncated even over UDP: TCP to the resolver is tried */
+    build(0x2222, "huge.example.com"); answer_of(200, true); atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(tcp_connects == 1 && client_out_len == 0 && atomic_load(&s_tcp_active) == 0);
+    /* 3. no UDP answer at all: TCP tried, the client gets nothing (closed) */
+    build(0x3333, "slow.example.com"); udp_answer_len = 0; atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(tcp_connects == 2 && client_out_len == 0);
+    /* 4. a tailnet name: answered locally, nothing sent upstream */
+    s_local_cb = local_name; int sends = udp_sends;
+    build(0x4444, "nas.tail.ts.net"); atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(udp_sends == sends && client_out_len == 2 + qlen && client_out[2] == 0x44 && client_out[4] == 0x84);
+    s_local_cb = NULL;
+    /* 5. a client that sends a malformed length: closed, nothing asked */
+    build(0x5555, "x.example.com"); client_in[0] = 0; client_in[1] = 5; sends = udp_sends; atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(udp_sends == sends && client_out_len == 0 && atomic_load(&s_tcp_active) == 0);
+    puts("tcp serve ok");
+    return 0;
+}
+"""
+
+
+def run_serve(code):
+    with tempfile.TemporaryDirectory() as tmp:
+        c = Path(tmp) / 'serve.c'
+        c.write_text(SERVE.replace('@@SERVE@@', code), encoding='utf-8')
+        exe = Path(tmp) / ('serve.exe' if os.name == 'nt' else 'serve')
+        build = subprocess.run(['gcc', '-std=gnu11', '-O1', '-Wall', '-Wno-unused-function', '-Wno-unused-parameter', str(c), '-o', str(exe)],
+                               capture_output=True, text=True)
+        if build.returncode:
+            return build
+        return subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+
+
+served = run_serve(serve_code)
+assert served.returncode == 0 and 'tcp serve ok' in served.stdout, (served.returncode, served.stdout, served.stderr[-3000:])
+# 3.0.25-beta.10 asked the resolver over TCP only: fails here as on board A.
+old = 'rl = udp_ask(upstream, w->q, qlen, answer, DNS_TCP_MAX_ANSWER);'
+assert old in serve_code
+assert run_serve(serve_code.replace(old, 'rl = 0;')).returncode != 0, 'TCP-only upstream must fail'
+print('dns relay tcp: UDP first with a 4 KB buffer, whole answer to the TCP client, TCP upstream only when truncated, local names, bounded')
