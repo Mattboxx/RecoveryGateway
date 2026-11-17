@@ -4935,6 +4935,8 @@ static esp_err_t system_diag_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(dc, "capacity",  ds.capacity);
         cJSON_AddNumberToObject(dc, "evictions", ds.evictions);
         cJSON_AddNumberToObject(dc, "upstream_stray", ds.stray);
+        cJSON_AddNumberToObject(dc, "tcp_queries", ds.tcp);
+        cJSON_AddNumberToObject(dc, "truncated", ds.truncated);
         cJSON_AddNumberToObject(dc, "cache_bytes", ds.cache_bytes);
         cJSON_AddItemToObject(root, "dns_cache", dc);
     }

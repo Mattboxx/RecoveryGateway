@@ -6,7 +6,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **DNS answers larger than 1 KB reached access-point clients cut.** The DNS
+  relay received at most 1024 bytes, passed longer answers on cut (no
+  "truncated" flag) and cached them. It now asks resolvers for at most 1024
+  bytes (EDNS size of the forwarded query), turns a longer answer into a valid
+  "truncated" reply, never caches truncated answers, and answers DNS over TCP
+  on the same addresses (one connection at a time, bounded waits), so clients
+  can fetch large answers (long TXT/SPF records, HTTPS records, DNSSEC).
+  Present since the relay's first version.
+- **USB network sessions could free a send buffer still in use.** A frame
+  being sent while the session closed (unplug, error) could write into a
+  transfer already freed. The send slot is now claimed before the session
+  check and the close waits for every slot (bounded) before freeing.
+- **PPP over a USB modem could block the gateway's network core.** Each PPP
+  frame waited up to 50 ms for the previous USB transfer. Frames now go into a
+  send queue in PSRAM, drained transfer by transfer; a frame that does not fit
+  is dropped whole, never waited for.
+
 ### Added
+
+- **Monthly mobile data limit** (Network → Cellular uplink). Counts mobile data
+  in both directions (PPP and USB network sticks), warns once at a chosen
+  percentage and once at the limit (event history and notifications), and can
+  stop using mobile data until the next month. The month can start on any day
+  from 1 to 28. Off by default: nothing is counted or written while off. The
+  counter is saved after at least 1 MB and 10 minutes, or at a warning, so up
+  to that much use can be missed after a power cut.
+- **Remote console warning.** When the plain-TCP remote console is enabled on
+  the local network or the access point, every start records a security
+  warning: the password typed there can be read on that network.
+- DNS relay diagnostics show queries over TCP and oversized answers.
 
 - **Cellular uplink over USB.** Besides a modem wired to UART pins, the
   Cellular card (and the mobile-network choice of first-boot setup) can use

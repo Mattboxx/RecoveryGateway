@@ -427,6 +427,39 @@ async function main() {
       assert.equal(f.state.savedCellular.tx, 17);   /* pins kept for a later switch back */
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
+    // Monthly data limit: off text; with a limit the use, period start and pause
+    // are shown; saving sends only the limit (no modem settings, no restart);
+    // the counter reset asks first and sends reset_usage.
+    {
+      const cellConfig = {enabled: true, mode: 'failover', roaming: false, data_ack: true, uart: 1, baud: 115200, tx: 17, rx: 18, rts: -1, cts: -1,
+        pwrkey: -1, pwrkey_active_high: false, apn: 'internet.example', user: '', has_password: false, has_pin: false};
+      const st = {enabled_at_boot: true, task_running: true, state: 'connected', registration: 1, rssi_dbm: -70, model: '', operator: '', ip: '10.64.1.2',
+        has_ip: true, selected_uplink: false, restart_required: false, connects: 1, bytes_in: 0, bytes_out: 0, error: ''};
+      f = await fixture(browser, { page: 'network', cellularBody: {config: cellConfig, status: st,
+        data_limit: {limit_mb: 0, warn_percent: 80, reset_day: 1, pause: false, used_bytes: 0, paused: false, clock: true, period_start: null}} });
+      await f.page.waitForFunction(() => document.getElementById('cell-limit-status').textContent.length > 0);
+      assert.equal(await f.page.locator('#cell-limit-status').textContent(), 'Off: mobile data is not counted.');
+      assert.equal(await f.page.locator('#cell-limit-reset').isVisible(), false);
+      assert.equal(await f.page.locator('#cell-limit-save').isDisabled(), true);
+      f.state.cellularBody = {config: cellConfig, status: st, data_limit: {limit_mb: 1000, warn_percent: 80, reset_day: 10, pause: true,
+        used_bytes: 1000 * 1048576, paused: true, clock: true, period_start: '2026-11-10'}};
+      await f.page.locator('#cell-limit-mb').fill('1000');
+      await f.page.locator('#cell-limit-day').fill('10');
+      await f.page.locator('label:has(#cell-limit-pause)').click();
+      await f.page.locator('#cell-limit-save').click();
+      for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
+      assert.deepEqual(f.state.savedCellular, {data_limit: {limit_mb: 1000, warn_percent: 80, reset_day: 10, pause: true}});
+      await f.page.waitForFunction(() => document.getElementById('cell-limit-status').textContent.includes('1000 MB / 1000 MB'));
+      assert.match(await f.page.locator('#cell-limit-status').textContent(), /^Used this month: 1000 MB \/ 1000 MB \(100%\) · since 2026-11-10 · limit reached: mobile data paused until the next month$/);
+      assert.equal(await f.page.locator('#cell-limit-reset').isVisible(), true);
+      f.state.savedCellular = null;
+      f.page.once('dialog', d => d.accept());
+      await f.page.locator('#cell-limit-reset').click();
+      for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
+      assert.equal(f.state.savedCellular.data_limit.reset_usage, true);
+      assert.equal('enabled' in f.state.savedCellular, false);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Cellular over USB waiting for a device, then refused for internal RAM: a
     // "Waiting" badge (not "Connecting"), and firmware messages in Italian with
     // their numbers kept.

@@ -1,6 +1,7 @@
 /* Optional cellular (GSM/LTE) uplink over a UART or USB modem; see cell_uplink.h.
  * Original implementation, Mattboxx Edition. SPDX-License-Identifier: GPL-3.0-only */
 #include "cell_uplink.h"
+#include "cell_quota.h"
 #include "uplink_services.h"
 #include "eth_uplink.h"
 #include "json_guard.h"
@@ -428,7 +429,7 @@ static const cell_io_t UART_IO = {uart_io_write, uart_io_read, uart_io_flush};
 /* USB serial (CDC-ACM or vendor port) through usb_port.c, which also does
  * detection, mode switching and USB network sticks. */
 #define CELL_USB_CFG_MAX 1024          /* configuration descriptor copy */
-#define CELL_USB_PPP_TX_MS 50          /* TCP/IP thread: never block it long */
+#define CELL_USB_PPP_TX_MS 0           /* TCP/IP thread: queue the frame or drop it, never wait */
 static bool s_usb_open;                /* a USB session is open (modem task only) */
 static uint8_t *s_usb_cfg;             /* modem task only */
 enum {CELL_NETIF_NONE, CELL_NETIF_PPP, CELL_NETIF_USBNET};
@@ -543,6 +544,13 @@ static esp_err_t cell_post_attach(esp_netif_t *netif, void *args)
     driver->base.netif = netif;
     const esp_netif_driver_ifconfig_t ifconfig = {.handle = driver, .transmit = cell_transmit};
     return esp_netif_set_driver_config(netif, &ifconfig);
+}
+
+/* Mobile data of this boot, both directions, PPP and USB network stick. */
+static uint64_t cell_total_bytes(void)
+{
+    return netif_hooks_get_ppp_bytes_in() + netif_hooks_get_ppp_bytes_out()
+         + netif_hooks_get_usbnet_bytes_in() + netif_hooks_get_usbnet_bytes_out();
 }
 
 static void apply_choice(void)
@@ -830,8 +838,13 @@ static void cell_task(void *arg)
                 while (usb_port_net_alive()) {
                     vTaskDelay(pdMS_TO_TICKS(250));
                     if (atomic_load(&s_has_ip) && s_status.state != CELL_CONNECTED) set_state(CELL_CONNECTED, "");
-                    if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {apply_choice(); last_choice = xTaskGetTickCount();}
+                    if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {
+                        cell_quota_tick(cell_total_bytes());
+                        apply_choice();
+                        last_choice = xTaskGetTickCount();
+                    }
                 }
+                cell_quota_tick(cell_total_bytes());
                 atomic_store(&s_has_ip, false);
                 usb_close();
                 apply_choice();
@@ -899,8 +912,13 @@ static void cell_task(void *arg)
             int n = s_io->read(buffer, 512, 50);
             if (n > 0) esp_netif_receive(s_netif, buffer, (size_t)n, NULL);
             else if (n < 0) atomic_store(&s_link_dead, true);   /* USB modem gone */
-            if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {apply_choice(); last_choice = xTaskGetTickCount();}
+            if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {
+                cell_quota_tick(cell_total_bytes());
+                apply_choice();
+                last_choice = xTaskGetTickCount();
+            }
         }
+        cell_quota_tick(cell_total_bytes());
         esp_netif_action_stop(s_netif, 0, 0, 0);
         atomic_store(&s_has_ip, false);
         apply_choice();
@@ -936,6 +954,7 @@ void cell_uplink_init(void)
     s_status.registration = 0xff;
     s_status.transport = s_running.transport;
     s_status.usb_iface = 0xff;
+    cell_quota_init();   /* one settings read; counting only with a limit set */
 #if !CONFIG_LWIP_PPP_SUPPORT
     /* The 2.1 migration bridge has no PPP: settings are kept, nothing runs. */
     if (s_running.enabled) set_state(CELL_STOPPED, "cellular support is not in this firmware");
@@ -1041,7 +1060,7 @@ struct netif *cell_uplink_lwip_select(struct netif *current)
 {
     if (!s_running.enabled || !s_lwip) return NULL;
     bool other_ok = current && netif_is_up(current) && netif_is_link_up(current) && ip4_addr_get_u32(netif_ip4_addr(current));
-    bool cell_ok = atomic_load(&s_has_ip) && netif_is_up(s_lwip) && ip4_addr_get_u32(netif_ip4_addr(s_lwip));
+    bool cell_ok = atomic_load(&s_has_ip) && netif_is_up(s_lwip) && ip4_addr_get_u32(netif_ip4_addr(s_lwip)) && !cell_quota_paused();
     bool use = cell_uplink_choose(&s_selector, s_running.mode, other_ok, cell_ok);
     atomic_store(&s_selected_cell, use);
     return use ? s_lwip : NULL;
@@ -1058,7 +1077,7 @@ esp_netif_t *cell_uplink_preferred_netif(esp_netif_t *lan)
     esp_netif_ip_info_t info = {0};
     cell_selector_t immediate = {.streak = CELL_STABLE_SAMPLES};
     bool use = s_netif && cell_uplink_choose(&immediate, s_running.mode,
-                                           uplink_address(lan, &info), atomic_load(&s_has_ip));
+                                           uplink_address(lan, &info), atomic_load(&s_has_ip) && !cell_quota_paused());
     return use ? s_netif : lan;
 }
 
@@ -1155,6 +1174,7 @@ static esp_err_t get_cellular(httpd_req_t *req)
         }
     }
     cJSON_AddStringToObject(status, "qualification", "experimental: not physically validated with a modem");
+    cell_quota_json(root);
     return send_json(req, root);
 }
 
@@ -1190,6 +1210,21 @@ static bool json_secret(const cJSON *root, const char *name, const char *clear, 
     return true;
 }
 
+/* {"data_limit": {"limit_mb", "warn_percent", "reset_day", "pause", "reset_usage"?}}:
+ * applies at once, no restart; the modem settings are left as they are. */
+static esp_err_t post_data_limit(const cJSON *o, char *why, size_t n)
+{
+    int limit = 0, warn = 0, day = 0;
+    const cJSON *pause = cJSON_GetObjectItemCaseSensitive(o, "pause"), *reset = cJSON_GetObjectItemCaseSensitive(o, "reset_usage");
+    if (!cJSON_IsObject(o) || !json_int(o, "limit_mb", 0, (int)CELL_QUOTA_MAX_MB, &limit) || !json_int(o, "warn_percent", 0, 99, &warn)
+        || !json_int(o, "reset_day", 1, 28, &day) || !cJSON_IsBool(pause) || (reset && !cJSON_IsBool(reset))) {
+        snprintf(why, n, "data limit: limit_mb 0-1000000, warn_percent 0-99, reset_day 1-28, pause true/false");
+        return ESP_ERR_INVALID_ARG;
+    }
+    cell_quota_config_t q = {.limit_mb = (uint32_t)limit, .warn_pct = (uint8_t)warn, .reset_day = (uint8_t)day, .pause = cJSON_IsTrue(pause)};
+    return cell_quota_set(&q, cJSON_IsTrue(reset), why, n);
+}
+
 static esp_err_t post_cellular(httpd_req_t *req)
 {
     if (web_ui_require_auth(req) != ESP_OK) return ESP_FAIL;
@@ -1205,6 +1240,20 @@ static esp_err_t post_cellular(httpd_req_t *req)
     cell_config_t saved, c = {0};
     cell_uplink_get_config(&saved);
     cJSON *root = json_guard_parse(body);
+    const cJSON *limit = cJSON_GetObjectItemCaseSensitive(root, "data_limit");
+    if (limit && !cJSON_GetObjectItemCaseSensitive(root, "enabled")) {
+        esp_err_t qerr = post_data_limit(limit, why, sizeof why);
+        cJSON_Delete(root);
+        memset(body, 0, sizeof body);
+        cJSON *reply = cJSON_CreateObject();
+        if (qerr != ESP_OK) httpd_resp_set_status(req, qerr == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error");
+        if (reply) {
+            cJSON_AddBoolToObject(reply, "ok", qerr == ESP_OK);
+            if (qerr != ESP_OK) cJSON_AddStringToObject(reply, "error", why);
+            else cJSON_AddBoolToObject(reply, "restart_required", false);
+        }
+        return send_json(req, reply);
+    }
     int uart = 0, baud = 0, tx, rx, rts, cts, pwrkey, usb_iface = saved.usb_iface == CELL_USB_IFACE_AUTO ? -1 : saved.usb_iface;
     uint8_t transport = saved.transport;
     /* transport/usb_interface are optional: older clients keep the saved choice. */

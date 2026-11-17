@@ -87,6 +87,7 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
                             "service_check.c"
                             "eth_uplink.c"
                             "cell_uplink.c"
+                            "cell_quota.c"
                             "usb_port.c"
                             "layout_migration.c"
                             "storage_store.c"

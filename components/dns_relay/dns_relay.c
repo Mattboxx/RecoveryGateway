@@ -24,6 +24,8 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stddef.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -48,6 +50,13 @@
 #define DNS_RELAY_TX_RETRIES    4        /* upstream sendto ENOMEM: retry, don't drop the query */
 #define DNS_RELAY_TX_RETRY_MS   5        /* per-retry backoff; WiFi TX buffers free within a few ms */
 #define DNS_RELAY_MAX_STRAY     8        /* unmatched datagrams discarded per query before giving up */
+/* DNS over TCP (RFC 7766): what a client does after a truncated UDP answer.
+ * One connection at a time (a worker stays free for UDP), one query per
+ * connection, bounded waits; the answer buffer lives in PSRAM. */
+#define DNS_TCP_MAX_ANSWER      4096
+#define DNS_TCP_CLIENT_MS       1500     /* client must send its query within this */
+#define DNS_TCP_UPSTREAM_MS     DNS_RELAY_UP_TIMEOUT_MS
+#define DNS_TCP_ACTIVE_MAX      1
 
 /* PSRAM-backed stacks (see xTaskCreateWithCaps below), so generous sizing is
  * cheap. Bumped 2026-06-10: at INFO verbosity (SD recorder sd_level=3) the
@@ -82,6 +91,7 @@ static volatile bool     s_healthy       = false;  /* bound and serving — soft
 static volatile int      s_listen_sock   = -1;     /* listener-owned; workers reply through it */
 
 static TaskHandle_t s_listener = NULL;
+static volatile uint32_t s_captive_nbo = 0;        /* first-boot captive answer; 0 = relay */
 
 /* Optional second listener on the uplink (LAN) address, and an optional local
  * resolver consulted before the cache. Both off unless the firmware turns
@@ -110,6 +120,7 @@ typedef struct {
     bool               lan;            /* reply through the LAN listener */
     uint32_t           upstream;       /* effective resolver selected by the listener */
     uint32_t           cache_epoch;
+    int                tcp;            /* accepted TCP connection, or -1 for UDP */
     int                qlen;
     uint8_t            q[DNS_RELAY_BUF_SIZE];
 } dns_work_t;
@@ -131,7 +142,8 @@ static atomic_uint s_cache_epoch;
 
 /* Diagnostics counters. Unlocked: a torn increment only skews a stat by one,
  * which is irrelevant — the cache *data* is what the mutex protects. */
-static volatile uint32_t st_queries, st_hits, st_misses, st_inserts, st_evictions, st_stray;
+static volatile uint32_t st_queries, st_hits, st_misses, st_inserts, st_evictions, st_stray, st_tcp, st_truncated;
+static atomic_int s_tcp_active;
 
 /* Resolve the live upstream IP every forward. Priority: explicit operator
  * override, then DNS learned from the STA DHCP lease. No public resolver is
@@ -190,6 +202,44 @@ static int open_listen_sock(uint32_t bind_nbo)
     return s;
 }
 
+/* TCP listening socket (non-blocking accept) on the same address, or -1. */
+static int open_tcp_listen(uint32_t bind_nbo)
+{
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s < 0) return -1;
+    int on = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons(DNS_RELAY_PORT), .sin_addr.s_addr = bind_nbo};
+    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(s, 2) < 0) {close(s); return -1;}
+    fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+    return s;
+}
+
+/* A pending TCP connection: handed to a worker when none is busy with TCP,
+ * else closed at once (the client falls back to another resolver). */
+static void tcp_accept(int ls, bool lan)
+{
+    struct sockaddr_in client = {0};
+    socklen_t client_len = sizeof client;
+    int fd = accept(ls, (struct sockaddr *)&client, &client_len);
+    if (fd < 0) return;
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
+    if (atomic_fetch_add(&s_tcp_active, 1) >= DNS_TCP_ACTIVE_MAX) {
+        atomic_fetch_sub(&s_tcp_active, 1);
+        close(fd);
+        return;
+    }
+    dns_work_t *w = heap_caps_malloc(sizeof(dns_work_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (w) {
+        memset(w, 0, offsetof(dns_work_t, q));
+        w->client = client; w->client_len = client_len; w->lan = lan; w->tcp = fd;
+        if (xQueueSend(s_workq, &w, 0) == pdTRUE) return;
+        heap_caps_free(w);
+    }
+    close(fd);
+    atomic_fetch_sub(&s_tcp_active, 1);
+}
+
 /* ───────────────────── DNS packet helpers ───────────────────── */
 
 /* Byte length of the question section starting at offset 12 (qname labels +
@@ -210,6 +260,61 @@ static int dns_question_len(const uint8_t *p, int len)
     return (qlen >= 5 && qlen <= DNS_CACHE_KEY_MAX) ? qlen : 0;
 }
 
+/* Index after the domain name at `i` (labels, maybe ending in a pointer), or
+ * -1 when it runs past `len`. */
+static int dns_skip_name(const uint8_t *p, int len, int i)
+{
+    for (int labels = 0; labels < 128; labels++) {
+        if (i >= len) return -1;
+        uint8_t c = p[i];
+        if (c == 0) return i + 1;
+        if ((c & 0xC0) == 0xC0) return i + 2 <= len ? i + 2 : -1;
+        if (c & 0xC0) return -1;
+        i += 1 + c;
+    }
+    return -1;
+}
+
+/* Lowers the EDNS(0) UDP payload size a query advertises to `max`, so the
+ * upstream never sends an answer larger than the relay can receive: it sets
+ * TC instead and the client retries over TCP. Returns true when the query
+ * is well formed (changed or not); a query without EDNS is limited to 512
+ * bytes by the protocol already. */
+static bool dns_edns_clamp(uint8_t *p, int len, uint16_t max)
+{
+    if (len < 12) return false;
+    int counts = ((p[4] << 8) | p[5]), rrs = ((p[6] << 8) | p[7]) + ((p[8] << 8) | p[9]), ar = (p[10] << 8) | p[11];
+    if (counts > 8 || rrs > 32 || ar > 32) return false;
+    int i = 12;
+    for (int q = 0; q < counts; q++) {
+        if ((i = dns_skip_name(p, len, i)) < 0 || i + 4 > len) return false;
+        i += 4;
+    }
+    for (int r = 0; r < rrs + ar; r++) {
+        if ((i = dns_skip_name(p, len, i)) < 0 || i + 10 > len) return false;
+        uint16_t type = (uint16_t)(p[i] << 8 | p[i + 1]), size = (uint16_t)(p[i + 2] << 8 | p[i + 3]);
+        uint16_t rdlen = (uint16_t)(p[i + 8] << 8 | p[i + 9]);
+        if (r >= rrs && type == 41 && size > max) {uint8_t *cls = p + i + 2; cls[0] = (uint8_t)(max >> 8); cls[1] = (uint8_t)max;}
+        if (i + 10 + rdlen > len) return false;
+        i += 10 + rdlen;
+    }
+    return true;
+}
+
+/* An upstream answer longer than the relay's buffer: keep its header and
+ * question, set TC and drop the records, so the client gets a valid
+ * "truncated, ask over TCP" reply instead of a cut datagram. `q` is the
+ * query it answers. Returns the new length, or 0 when it cannot be done. */
+static int dns_truncated_reply(uint8_t *r, int rlen, const uint8_t *q, int qlen)
+{
+    int ql = dns_question_len(q, qlen);
+    if (ql <= 0 || rlen < 12 + ql || ((r[4] << 8) | r[5]) != 1) return 0;
+    uint8_t *h = r;                                   /* header: TC on, no records */
+    h[2] |= 0x02;
+    memset(h + 6, 0, 6);
+    return 12 + ql;
+}
+
 /* Cacheable standard query? QR=0, opcode=0, QDCOUNT==1. */
 static bool dns_is_std_query(const uint8_t *p, int len)
 {
@@ -228,6 +333,7 @@ static uint32_t dns_resp_ttl(const uint8_t *p, int len, int qlen)
     if (len < 12 + qlen) return 0;
     uint8_t rcode = p[3] & 0x0F;
     if (rcode != 0 && rcode != 3) return 0;    /* only NOERROR / NXDOMAIN */
+    if (p[2] & 0x02) return 0;                 /* TC: a partial answer, never cached */
     uint16_t an = (p[6] << 8) | p[7];
     if (an == 0) return DNS_CACHE_TTL_NEG_S;
     int i = 12 + qlen;                          /* start of answer section */
@@ -333,10 +439,12 @@ static bool dns_reply_matches(const uint8_t *r, int rlen, const uint8_t *q, int 
  * the length, 0 when none arrived in time, -1 on a socket error. */
 static int upstream_recv(int up, uint8_t *rbuf, const uint8_t *q, int qlen, const struct sockaddr_in *server)
 {
+    /* rbuf holds DNS_RELAY_BUF_SIZE + 1 bytes: a longer answer is detected
+     * (lwIP cuts a datagram to the buffer) instead of being passed on cut. */
     for (int stray = 0; stray <= DNS_RELAY_MAX_STRAY; stray++) {
         struct sockaddr_in from = {0};
         socklen_t from_len = sizeof from;
-        int rlen = recvfrom(up, rbuf, DNS_RELAY_BUF_SIZE, 0, (struct sockaddr *)&from, &from_len);
+        int rlen = recvfrom(up, rbuf, DNS_RELAY_BUF_SIZE + 1, 0, (struct sockaddr *)&from, &from_len);
         if (rlen <= 0) return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
         if (from.sin_addr.s_addr == server->sin_addr.s_addr && from.sin_port == server->sin_port &&
             dns_reply_matches(rbuf, rlen, q, qlen))
@@ -346,19 +454,130 @@ static int upstream_recv(int up, uint8_t *rbuf, const uint8_t *q, int qlen, cons
     return 0;
 }
 
+/* ---- DNS over TCP (worker side) ---- */
+
+/* Reads or writes exactly n bytes before `deadline_us` (sockets carry short
+ * timeouts, so a silent peer cannot hold a worker longer). */
+static bool tcp_all(int fd, uint8_t *buf, int n, bool sending, int64_t deadline_us)
+{
+    int done = 0;
+    while (done < n) {
+        if (esp_timer_get_time() >= deadline_us) return false;
+        int r = sending ? send(fd, buf + done, n - done, 0) : recv(fd, buf + done, n - done, 0);
+        if (r > 0) {done += r; continue;}
+        if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+        return false;
+    }
+    return true;
+}
+
+/* One length-prefixed DNS message; its length, or -1 (also when > cap). */
+static int tcp_read_msg(int fd, uint8_t *buf, int cap, int64_t deadline_us)
+{
+    uint8_t lp[2];
+    if (!tcp_all(fd, lp, 2, false, deadline_us)) return -1;
+    int n = lp[0] << 8 | lp[1];
+    if (n < 12 || n > cap || !tcp_all(fd, buf, n, false, deadline_us)) return -1;
+    return n;
+}
+
+static bool tcp_write_msg(int fd, const uint8_t *buf, int n, int64_t deadline_us)
+{
+    uint8_t lp[2] = {(uint8_t)(n >> 8), (uint8_t)n};
+    return n > 0 && n <= 0xffff && tcp_all(fd, lp, 2, true, deadline_us) && tcp_all(fd, (uint8_t *)buf, n, true, deadline_us);
+}
+
+static void tcp_timeouts(int fd, int ms)
+{
+    struct timeval to = {.tv_sec = ms / 1000, .tv_usec = (ms % 1000) * 1000};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof to);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &to, sizeof to);
+}
+
+/* TCP connection to the resolver within `ms`, or -1. */
+static int tcp_connect(uint32_t upstream, int ms)
+{
+    int u = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (u < 0) return -1;
+    int flags = fcntl(u, F_GETFL, 0);
+    fcntl(u, F_SETFL, flags | O_NONBLOCK);
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(DNS_RELAY_PORT), .sin_addr.s_addr = upstream};
+    if (connect(u, (struct sockaddr *)&a, sizeof a) < 0 && errno != EINPROGRESS) {close(u); return -1;}
+    fd_set w;
+    FD_ZERO(&w); FD_SET(u, &w);
+    struct timeval to = {.tv_sec = ms / 1000, .tv_usec = (ms % 1000) * 1000};
+    int err = 0;
+    socklen_t el = sizeof err;
+    if (select(u + 1, NULL, &w, NULL, &to) != 1 || getsockopt(u, SOL_SOCKET, SO_ERROR, &err, &el) < 0 || err) {close(u); return -1;}
+    fcntl(u, F_SETFL, flags & ~O_NONBLOCK);
+    tcp_timeouts(u, 500);
+    return u;
+}
+
+/* Answers one query of an accepted TCP connection: tailnet names locally,
+ * anything else through the same resolver choice as UDP, over TCP. Not
+ * cached (TCP answers may exceed a cache slot). Closes the connection. */
+static void tcp_serve(dns_work_t *w, uint8_t *answer)
+{
+    int fd = w->tcp, up = -1;
+    int64_t deadline = esp_timer_get_time() + (int64_t)DNS_TCP_CLIENT_MS * 1000;
+    tcp_timeouts(fd, 500);
+    int qlen = tcp_read_msg(fd, w->q, DNS_RELAY_BUF_SIZE, deadline);
+    if (qlen < 12) goto done;
+    st_queries++;
+    st_tcp++;
+    deadline = esp_timer_get_time() + (int64_t)(DNS_TCP_UPSTREAM_MS + 1000) * 1000;
+    if (s_captive_nbo) goto done;                     /* first-boot setup answers over UDP only */
+    dns_relay_local_cb_t local = s_local_cb;
+    int rl = local ? local(w->q, qlen, answer, DNS_RELAY_BUF_SIZE) : 0;
+    if (rl > 0) {
+        st_hits++;
+        (void)tcp_write_msg(fd, answer, rl, deadline);
+        goto done;
+    }
+    dns_relay_route_cb_t route = s_route_cb;
+    uint32_t upstream = route ? route(w->q, qlen) : 0;
+    if (!upstream) upstream = pick_upstream();
+    if (!upstream || (up = tcp_connect(upstream, DNS_TCP_UPSTREAM_MS)) < 0) goto done;
+    st_misses++;
+    uint8_t client_id[2] = {w->q[0], w->q[1]};
+    uint32_t up_id = esp_random();
+    w->q[0] = (uint8_t)(up_id >> 8);
+    w->q[1] = (uint8_t)up_id;
+    if (!tcp_write_msg(up, w->q, qlen, deadline)) goto done;
+    rl = tcp_read_msg(up, answer, DNS_TCP_MAX_ANSWER, deadline);
+    if (rl < 12 || !dns_reply_matches(answer, rl, w->q, qlen)) goto done;
+    answer[0] = client_id[0];
+    answer[1] = client_id[1];
+    (void)tcp_write_msg(fd, answer, rl, deadline);
+done:
+    if (up >= 0) close(up);
+    close(fd);
+    atomic_fetch_sub(&s_tcp_active, 1);
+}
+
 /* Each worker owns one upstream UDP socket so concurrent in-flight queries
  * never cross responses. A send/recv hard error rebuilds just this socket. */
 static void worker_task(void *arg)
 {
     (void)arg;
     int up = -1;
-    uint8_t *rbuf = heap_caps_malloc(DNS_RELAY_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!rbuf) rbuf = malloc(DNS_RELAY_BUF_SIZE);   /* SPIRAM preferred; fall back to internal */
+    /* One byte more than a cached answer (oversize detection); also the TCP
+     * answer buffer. */
+    uint8_t *rbuf = heap_caps_malloc(DNS_TCP_MAX_ANSWER, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bool tcp_ok = rbuf != NULL;                       /* TCP answers need the PSRAM buffer */
+    if (!rbuf) rbuf = malloc(DNS_RELAY_BUF_SIZE + 1);   /* fall back to internal, UDP only */
     if (!rbuf) { ESP_LOGE(TAG, "worker rbuf alloc failed"); task_reaper_self_delete(); }
 
     for (;;) {
         dns_work_t *w = NULL;
         if (xQueueReceive(s_workq, &w, portMAX_DELAY) != pdTRUE || !w) continue;
+        if (w->tcp >= 0) {
+            if (tcp_ok) tcp_serve(w, rbuf);
+            else {close(w->tcp); atomic_fetch_sub(&s_tcp_active, 1);}
+            heap_caps_free(w);
+            continue;
+        }
 
         if (up < 0) {
             up = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -388,6 +607,8 @@ static void worker_task(void *arg)
         uint32_t up_id = esp_random();
         w->q[0] = (uint8_t)(up_id >> 8);
         w->q[1] = (uint8_t)up_id;
+        /* Never invite an answer larger than the relay can take. */
+        (void)dns_edns_clamp(w->q, w->qlen, DNS_RELAY_BUF_SIZE);
         int sent = -1;
         for (int attempt = 0; attempt < DNS_RELAY_TX_RETRIES; attempt++) {
             sent = sendto(up, w->q, w->qlen, 0, (struct sockaddr *)&up_addr, sizeof(up_addr));
@@ -416,6 +637,12 @@ static void worker_task(void *arg)
         if (w->cache_epoch != atomic_load(&s_cache_epoch)) {
             heap_caps_free(w);
             continue;
+        }
+        if (rlen > DNS_RELAY_BUF_SIZE) {
+            /* A resolver that ignored the advertised size: pass a valid
+             * truncated reply (the client retries over TCP), never a cut one. */
+            st_truncated++;
+            if ((rlen = dns_truncated_reply(rbuf, rlen, w->q, w->qlen)) <= 0) {heap_caps_free(w); continue;}
         }
         rbuf[0] = client_id[0];
         rbuf[1] = client_id[1];
@@ -462,13 +689,15 @@ static int dns_captive_answer(const uint8_t *q, int qlen, uint32_t ip_nbo, uint8
     return end + (int)sizeof rr + 4;
 }
 
-static volatile uint32_t s_captive_nbo = 0;        /* first-boot captive answer; 0 = relay */
 
 static void listener_task(void *arg)
 {
     (void)arg;
     int listen_sock = -1, lan_sock = -1;
-    int64_t lan_retry_us = 0;
+    /* TCP listeners follow their UDP socket: reopened with each new one. */
+    int tcp_ap = -1, tcp_lan = -1;
+    unsigned ap_gen = 0, lan_gen = 0, tcp_ap_gen = 0, tcp_lan_gen = 0;
+    int64_t lan_retry_us = 0, tcp_retry_us = 0;
     uint8_t qbuf[DNS_RELAY_BUF_SIZE];
     uint8_t cbuf[DNS_RELAY_BUF_SIZE];      /* cache-hit response scratch */
 
@@ -492,6 +721,7 @@ static void listener_task(void *arg)
                 continue;
             }
             bind_backoff_ms = 2000;
+            ap_gen++;
             s_listen_sock = listen_sock;
             bool was_healthy = s_healthy;
             s_healthy = true;
@@ -512,6 +742,8 @@ static void listener_task(void *arg)
         if (listen_sock < 0) {
             s_healthy = false;
             if (lan_sock >= 0) {s_lan_sock = -1; close(lan_sock); lan_sock = -1;}
+            if (tcp_ap >= 0) {close(tcp_ap); tcp_ap = -1;}
+            if (tcp_lan >= 0) {close(tcp_lan); tcp_lan = -1;}
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
@@ -523,18 +755,32 @@ static void listener_task(void *arg)
             s_lan_dirty = false;
             lan_sock = open_listen_sock(s_lan_nbo);
             s_lan_sock = lan_sock;
+            lan_gen++;
             if (lan_sock < 0) lan_retry_us = esp_timer_get_time() + 10LL * 1000000;
         }
 
-        int sock = listen_sock;
-        if (lan_sock >= 0) {
-            fd_set ready;
-            FD_ZERO(&ready); FD_SET(listen_sock, &ready); FD_SET(lan_sock, &ready);
-            struct timeval wait = {.tv_sec = 0, .tv_usec = 500 * 1000};
-            int n = select((listen_sock > lan_sock ? listen_sock : lan_sock) + 1, &ready, NULL, NULL, &wait);
-            if (n <= 0) continue;
-            if (!FD_ISSET(listen_sock, &ready)) sock = lan_sock;
+        /* TCP next to each UDP listener (not during first-boot setup). */
+        bool tcp_wanted = !s_captive_nbo;
+        if (tcp_ap >= 0 && (!tcp_wanted || tcp_ap_gen != ap_gen)) {close(tcp_ap); tcp_ap = -1;}
+        if (tcp_lan >= 0 && (!tcp_wanted || tcp_lan_gen != lan_gen || lan_sock < 0)) {close(tcp_lan); tcp_lan = -1;}
+        if (tcp_wanted && (tcp_ap < 0 || (lan_sock >= 0 && tcp_lan < 0)) && esp_timer_get_time() >= tcp_retry_us) {
+            if (tcp_ap < 0 && (tcp_ap = open_tcp_listen(s_bind_nbo)) >= 0) tcp_ap_gen = ap_gen;
+            if (lan_sock >= 0 && tcp_lan < 0 && (tcp_lan = open_tcp_listen(s_lan_nbo)) >= 0) tcp_lan_gen = lan_gen;
+            if (tcp_ap < 0 || (lan_sock >= 0 && tcp_lan < 0)) tcp_retry_us = esp_timer_get_time() + 10LL * 1000000;
         }
+
+        fd_set ready;
+        FD_ZERO(&ready);
+        int top = listen_sock;
+        int fds[] = {listen_sock, lan_sock, tcp_ap, tcp_lan};
+        for (unsigned i = 0; i < sizeof fds / sizeof fds[0]; i++)
+            if (fds[i] >= 0) {FD_SET(fds[i], &ready); if (fds[i] > top) top = fds[i];}
+        struct timeval wait = {.tv_sec = 0, .tv_usec = 500 * 1000};
+        if (select(top + 1, &ready, NULL, NULL, &wait) <= 0) continue;   /* timeout -> re-check state */
+        if (tcp_ap >= 0 && FD_ISSET(tcp_ap, &ready)) tcp_accept(tcp_ap, false);
+        if (tcp_lan >= 0 && FD_ISSET(tcp_lan, &ready)) tcp_accept(tcp_lan, true);
+        int sock = FD_ISSET(listen_sock, &ready) ? listen_sock : lan_sock >= 0 && FD_ISSET(lan_sock, &ready) ? lan_sock : -1;
+        if (sock < 0) continue;
         bool from_lan = sock == lan_sock;
 
         struct sockaddr_in client = {0};
@@ -590,6 +836,7 @@ static void listener_task(void *arg)
         w->lan        = from_lan;
         w->upstream   = upstream;
         w->cache_epoch = epoch;
+        w->tcp        = -1;
         w->qlen       = qlen;
         memcpy(w->q, qbuf, qlen);
         if (xQueueSend(s_workq, &w, 0) != pdTRUE) {
@@ -701,6 +948,8 @@ void dns_relay_get_stats(dns_relay_stats_t *out)
     out->inserts     = st_inserts;
     out->evictions   = st_evictions;
     out->stray       = st_stray;
+    out->tcp         = st_tcp;
+    out->truncated   = st_truncated;
     out->capacity    = DNS_CACHE_ENTRIES;
     out->cache_bytes = s_cache ? (uint32_t)(DNS_CACHE_ENTRIES * sizeof(dns_cache_entry_t)) : 0;
     out->enabled     = s_enabled ? 1 : 0;

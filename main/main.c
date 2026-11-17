@@ -1218,6 +1218,16 @@ void app_main(void)
      * listener only when previously enabled in NVS — disabled by default
      * for security. Auth-gated by the shared web_password hash. */
     remote_console_init();
+    {
+        /* The console is plain TCP: the password typed at its prompt crosses
+         * the LAN or the access point readable by anyone listening there.
+         * Over the tailnet it is inside the encrypted tunnel. */
+        remote_console_config_t rc = {0};
+        if (remote_console_get_config(&rc) == ESP_OK && rc.enabled && (rc.bind & (RC_BIND_AP | RC_BIND_STA)))
+            history_event(HIST_EV_SECURITY, HIST_WARN, "Remote console on port %u listens without encryption on the local network "
+                          "or the access point: the password typed there can be read on that network; limit it to the tailnet",
+                          (unsigned)rc.port);
+    }
 
     /* Initialize event group */
     s_wifi_event_group = xEventGroupCreate();

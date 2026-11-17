@@ -395,6 +395,10 @@ int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *
 #define USBP_SERIAL_IN 512
 #define USBP_SERIAL_OUT 1600
 #define USBP_SERIAL_RX_BUFFER 4096     /* PSRAM byte ring buffer */
+/* Serial send queue (PSRAM): PPP frames from the TCP/IP thread are queued
+ * whole or dropped, never waited for; transfers drain it one by one. */
+#define USBP_SERIAL_TX_BUFFER 8192
+#define USBP_CLOSE_CLAIM_MS 1000       /* close: wait for send slots in use */
 #define USBP_NOTIFY_SIZE 64
 #define USBP_CTRL_SIZE (8 + 256)
 /* USB host library objects, enumeration buffers and FIFO setup before any
@@ -429,7 +433,7 @@ static struct {
     usb_device_handle_t dev;
     uint8_t kind, ctrl, data, data_alt, ep_in, ep_out, ep_notify, mac_index, n_in, n_out;
     esp_netif_t *netif;
-    RingbufHandle_t rx;                /* serial only */
+    RingbufHandle_t rx, tx;            /* serial only */
     usb_transfer_t *in[2], *out[2], *notify, *ctrl_xfer;
     atomic_bool out_busy[2], running, gone, link, link_known;
     atomic_int inflight;
@@ -450,6 +454,58 @@ static void serial_drain(void)
     while ((item = xRingbufferReceiveUpTo(s_net.rx, &n, 0, USBP_SERIAL_RX_BUFFER)) != NULL) vRingbufferReturnItem(s_net.rx, item);
 }
 static atomic_ullong s_rx_bytes, s_tx_bytes;
+
+/* Send slots: whoever holds out_busy[i] owns transfer out[i] (filling,
+ * submitting, completing). A sender claims the slot first and only then
+ * checks that the session runs; usb_port_net_close() stops the session and
+ * then claims every slot before freeing, so no sender can still be writing
+ * into a transfer being freed. */
+static bool slot_claim(int i) {return !atomic_exchange(&s_net.out_busy[i], true);}
+/* Slots kept claimed by a finished session's close (owner task only): a
+ * second close does not wait for them, the next session releases them. */
+static bool s_parked[2];
+static void slot_release(int i) {atomic_store(&s_net.out_busy[i], false);}
+static bool session_usable(void) {return atomic_load(&s_net.running) && !atomic_load(&s_net.gone);}
+
+/* Serial: with slot 0 held, moves the next queued bytes into the transfer
+ * and submits it. True when submitted (the slot stays held until out_cb). */
+static bool serial_fill_submit(void)
+{
+    if (!session_usable() || !s_net.tx) return false;
+    size_t n = 0;
+    void *item = xRingbufferReceiveUpTo(s_net.tx, &n, 0, s_net.out_max);
+    if (!item) return false;
+    usb_transfer_t *t = s_net.out[0];
+    memcpy(t->data_buffer, item, n);
+    vRingbufferReturnItem(s_net.tx, item);
+    t->num_bytes = (int)n;
+    t->flags = 0;
+    atomic_fetch_add(&s_net.inflight, 1);
+    if (usb_host_transfer_submit(t) == ESP_OK) return true;
+    atomic_fetch_sub(&s_net.inflight, 1);
+    atomic_fetch_add(&s_tx_dropped, 1);
+    return false;
+}
+
+static bool serial_tx_waiting(void)
+{
+    UBaseType_t waiting = 0;
+    if (s_net.tx) vRingbufferGetInfo(s_net.tx, NULL, NULL, NULL, NULL, &waiting);
+    return waiting > 0;
+}
+
+/* Starts draining the send queue unless a transfer already does (it picks
+ * up the rest when it completes). Re-checks after releasing the slot so
+ * bytes queued meanwhile are not left behind. */
+static void serial_kick(void)
+{
+    for (int round = 0; round < 4; round++) {
+        if (!slot_claim(0)) return;
+        if (serial_fill_submit()) return;
+        slot_release(0);
+        if (!session_usable() || !serial_tx_waiting()) return;
+    }
+}
 
 /* --- Detection --- */
 #if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
@@ -707,33 +763,43 @@ EXT_RAM_BSS_ATTR static usbp_glue_t s_glue;
 
 static void out_cb(usb_transfer_t *t)
 {
+    int i = (int)(intptr_t)t->context;
     if (t->status == USB_TRANSFER_STATUS_NO_DEVICE) atomic_store(&s_net.gone, true);
     else if (t->status == USB_TRANSFER_STATUS_COMPLETED) atomic_fetch_add(&s_tx_bytes, (unsigned long long)t->actual_num_bytes);
-    atomic_store(&s_net.out_busy[(intptr_t)t->context], false);
     atomic_fetch_sub(&s_net.inflight, 1);
+    if (s_net.kind == USBP_SERIAL && i == 0) {
+        if (serial_fill_submit()) return;         /* still holding the slot */
+        slot_release(0);
+        if (session_usable() && serial_tx_waiting()) serial_kick();
+        return;
+    }
+    slot_release(i);
 }
 
 static esp_err_t glue_transmit(void *handle, void *buffer, size_t len)
 {
     (void)handle;
-    if (s_net.kind == USBP_SERIAL || !atomic_load(&s_net.running) || atomic_load(&s_net.gone) || !atomic_load(&s_net.link)) {
-        atomic_fetch_add(&s_tx_dropped, 1);
-        return ESP_FAIL;
-    }
-    for (int i = 0; i < s_net.n_out; i++) {
-        if (atomic_exchange(&s_net.out_busy[i], true)) continue;
+    for (int i = 0; i < 2; i++) {
+        if (!slot_claim(i)) continue;
+        /* Checked only while holding the slot: a closing session cannot
+         * free this transfer under us. */
+        if (i >= s_net.n_out || s_net.kind == USBP_SERIAL || !session_usable() || !atomic_load(&s_net.link)) {
+            slot_release(i);
+            if (i >= s_net.n_out) continue;
+            break;
+        }
         usb_transfer_t *t = s_net.out[i];
         size_t cap = t->data_buffer_size < s_net.out_max ? t->data_buffer_size : s_net.out_max, n = 0;
         if (s_net.kind == USBP_NET_ECM) {if (len <= cap) {memcpy(t->data_buffer, buffer, len); n = len;}}
         else if (s_net.kind == USBP_NET_NCM) n = usbp_ncm_wrap(t->data_buffer, cap, buffer, len, s_net.seq++, s_net.ncm_div, s_net.ncm_rem);
         else n = usbp_rndis_wrap(t->data_buffer, cap, buffer, len);
-        if (!n) {atomic_store(&s_net.out_busy[i], false); break;}
+        if (!n) {slot_release(i); break;}
         t->num_bytes = (int)n;
         t->flags = USB_TRANSFER_FLAG_ZERO_PACK;   /* end a frame of exactly N packets */
         atomic_fetch_add(&s_net.inflight, 1);
         if (usb_host_transfer_submit(t) == ESP_OK) return ESP_OK;
         atomic_fetch_sub(&s_net.inflight, 1);
-        atomic_store(&s_net.out_busy[i], false);
+        slot_release(i);
         break;
     }
     atomic_fetch_add(&s_tx_dropped, 1);   /* both transfers busy: never wait in TCP/IP */
@@ -970,8 +1036,12 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
         /* CDC-ACM: DTR and RTS on; many modems ignore data without DTR. */
         if (f->ctrl != f->data && !control(s_net.ctrl_xfer, 0x21, 0x22, 0x0003, f->ctrl, NULL, 0, &r)) s_net.leaked = true;
         if (!s_net.rx) s_net.rx = xRingbufferCreateWithCaps(USBP_SERIAL_RX_BUFFER, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_net.rx) {*why = "no memory for the USB serial buffer"; err = ESP_ERR_NO_MEM; goto fail;}
+        if (!s_net.tx) s_net.tx = xRingbufferCreateWithCaps(USBP_SERIAL_TX_BUFFER, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_net.rx || !s_net.tx) {*why = "no memory for the USB serial buffer"; err = ESP_ERR_NO_MEM; goto fail;}
         serial_drain();
+        size_t n;
+        void *item;
+        while ((item = xRingbufferReceiveUpTo(s_net.tx, &n, 0, USBP_SERIAL_TX_BUFFER)) != NULL) vRingbufferReturnItem(s_net.tx, item);
     } else {
         uint8_t mac[6];
         if (!device_mac(mac)) {
@@ -999,6 +1069,7 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
     for (int i = 0; i < s_net.n_out && err == ESP_OK; i++) err = alloc(tx, &s_net.out[i], f->ep_out, out_cb, i);
     if (err == ESP_OK && notify) err = alloc(USBP_NOTIFY_SIZE, &s_net.notify, f->ep_notify, notify_cb, 0);
     if (err != ESP_OK) {*why = "no memory for the USB transfers"; goto fail;}
+    s_parked[0] = s_parked[1] = false;
     atomic_store(&s_net.out_busy[0], false);
     atomic_store(&s_net.out_busy[1], false);
     s_net.opened = xTaskGetTickCount();
@@ -1033,28 +1104,30 @@ esp_err_t usb_port_serial_open(const usbp_device_t *d, const usbp_net_t *port, c
 
 int usb_port_serial_write(const void *data, size_t len, uint32_t timeout_ms)
 {
+    if (s_net.kind != USBP_SERIAL || !s_net.tx || !session_usable()) return -1;
+    if (!len) return 0;
+    if (!timeout_ms) {
+        /* TCP/IP thread (PPP frames): the whole frame or nothing, no wait. */
+        if (len > USBP_SERIAL_TX_BUFFER / 2 || xRingbufferSend(s_net.tx, data, len, 0) != pdTRUE) {
+            atomic_fetch_add(&s_tx_dropped, 1);
+            return -1;
+        }
+        serial_kick();
+        return (int)len;
+    }
+    /* Modem task (AT commands): may wait for room, bounded by timeout_ms. */
     const uint8_t *p = data;
     size_t done = 0;
     TickType_t end = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
     while (done < len) {
-        if (s_net.kind != USBP_SERIAL || !atomic_load(&s_net.running) || atomic_load(&s_net.gone)) return -1;
-        if (atomic_exchange(&s_net.out_busy[0], true)) {
-            if ((int32_t)(end - xTaskGetTickCount()) <= 0) {atomic_fetch_add(&s_tx_dropped, 1); return -1;}
-            vTaskDelay(1);
-            continue;
-        }
-        usb_transfer_t *t = s_net.out[0];
-        size_t n = len - done < s_net.out_max ? len - done : s_net.out_max;
-        memcpy(t->data_buffer, p + done, n);
-        t->num_bytes = (int)n;
-        t->flags = 0;
-        atomic_fetch_add(&s_net.inflight, 1);
-        if (usb_host_transfer_submit(t) != ESP_OK) {
-            atomic_fetch_sub(&s_net.inflight, 1);
-            atomic_store(&s_net.out_busy[0], false);
+        int32_t left = (int32_t)(end - xTaskGetTickCount());
+        size_t n = len - done < 256 ? len - done : 256;
+        if (left <= 0 || !session_usable() || xRingbufferSend(s_net.tx, p + done, n, (TickType_t)left) != pdTRUE) {
+            atomic_fetch_add(&s_tx_dropped, 1);
             return -1;
         }
         done += n;
+        serial_kick();
     }
     return (int)len;
 }
@@ -1093,10 +1166,32 @@ bool usb_port_net_alive(void)
     return true;
 }
 
+/* Claims both send slots (a sender inside glue_transmit or a completing
+ * transfer releases its slot shortly), bounded by `ms`. */
+static bool claim_all_slots(bool *held, uint32_t ms)
+{
+    TickType_t end = xTaskGetTickCount() + pdMS_TO_TICKS(ms);
+    for (;;) {
+        for (int i = 0; i < 2; i++) if (!held[i] && slot_claim(i)) held[i] = true;
+        if (held[0] && held[1]) return true;
+        if ((int32_t)(end - xTaskGetTickCount()) <= 0) return false;
+        vTaskDelay(1);
+    }
+}
+
 void usb_port_net_close(void)
 {
     bool was_running = atomic_exchange(&s_net.running, false);
-    if (!s_net.dev) {free_transfers(); return;}
+    bool held[2] = {s_parked[0], s_parked[1]};
+    /* Senders that already passed the running check finish their submit. */
+    (void)claim_all_slots(held, 20);
+    if (!s_net.dev) {
+        if (!claim_all_slots(held, USBP_CLOSE_CLAIM_MS)) s_net.leaked = true;
+        s_parked[0] = held[0]; s_parked[1] = held[1];
+        if (s_net.leaked) s_poisoned = true;
+        free_transfers();
+        return;
+    }
     uint8_t eps[] = {s_net.ep_in, s_net.ep_out, s_net.ep_notify};
     for (unsigned i = 0; i < sizeof eps; i++) {
         if (!eps[i]) continue;
@@ -1104,7 +1199,10 @@ void usb_port_net_close(void)
         usb_host_endpoint_flush(s_net.dev, eps[i]);
     }
     for (int i = 0; i < 100 && atomic_load(&s_net.inflight) > 0; i++) vTaskDelay(pdMS_TO_TICKS(10));
-    if (atomic_load(&s_net.inflight) > 0) s_net.leaked = true;   /* never free a transfer in flight */
+    /* Flushed transfers have completed: their slots come back. Never free a
+     * transfer in flight or one a sender still holds. */
+    if (!claim_all_slots(held, USBP_CLOSE_CLAIM_MS) || atomic_load(&s_net.inflight) > 0) s_net.leaked = true;
+    s_parked[0] = held[0]; s_parked[1] = held[1];
     for (unsigned i = 0; i < sizeof eps; i++) if (eps[i]) usb_host_endpoint_clear(s_net.dev, eps[i]);
     if (was_running && s_net.netif && s_net.kind != USBP_SERIAL) {
         if (atomic_exchange(&s_net.link, false)) {

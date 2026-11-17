@@ -2891,6 +2891,16 @@
           </div>
           <label class="feature-switch" data-advanced><input type="checkbox" id="cell-pwrkey-high"><span class="feature-switch-track" aria-hidden="true"></span><span>PWRKEY is active high (boards with a transistor driver)</span></label>
           <div class="page-header-actions"><button class="btn btn-secondary" id="cell-reload" type="button">Reload</button><button class="btn btn-primary" id="cell-save" type="button" disabled>Save (applies after restart)</button></div>
+          <h3 class="form-label mt-4" id="cell-limit-title">Monthly data limit</h3>
+          <p class="form-hint">Counts mobile data in both directions, as most carriers do. Approximate: up to 1 MB or 10 minutes of use can be missed after a power cut. Off (0) by default: nothing is counted or stored.</p>
+          <p id="cell-limit-status" role="status"></p>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label" for="cell-limit-mb">Monthly limit (MB, 0 = off)</label><input class="input mono" id="cell-limit-mb" type="number" min="0" max="1000000" step="1" value="0"></div>
+            <div class="form-group"><label class="form-label" for="cell-limit-warn">Warn at (% of the limit, 0 = only at the limit)</label><input class="input mono" id="cell-limit-warn" type="number" min="0" max="99" step="1" value="80"></div>
+            <div class="form-group"><label class="form-label" for="cell-limit-day">The month starts on day</label><input class="input mono" id="cell-limit-day" type="number" min="1" max="28" step="1" value="1"></div>
+          </div>
+          <label class="feature-switch"><input type="checkbox" id="cell-limit-pause"><span class="feature-switch-track" aria-hidden="true"></span><span>Stop using mobile data when the limit is reached (until the next month)</span></label>
+          <div class="page-header-actions"><button class="btn btn-secondary" id="cell-limit-reset" type="button">Reset the counter</button><button class="btn btn-primary" id="cell-limit-save" type="button" disabled>Save limit (applies now)</button></div>
         </div>
       </div>
 
@@ -7381,6 +7391,7 @@
         set('cell-transport',c.transport==='usb'?'usb':'uart');set('cell-usb-mode',c.usb_mode||'auto');
         set('cell-usb-iface',String(typeof c.usb_interface==='number'?c.usb_interface:-1));cellTransportView();
         document.getElementById('cell-status').textContent=cellStatusText(st,c);
+        cellLimitView(d.data_limit);
         var badge=document.getElementById('cell-badge');
         /* Waiting: between attempts, for example while no USB device is plugged in. */
         badge.textContent=UT(st.compiled===false?'Not compiled':!st.enabled_at_boot?'Off':st.state==='connected'?'Connected':st.state==='stopped'?'Stopped':st.state==='backoff'?'Waiting':'Connecting…');
@@ -7407,6 +7418,36 @@
         showToast('success','Cellular settings saved','Restart the device to apply them.',5000);await loadCellular();}
       catch(e){document.getElementById('cell-status').textContent='Not saved: '+e.message;btn.disabled=false;}
     });
+    /* Monthly mobile data limit: applies at once, separate from the modem settings. */
+    function mbText(bytes){var mb=bytes/1048576;return (mb<10?mb.toFixed(1):String(Math.round(mb)))+' MB';}
+    function cellLimitView(q){
+      var st=document.getElementById('cell-limit-status');
+      if(!q){st.textContent=UT('Not available in this firmware.');return;}
+      document.getElementById('cell-limit-mb').value=q.limit_mb;document.getElementById('cell-limit-warn').value=q.warn_percent;
+      document.getElementById('cell-limit-day').value=q.reset_day;document.getElementById('cell-limit-pause').checked=!!q.pause;
+      document.getElementById('cell-limit-save').disabled=true;
+      document.getElementById('cell-limit-reset').hidden=!q.limit_mb;
+      if(!q.limit_mb){st.textContent=UT('Off: mobile data is not counted.');return;}
+      var pct=Math.min(100,Math.round(q.used_bytes*100/(q.limit_mb*1048576)));
+      var parts=[UT('Used this month:')+' '+mbText(q.used_bytes)+' / '+q.limit_mb+' MB ('+pct+'%)'];
+      if(q.period_start)parts.push(UT('since')+' '+q.period_start);
+      if(!q.clock)parts.push(UT('the clock is not set yet: the month is counted from the last known date'));
+      if(q.paused)parts.push(UT('limit reached: mobile data paused until the next month'));
+      st.textContent=parts.join(' · ');
+    }
+    ['cell-limit-mb','cell-limit-warn','cell-limit-day','cell-limit-pause'].forEach(function(id){var el=document.getElementById(id);
+      el.addEventListener(el.type==='checkbox'?'change':'input',function(){document.getElementById('cell-limit-save').disabled=false;});});
+    async function cellLimitPost(reset){
+      var num=function(id){return Number(document.getElementById(id).value);};
+      var body={data_limit:{limit_mb:num('cell-limit-mb'),warn_percent:num('cell-limit-warn'),reset_day:num('cell-limit-day'),pause:document.getElementById('cell-limit-pause').checked}};
+      if(reset)body.data_limit.reset_usage=true;
+      try{var r=await apiFetch('/api/cellular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var d=await r.json();
+        if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
+        showToast('success',reset?'Mobile data counter reset':'Data limit saved','',4000);await loadCellular();}
+      catch(e){document.getElementById('cell-limit-status').textContent='Not saved: '+e.message;}
+    }
+    document.getElementById('cell-limit-save').addEventListener('click',function(){cellLimitPost(false);});
+    document.getElementById('cell-limit-reset').addEventListener('click',function(){if(confirm(UT('Reset the mobile data counter of this month to zero?')))cellLimitPost(true);});
     /* 2.x -> 3.x layout migration: shown only while the 2.x table is in use. */
     var MIG_STATES={idle:'Ready',copying_self:'Preparing (copying this firmware into the first slot; the gateway restarts once)',checking:'Looking for the 3.0 release',
       downloading:'Downloading and checking 3.0',verifying:'Verifying the written 3.0 image',writing_boot:'Writing the boot loader and partition table: keep the power on',
@@ -10346,7 +10387,9 @@
             '<div>Entries: <strong>' + (dq.entries | 0) + '</strong> / ' + (dq.capacity | 0) +
             ' · evictions ' + (dq.evictions | 0) +
             ' · SPIRAM ' + kb(dq.cache_bytes || 0) + '</div>' +
-            '<div>Stray upstream answers discarded: <strong>' + (dq.upstream_stray | 0) + '</strong></div>';
+            '<div>Stray upstream answers discarded: <strong>' + (dq.upstream_stray | 0) + '</strong></div>' +
+            '<div>Queries over TCP: <strong>' + (dq.tcp_queries | 0) + '</strong></div>' +
+            '<div>Oversized answers truncated: <strong>' + (dq.truncated | 0) + '</strong></div>';
         }
 
         /* Connection & security: assembly self-tests, TLS distrust, and the

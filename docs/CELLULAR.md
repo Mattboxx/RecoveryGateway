@@ -139,6 +139,28 @@ serial interface (and how it was chosen) or a USB network function (RNDIS,
 CDC-ECM, CDC-NCM) is in use, mode switches this boot and dropped data, with a
 reason when nothing usable is found.
 
+## Monthly data limit
+
+Under the cellular settings, **Monthly data limit** counts mobile data in both
+directions (most carriers count both), for a UART or USB modem and for a USB
+network stick.
+
+- **Monthly limit (MB)**: 0 turns the counter off (the default). While off,
+  nothing is counted, stored or written to flash.
+- **Warn at (%)**: one warning in the event history and through the
+  notification channels when that share is used; 0 warns only at the limit.
+  The limit itself is reported once per month.
+- **The month starts on day**: 1 to 28, the day the carrier's month restarts.
+  The counter restarts then; this needs the clock (SNTP). Until the clock is
+  set, use is added to the last known month.
+- **Stop using mobile data when the limit is reached**: the modem stays
+  connected but carries no traffic until the next month; Wi-Fi or Ethernet,
+  when present, keep working. Off by default.
+- The count is approximate: it is saved after at least 1 MB and 10 minutes of
+  use, or at a warning, so up to that much can be missed after a power cut.
+  Carriers may also count protocol overhead differently. **Reset the counter**
+  starts the month over.
+
 ## Security and costs
 
 - Cellular PPP provides Internet and Tailnet transport. On cellular-only
