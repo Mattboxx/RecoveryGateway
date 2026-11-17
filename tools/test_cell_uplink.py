@@ -291,9 +291,17 @@ static cell_config_t stored;static cell_status_t status;static int saves;static 
 static void cell_uplink_get_config(cell_config_t *out){*out=stored;}
 static void cell_uplink_get_status(cell_status_t *out){*out=status;}
 static esp_err_t cell_uplink_set_config(const cell_config_t *c,char *why,size_t n){if(!cell_config_valid(c,why,n))return ESP_ERR_INVALID_ARG;saves++;if(save_result)return save_result;stored=*c;return ESP_OK;}
+#define CELL_QUOTA_HOST_TEST 1
+#include "cell_quota.h"
+static cell_quota_config_t quota;static bool quota_reset;static int quota_saves;static esp_err_t quota_result;
+static esp_err_t cell_quota_set(const cell_quota_config_t *c,bool reset,char *why,size_t n){
+    if(c->reset_day<1||c->reset_day>28){snprintf(why,n,"bad day");return ESP_ERR_INVALID_ARG;}
+    quota_saves++;if(quota_result){snprintf(why,n,"settings not saved");return quota_result;}quota=*c;quota_reset=reset;return ESP_OK;}
+static void cell_quota_json(cJSON *parent){cJSON *o=cJSON_AddObjectToObject(parent,"data_limit");cJSON_AddNumberToObject(o,"limit_mb",quota.limit_mb);}
 ''' + 'static const char *const STATE_NAMES' + source.split('static const char *const STATE_NAMES', 1)[1].split('\nstatic esp_err_t send_json(', 1)[0] + '\n' \
     + ''.join(function(source, s) for s in ('static esp_err_t send_json(', 'static esp_err_t get_cellular(', 'static bool json_int(',
-                                             'static bool json_text(', 'static bool json_secret(', 'static esp_err_t post_cellular(')) + r'''
+                                             'static bool json_text(', 'static bool json_secret(', 'static esp_err_t post_data_limit(',
+                                             'static esp_err_t post_cellular(')) + r'''
 static httpd_req_t post(const char *body){httpd_req_t r={.content_len=(int)strlen(body),.body=body,.authorized=true};post_cellular(&r);return r;}
 static httpd_req_t get(void){httpd_req_t r={.authorized=true};get_cellular(&r);return r;}
 #define PINS "\"uart\":1,\"baud\":115200,\"tx\":17,\"rx\":18,\"rts\":-1,\"cts\":-1,\"pwrkey\":-1,\"pwrkey_active_high\":false"
@@ -357,7 +365,33 @@ int main(void){
     save_result=ESP_FAIL;r=post(ON ",\"pin\":\"5555\"}");assert(r.status==500&&!memcmp(&stored,&keep,sizeof keep));save_result=ESP_OK;
     httpd_req_t denied={.content_len=2,.body="{}",.authorized=false};int before=saves;post_cellular(&denied);assert(denied.status==401&&saves==before);
     char big[900];memset(big,' ',sizeof big-1);big[sizeof big-1]=0;r=post(big);assert(r.status==400);
-    puts("PASS: actual cellular API: typed fields, UART/USB transport and USB interface (optional, kept, validated), USB status, real validation, write-only SIM PIN/password (kept, replaced, cleared, never returned), 400/500/401 without saved-state change (fixtures)");
+    /* Monthly data limit: applied on its own, no restart, modem settings untouched. */
+    keep=stored;int modem_saves=saves;
+    r=post("{\"data_limit\":{\"limit_mb\":2048,\"warn_percent\":75,\"reset_day\":5,\"pause\":true}}");
+    assert(r.status==200&&strstr(r.reply,"\"restart_required\":false")&&quota.limit_mb==2048&&quota.warn_pct==75&&quota.reset_day==5&&quota.pause&&!quota_reset);
+    assert(saves==modem_saves&&!memcmp(&stored,&keep,sizeof keep));
+    r=post("{\"data_limit\":{\"limit_mb\":2048,\"warn_percent\":75,\"reset_day\":5,\"pause\":false,\"reset_usage\":true}}");
+    assert(r.status==200&&quota_reset&&!quota.pause);
+    r=get();assert(strstr(r.reply,"\"data_limit\":{\"limit_mb\":2048}"));
+    const char *bad_limit[]={"{\"data_limit\":{\"limit_mb\":-1,\"warn_percent\":75,\"reset_day\":5,\"pause\":true}}",
+        "{\"data_limit\":{\"limit_mb\":1000001,\"warn_percent\":75,\"reset_day\":5,\"pause\":true}}",
+        "{\"data_limit\":{\"limit_mb\":10,\"warn_percent\":100,\"reset_day\":5,\"pause\":true}}",
+        "{\"data_limit\":{\"limit_mb\":10,\"warn_percent\":50,\"reset_day\":29,\"pause\":true}}",
+        "{\"data_limit\":{\"limit_mb\":10,\"warn_percent\":50,\"reset_day\":1,\"pause\":1}}",
+        "{\"data_limit\":{\"limit_mb\":10,\"warn_percent\":50,\"reset_day\":1}}",
+        "{\"data_limit\":{\"limit_mb\":10,\"warn_percent\":50,\"reset_day\":1,\"pause\":true,\"reset_usage\":\"yes\"}}",
+        "{\"data_limit\":[]}"};
+    cell_quota_config_t qkeep=quota;int qs=quota_saves;
+    for(unsigned i=0;i<sizeof bad_limit/sizeof *bad_limit;i++){r=post(bad_limit[i]);assert(r.status==400&&!memcmp(&quota,&qkeep,sizeof qkeep));}
+    assert(quota_saves==qs);
+    quota_result=ESP_FAIL;r=post("{\"data_limit\":{\"limit_mb\":1,\"warn_percent\":0,\"reset_day\":1,\"pause\":false}}");
+    assert(r.status==500&&!memcmp(&quota,&qkeep,sizeof qkeep));quota_result=ESP_OK;
+    /* With the modem fields present the request is a modem save: data_limit is not applied. */
+    r=post(ON ",\"data_limit\":{\"limit_mb\":7,\"warn_percent\":0,\"reset_day\":1,\"pause\":false}}");
+    assert(r.status==200&&quota.limit_mb==2048&&strstr(r.reply,"\"restart_required\":true"));
+    httpd_req_t denied2={.content_len=60,.body="{\"data_limit\":{\"limit_mb\":1,\"warn_percent\":0,\"reset_day\":1,\"pause\":false}}",.authorized=false};
+    denied2.content_len=(int)strlen(denied2.body);qs=quota_saves;post_cellular(&denied2);assert(denied2.status==401&&quota_saves==qs);
+    puts("PASS: actual cellular API: typed fields, UART/USB transport and USB interface (optional, kept, validated), USB status, real validation, write-only SIM PIN/password (kept, replaced, cleared, never returned), monthly data limit applied alone without restart or modem change (bounds, 400/500/401), 400/500/401 without saved-state change (fixtures)");
 }
 '''
 
@@ -409,6 +443,8 @@ static bool uplink_address(esp_netif_t *n, esp_netif_ip_info_t *out) {
     return out->ip.addr != 0;
 }
 static esp_netif_t *eth_uplink_service_netif(void) { return lan; }
+static bool quota_paused;
+static bool cell_quota_paused(void) { return quota_paused; }
 static esp_netif_t *esp_netif_get_default_netif(void) { return default_netif; }
 static void esp_netif_set_default_netif(esp_netif_t *n) { default_netif = n; }
 static bool first_boot_active(void) { return first_boot; }
@@ -452,6 +488,12 @@ int main(void) {
     tailscale_exit_node_ip = 4;
     uplink_services_refresh(false);
     assert(default_netif == &ppp && !ap_requested && name_ip == 3 && uplink_up == 2);
-    puts("PASS: Ethernet and PPP cold boot, primary/failover, LAN DNS binding, AP recovery and exit route preservation");
+    /* Mobile data paused at the monthly limit: primary mode no longer prefers it. */
+    ppp.up = true; atomic_store(&s_has_ip, true); s_running.mode = CELL_MODE_PRIMARY;
+    assert(cell_uplink_preferred_netif(&wifi) == &ppp);
+    quota_paused = true;
+    assert(cell_uplink_preferred_netif(&wifi) == &wifi);
+    quota_paused = false;
+    puts("PASS: Ethernet and PPP cold boot, primary/failover, LAN DNS binding, AP recovery and exit route preservation, mobile data paused at the limit");
 }
 ''')
