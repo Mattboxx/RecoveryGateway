@@ -6,16 +6,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-3.0.25-beta.14 (local candidate) adds to beta.13, from the serial log of
-board A during the stable/beta comparison (both present in 3.0.24 too):
+3.0.25-beta.15 adds to beta.13 (beta.14 was a local candidate), from the
+serial log of board A during the stable/beta comparison (the first two are
+present in 3.0.24 too):
 
 - **No microSD probe at boot while the SD recorder is off.** Boards without
   a card logged three SD init errors and spent a moment on every boot. The
   card is now looked for when the recorder is on, the first time its status
   is shown (Diagnostics or the microSD card), or when the recorder is
   enabled (a card inserted later is found then).
-- **MQTT waits for the uplink address** before its first broker attempt, which
-  always failed at boot ("Host is unreachable") and logged errors.
+- **MQTT waits for a network address** before its first broker attempt, which
+  always failed at boot ("Host is unreachable") and logged errors. An
+  address on the LAN side (Wi-Fi or Ethernet, for a broker on the local
+  network) or on the Internet uplink (also mobile) is enough.
+- **Refused web connections are closed silently.** With administration
+  limited to the tailnet and the access point, every LAN connection to the
+  web page made ESP-IDF log "session creation failed" as an error, so a LAN
+  device retrying filled the log. The connection is now closed at once
+  without reading a request or logging; System returns the count as
+  `admin_refused`.
 
 3.0.25-beta.13 adds the following to beta.8
 (beta.9 to beta.12 were local candidates on the way: beta.11 made DNS over TCP

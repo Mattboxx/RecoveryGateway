@@ -21,6 +21,10 @@ assert 'conf.open_fn                  = web_open;' in UI[start:start + 200]
 web_open = UI[UI.index('static esp_err_t web_open(httpd_handle_t hd, int fd)'):]
 web_open = web_open[:web_open.index('\n}\n')]
 assert web_open.rstrip().endswith('return web_idle_open(hd, fd);'), 'every accepted connection still gets the idle clock'
+# A connection outside the administration scope is closed silently (no
+# "session creation failed" error line per attempt from ESP-IDF).
+assert 'return web_idle_refuse(hd, fd);' in web_open and 'return ESP_FAIL;' not in web_open
+assert 'cJSON_AddNumberToObject(root, "admin_refused", web_idle_refused());' in UI
 assert 'lru_purge_enable         = true' not in UI
 assert UI.index('web_idle_start(server);') > UI.index('esp_err_t start = httpd_start(&server, &conf);')
 
@@ -57,8 +61,8 @@ int esp_timer_create(const esp_timer_create_args_t *, esp_timer_handle_t *);
 int esp_timer_start_periodic(esp_timer_handle_t, uint64_t);
 int esp_timer_stop(esp_timer_handle_t);
 ''',
-    'lwip/sockets.h': '#pragma once\n#include <stddef.h>\n'
-                      'int send(int, const void *, size_t, int);\nint recv(int, void *, size_t, int);\n',
+    'lwip/sockets.h': '#pragma once\n#include <stddef.h>\n#define SHUT_RDWR 2\n'
+                      'int send(int, const void *, size_t, int);\nint recv(int, void *, size_t, int);\nint shutdown(int, int);\n',
 }
 
 TEST = r'''
@@ -67,13 +71,17 @@ TEST = r'''
 #include <stdio.h>
 #include "web_idle.h"
 #include "esp_timer.h"
+#include "lwip/sockets.h"
 
 static int64_t now_us;
 int64_t esp_timer_get_time(void) { return now_us; }
 static httpd_send_func_t send_fn;
 static httpd_recv_func_t recv_fn;
-esp_err_t httpd_sess_set_send_override(httpd_handle_t h, int fd, httpd_send_func_t f) { (void)h; (void)fd; send_fn = f; return ESP_OK; }
-esp_err_t httpd_sess_set_recv_override(httpd_handle_t h, int fd, httpd_recv_func_t f) { (void)h; (void)fd; recv_fn = f; return ESP_OK; }
+static int override_fail;   /* 1: recv override refused, 2: send override refused */
+esp_err_t httpd_sess_set_send_override(httpd_handle_t h, int fd, httpd_send_func_t f) { (void)h; (void)fd; if (override_fail == 2) return ESP_FAIL; send_fn = f; return ESP_OK; }
+esp_err_t httpd_sess_set_recv_override(httpd_handle_t h, int fd, httpd_recv_func_t f) { (void)h; (void)fd; if (override_fail == 1) return ESP_FAIL; recv_fn = f; return ESP_OK; }
+static int shut_fd = -1, shut_how, shuts;
+int shutdown(int fd, int how) { shut_fd = fd; shut_how = how; shuts++; return 0; }
 static int closed[64], n_closed, refuse_close;
 esp_err_t httpd_sess_trigger_close(httpd_handle_t h, int fd) {
     (void)h;
@@ -146,10 +154,32 @@ int main(void) {
     assert(n_closed == 4 + WEB_IDLE_SLOTS);
     for (int i = 4; i < n_closed; i++) assert(closed[i] >= 62 && closed[i] < 62 + WEB_IDLE_SLOTS);
     assert(web_idle_closed() == (uint32_t)n_closed);
+    /* Refused connection (outside the administration scope): accepted by the
+     * server so ESP-IDF logs nothing, but nothing is read or sent and the
+     * socket is shut down at once; the idle clock is the backstop. */
+    send_fn = NULL; recv_fn = NULL; sock_ret = 0;
+    now_us = S(600); assert(web_idle_refuse(hd, 70) == ESP_OK && web_idle_refused() == 1);
+    assert(shuts == 1 && shut_fd == 70 && shut_how == SHUT_RDWR && send_fn && recv_fn);
+    assert(recv_fn(hd, 70, buf, sizeof buf, 0) == HTTPD_SOCK_ERR_FAIL);   /* data pending: still never read */
+    assert(send_fn(hd, 70, buf, 1, 0) == HTTPD_SOCK_ERR_FAIL);
+    assert(send_fn(hd, 70, NULL, 0, 0) == HTTPD_SOCK_ERR_FAIL && recv_fn(hd, 70, NULL, 0, 0) == HTTPD_SOCK_ERR_FAIL);
+    clients[0] = 70; n_clients = 1; int before = n_closed;
+    sweep_at(S(604) + 999999); assert(n_closed == before);
+    sweep_at(S(605)); assert(n_closed == before + 1 && closed[before] == 70);   /* backstop close */
+    /* An override that cannot be set: refused the old way (fail closed, the
+     * server closes it), no shutdown, not counted. */
+    for (override_fail = 1; override_fail <= 2; override_fail++) {
+        send_fn = NULL; recv_fn = NULL;
+        assert(web_idle_refuse(hd, 71) == ESP_FAIL && shuts == 1 && web_idle_refused() == 1);
+        assert(override_fail != 2 || recv_fn(hd, 71, buf, sizeof buf, 0) == HTTPD_SOCK_ERR_FAIL);   /* recv already refusing */
+    }
+    override_fail = 0;
+    assert(web_idle_refuse(hd, 72) == ESP_OK && web_idle_refused() == 2 && shut_fd == 72);
     web_idle_stop(); assert(!timer_running);
     timer_cb(NULL); assert(!work);                    /* stopped: no work queued */
     puts("PASS: web_idle (fresh session kept < 5 s, recv/send restart the clock, close at 5 s, errors mapped and "
-         "not activity, refused close retried, sweep-found and gone sessions, full table, timer failure); "
+         "not activity, refused close retried, sweep-found and gone sessions, full table, timer failure; "
+         "out-of-scope connection never read, shut down, counted, idle backstop, override failure fails closed); "
          "web_ui wiring structural");
     return 0;
 }

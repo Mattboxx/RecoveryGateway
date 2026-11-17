@@ -3972,6 +3972,7 @@ static esp_err_t system_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "session_remaining_s", session_remaining_s_for_req(req));
     cJSON_AddBoolToObject(root, "web_auth_enabled", s_web_auth_enabled);
     cJSON_AddStringToObject(root, "admin_scope", s_web_scope == WEB_ADMIN_TAILNET_AP ? "tailnet_ap" : "anywhere");
+    cJSON_AddNumberToObject(root, "admin_refused", web_idle_refused());
     cJSON_AddBoolToObject(root, "ap_client_traffic", ap_traffic_on);
     cJSON_AddBoolToObject(root, "web_password_set", is_web_password_set());
     cJSON_AddNumberToObject(root, "web_port", web_ui_configured_port());
@@ -4082,14 +4083,15 @@ static uint32_t web_admin_ap_ip(void)
 }
 
 /* New connection: with administration limited to the tailnet and the AP, a
- * connection to another gateway address (the LAN one) is closed at once. */
+ * connection to another gateway address (the LAN one) is closed at once,
+ * silently and without reading a request (web_idle_refuse). */
 static esp_err_t web_open(httpd_handle_t hd, int fd)
 {
     if (s_web_scope == WEB_ADMIN_TAILNET_AP) {
         web_addr_t local;
         bool up = tailscale_is_connected();
         if (!socket_addr(fd, false, &local) || !web_admin_allowed(s_web_scope, &local, web_admin_ap_ip(), tailscale_tunnel_ip, up))
-            return ESP_FAIL;
+            return web_idle_refuse(hd, fd);
     }
     return web_idle_open(hd, fd);
 }

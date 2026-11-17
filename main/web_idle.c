@@ -91,6 +91,44 @@ esp_err_t web_idle_open(httpd_handle_t hd, int fd)
     return ESP_OK;
 }
 
+static uint32_t s_refused;
+
+static int refused_send(httpd_handle_t hd, int fd, const char *buf, size_t len, int flags)
+{
+    (void)hd; (void)fd; (void)buf; (void)len; (void)flags;
+    return HTTPD_SOCK_ERR_FAIL;
+}
+
+static int refused_recv(httpd_handle_t hd, int fd, char *buf, size_t len, int flags)
+{
+    (void)hd; (void)fd; (void)buf; (void)len; (void)flags;
+    return HTTPD_SOCK_ERR_FAIL;
+}
+
+/* A connection the administration is not allowed on. Failing open_fn made
+ * ESP-IDF log "session creation failed" at error level for every attempt, so
+ * a LAN device retrying filled the log. The session is kept instead, with a
+ * receive and send that always fail: not a byte of a request is read and no
+ * handler runs. The socket is shut down, which wakes the server's select at
+ * once; the first receive fails and the server deletes the session without a
+ * log line. The idle clock is a backstop. If an override cannot be set, the
+ * connection is refused the old way (fail closed, logged). */
+esp_err_t web_idle_refuse(httpd_handle_t hd, int fd)
+{
+    if (httpd_sess_set_recv_override(hd, fd, refused_recv) != ESP_OK
+        || httpd_sess_set_send_override(hd, fd, refused_send) != ESP_OK)
+        return ESP_FAIL;
+    web_idle_touch(fd, esp_timer_get_time());
+    (void)shutdown(fd, SHUT_RDWR);
+    __atomic_add_fetch(&s_refused, 1, __ATOMIC_RELAXED);
+    return ESP_OK;
+}
+
+uint32_t web_idle_refused(void)
+{
+    return __atomic_load_n(&s_refused, __ATOMIC_RELAXED);
+}
+
 /* Closes the sessions in fds[0..n) idle for WEB_IDLE_CLOSE_MS and forgets
  * entries for sockets that are gone. Returns the number of closures asked. */
 int web_idle_sweep_fds(httpd_handle_t hd, const int *fds, size_t n, int64_t now_us)

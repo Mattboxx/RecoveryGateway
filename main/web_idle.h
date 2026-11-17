@@ -18,6 +18,11 @@ void web_idle_start(httpd_handle_t hd);
 void web_idle_stop(void);
 /* Idle sessions closed since boot. */
 uint32_t web_idle_closed(void);
+/* httpd open_fn for a connection that must not be served: closed silently,
+ * no request read. ESP_FAIL (the server refuses it) if that cannot be set. */
+esp_err_t web_idle_refuse(httpd_handle_t hd, int fd);
+/* Connections refused that way since boot. */
+uint32_t web_idle_refused(void);
 
 /* Exposed for the host test. */
 void web_idle_reset(void);

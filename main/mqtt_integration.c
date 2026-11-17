@@ -51,11 +51,13 @@
 #include "mqtt_power_event.h"
 #include "notify_text.h"
 
-/* The uplink that carries Internet traffic has an IPv4 address. */
+/* The gateway has an IPv4 address on its LAN-side uplink (Wi-Fi station or
+ * Ethernet: a broker on the local network) or on the uplink carrying Internet
+ * traffic (also a mobile one). */
 static bool mqtt_uplink_ready(void)
 {
     esp_netif_ip_info_t ip = {0};
-    return uplink_address(uplink_internet_netif(), &ip);
+    return uplink_address(eth_uplink_service_netif(), &ip) || uplink_address(uplink_internet_netif(), &ip);
 }
 
 static const char *TAG = "mqtt_bridge";
