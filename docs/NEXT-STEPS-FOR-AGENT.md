@@ -285,3 +285,10 @@ Public release preparation and future changes follow [Quality policy](QUALITY-GA
 [Migration](MIGRATION-RENAME.md), [Release availability](PRESENTATION-STATUS.md)
 and the [development roadmap](DEVELOPMENT-ROADMAP.md). Detailed test execution
 and remaining-case lists are internal maintainer records, not release content.
+
+## 3.0.25-beta.9 candidate (2026-11-17)
+
+- Source `70198e8` on `feat/usb-cellular-20261115`, hashes in ignored `build/development-3.0.25-beta.9/70198e8/`. Not published.
+- Owner authorized installing it on board A over Tailscale once validation passes (recorded 2026-11-17). The lab runner (pid 18364) is not running: install needs the owner to restart `run_lab.ps1` or to upload `firmware.bin` via System -> Firmware.
+- After install: check `/api/status` version, DNS relay over TCP (`dig +tcp` through the AP/LAN listener), a large TXT answer over UDP (TC, then TCP), the DNS diagnostics counters, and the Cellular data-limit section (no modem needed). Real USB modem tests stay pending.
+- Review backlog from the 2026-11-17 audit is listed in the owner report (security hardening and feature ideas); none implemented yet.
