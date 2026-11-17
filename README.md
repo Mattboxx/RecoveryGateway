@@ -1,15 +1,17 @@
 <div align="center">
 
-<img src="assets/brand/png/banner.png" alt="ESP32 Tailnet Gateway — Mattboxx Edition. One ESP32. Multiple Tailnet roles. Enable only what you need." width="100%">
+<img src="assets/brand/png/banner.png" alt="ESP32 Tailnet Gateway — Mattboxx Edition. One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need." width="100%">
 
 # ESP32 Tailnet Gateway — Mattboxx Edition
 
-**Mattboxx Edition · One ESP32. Multiple Tailnet roles. Enable only what you need.**
+**Mattboxx Edition · One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need.**
 
-**Tailscale / Headscale gateway · Standalone Wake-on-LAN via Telegram or ntfy**
+**Tailscale / Headscale gateway · Wake-on-LAN from Telegram or ntfy, no VPN needed · Ethernet and 4G/LTE uplinks for IoT**
 
-Connect local devices to selected Tailnet services, advertise subnets, or
-wake a NAS or PC and verify that it responds. Each role is optional.
+Use it as a Tailnet gateway, as a stand-alone Wake-on-LAN node you command
+from Telegram or ntfy, or as an IoT gateway that stays online over Ethernet
+or a mobile SIM when Wi-Fi drops. Each role is optional: you do not need
+Tailscale to use Wake-on-LAN or the backup uplinks.
 
 **ESP32-S3 N8R8 / N16R8 · 8 MB octal PSRAM**
 
@@ -32,9 +34,10 @@ wake a NAS or PC and verify that it responds. Each role is optional.
 
 | Use case | What the ESP32 does |
 | --- | --- |
+| **Wake and check a NAS or PC — no VPN needed** | Send Wake-on-LAN and verify that the device answers, from a Telegram bot or an ntfy topic. Works with or without Tailscale. [Setup and command reference](https://mattboxx.github.io/esp32-tailnet-gateway/remote-recovery/#commands). |
+| **Keep IoT devices online** | Use wired Ethernet (W5500 module, or a USB adapter in the beta) or a mobile SIM (UART modem, or USB modems and 4G sticks in the beta) as the main or the backup uplink, with automatic failover and an optional monthly data limit. [Hardware](https://mattboxx.github.io/esp32-tailnet-gateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
 | **Connect devices that cannot run Tailscale** | Forward one TCP or UDP service from the local LAN to a Tailnet peer. Restrict the source by IP/CIDR. |
 | **Reach a remote LAN** | Advertise approved subnets to Tailnet clients. Configure the gateway's own Wi-Fi for IoT devices. |
-| **Wake and check a NAS or PC** | Send Wake-on-LAN and verify reachability from Telegram or ntfy, even without Tailscale. [Setup and command reference](https://mattboxx.github.io/esp32-tailnet-gateway/remote-recovery/#commands). |
 | **Monitor and automate** | Track events and resource trends locally. Optionally use MQTT and Home Assistant, ntfy, Telegram, email or SNMP. |
 
 ## Quick start

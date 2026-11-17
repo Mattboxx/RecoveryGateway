@@ -295,6 +295,6 @@ and remaining-case lists are internal maintainer records, not release content.
 
 ## 3.0.25-beta.13 (2026-11-17)
 
-- To publish as a GitHub pre-release once the full validation passes (owner: "Se passa i test pubblica poi l'ultima beta su github"); v3.0.24 stays Latest.
+- Published 2026-11-17 as the GitHub pre-release v3.0.25-beta.13 (tag at c26187e, assets verified by SHA-256; full validation 153/153 on ab7f28b, no firmware change from c26187e); v3.0.24 stays Latest.
 - The lab runner's Tailscale adapter index on the owner PC changed from 26 to 28 (WinError 10022 until updated in job scripts).
 - Pending: real USB modem/stick/adapter tests (owner's device needed), HiLink signal, session binding observed from two clients.
