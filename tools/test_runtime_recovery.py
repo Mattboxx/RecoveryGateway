@@ -294,10 +294,13 @@ clear = 'static void session_clear_all' + web.split('static void session_clear_a
 session_fixture = r'''
 #define WEB_UI_SESSION_MAX 4
 #define WEB_UI_SESSION_TOKEN_LEN 32
-typedef struct {char token[65];uint64_t expires_us,last_used_order;} web_session_t;
+typedef struct {uint8_t b[16];} web_addr_t;
+typedef struct {char token[65];uint64_t expires_us,last_used_order;web_addr_t peer;} web_session_t;
 static web_session_t s_sessions[4];static uint64_t s_session_activity_order,clock_us=100000;
 static uint32_t s_session_timeout_s;static bool s_web_auth_enabled=true,password_set=true;
 typedef struct {int slot;char token[65];} httpd_req_t;
+static int httpd_req_to_sockfd(httpd_req_t *r){(void)r;return 3;}
+static bool socket_addr(int fd,bool peer,web_addr_t *out){(void)fd;(void)peer;memset(out,1,sizeof *out);return true;}
 static int64_t esp_timer_get_time(void){return clock_us;}
 static void esp_fill_random(void *p,size_t n){static unsigned value;memset(p,++value,n);}
 static void hex_encode(const uint8_t *p,size_t n,char *out){(void)n;memset(out,'a'+p[0]%26,64);out[64]=0;}
@@ -307,14 +310,14 @@ static int session_find_for_req(httpd_req_t *req){int i=req->slot;return i>=0&&i
 '''
 session_tests = r'''
 int main(void){
-    for(int i=0;i<4;i++){session_create();assert(s_sessions[i].expires_us==UINT64_MAX);}
+    for(int i=0;i<4;i++){session_create(NULL);assert(s_sessions[i].expires_us==UINT64_MAX);}
     httpd_req_t req={.slot=0};strcpy(req.token,s_sessions[0].token);
     assert(request_authenticated(&req));assert(session_pick_new_slot()==1);
-    session_create();assert(!strcmp(req.token,s_sessions[0].token));assert(session_pick_new_slot()==2);
-    for(int n=0;n<10000;n++){int expected=(n+2)%4;assert(session_pick_new_slot()==expected);session_create();}
+    session_create(NULL);assert(!strcmp(req.token,s_sessions[0].token));assert(session_pick_new_slot()==2);
+    for(int n=0;n<10000;n++){int expected=(n+2)%4;assert(session_pick_new_slot()==expected);session_create(NULL);}
     s_sessions[3].expires_us=clock_us;assert(session_pick_new_slot()==3);
     session_clear_slot(2);assert(!s_sessions[2].token[0]&&!s_sessions[2].last_used_order);
-    assert(session_pick_new_slot()==2);session_create();
+    assert(session_pick_new_slot()==2);session_create(NULL);
     req.slot=2;strcpy(req.token,s_sessions[2].token);s_session_timeout_s=60;
     assert(request_authenticated(&req));assert(s_sessions[2].expires_us==clock_us+60000000);
     uint64_t order=s_sessions[2].last_used_order;req.token[0]='!';

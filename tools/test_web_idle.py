@@ -17,7 +17,10 @@ SRC = (ROOT / 'main/web_idle.c').read_text(encoding='utf-8')
 UI = (ROOT / 'main/web_ui.c').read_text(encoding='utf-8').replace('\r\n', '\n')
 
 start = UI.index('conf.lru_purge_enable         = false;')
-assert 'conf.open_fn                  = web_idle_open;' in UI[start:start + 200]
+assert 'conf.open_fn                  = web_open;' in UI[start:start + 200]
+web_open = UI[UI.index('static esp_err_t web_open(httpd_handle_t hd, int fd)'):]
+web_open = web_open[:web_open.index('\n}\n')]
+assert web_open.rstrip().endswith('return web_idle_open(hd, fd);'), 'every accepted connection still gets the idle clock'
 assert 'lru_purge_enable         = true' not in UI
 assert UI.index('web_idle_start(server);') > UI.index('esp_err_t start = httpd_start(&server, &conf);')
 
