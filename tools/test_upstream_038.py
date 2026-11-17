@@ -95,7 +95,7 @@ run('actual current/previous/next key expiration and abandoned handshake cleanup
 #define REJECT_AFTER_MESSAGES (UINT64_MAX - 8192)
 struct wireguard_keypair {bool valid;uint32_t keypair_millis;uint64_t sending_counter;};
 struct handshake {bool valid;uint32_t created_millis;};
-struct wireguard_peer {struct handshake handshake;uint8_t handshake_mac1[16];bool handshake_mac1_valid;
+struct wireguard_peer {struct handshake *handshake;uint8_t handshake_mac1[16];bool handshake_mac1_valid;
  struct wireguard_keypair curr_keypair,prev_keypair,next_keypair;};
 static uint32_t now_ms=1000000;
 static bool wireguard_expired(uint32_t start,unsigned seconds){return now_ms-start>=seconds*1000;}
@@ -103,15 +103,15 @@ static void crypto_zero(void *p,size_t n){memset(p,0,n);}
 static void keypair_destroy(struct wireguard_keypair *p){memset(p,0,sizeof *p);}
 ''' + expiry + r'''
 int main(void){
- struct wireguard_peer p={0};
+ struct wireguard_peer p={0};static struct handshake hs;p.handshake=&hs;
  p.curr_keypair=(struct wireguard_keypair){true,now_ms-1000,0};
  p.prev_keypair=(struct wireguard_keypair){true,now_ms-181000,0};
  p.next_keypair=(struct wireguard_keypair){true,now_ms-1000,REJECT_AFTER_MESSAGES};
- p.handshake=(struct handshake){true,now_ms-541000};
+ hs=(struct handshake){true,now_ms-541000};
  memset(p.handshake_mac1,99,sizeof p.handshake_mac1);p.handshake_mac1_valid=true;
  wireguard_expire_keys(&p);
  assert(p.curr_keypair.valid&&!p.prev_keypair.valid&&!p.next_keypair.valid);
- assert(!p.handshake.valid&&!p.handshake_mac1_valid);
+ assert(!p.handshake->valid&&!p.handshake_mac1_valid);
  for(unsigned i=0;i<sizeof p.handshake_mac1;i++)assert(!p.handshake_mac1[i]);
 }
 ''')

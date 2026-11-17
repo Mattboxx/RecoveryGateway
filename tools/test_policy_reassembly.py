@@ -164,8 +164,9 @@ WG_BODY=r'''
 #undef ml_reassemble_rx
 int main(void){
     (void)key_b;
-    struct netif n={.input=deliver};struct wireguard_device d={.netif=&n};
-    struct wireguard_peer peer={.kp={.receiving_valid=true}};memcpy(peer.public_key,key_a,32);
+    struct netif n={.input=deliver};static struct wireguard_device d;d.netif=&n;
+    #define peer (d.peers[0])
+    peer=(struct wireguard_peer){.kp={.receiving_valid=true}};memcpy(peer.public_key,key_a,32);
     peer.allowed_source_ips[0]=(struct wireguard_allowed_ip){.valid=true,.ip={.addr=htonl(0x64400001),.type=4},.mask={.addr=0xffffffff,.type=4}};
     ip_addr_t outer={0};reassembly_hook=ml_reassemble_rx;
     for(unsigned family=4;family<=6;family+=2)for(unsigned proto=6;proto<=17;proto+=11)for(unsigned denied=0;denied<3;denied++){
@@ -205,6 +206,8 @@ with tempfile.TemporaryDirectory(prefix='policy-reassembly-') as directory:
     # The receive path's saturation counter lives outside this function (tested in forward_drop_counters).
     receive=('#include "ml_perf.h"\nstatic volatile uint32_t s_wg_rx_input_refused;\n'
              'static inline void wg_tx_count_drop(volatile uint32_t *c){(*c)++;}\n')+'static void wireguardif_process_data_message'+wg_source.split('static void wireguardif_process_data_message',1)[1].split('\nstatic struct pbuf *wireguardif_initiate_handshake',1)[0]
-    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+constant('WG_FIXTURE')+WG_TEST+WG_MAIN+receive+WG_BODY)
+    helpers=wg_source[wg_source.index('static int peer_allowed_count('):]
+    helpers=helpers[:helpers.index('\nbool wireguardif_has_host_route(')]
+    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+constant('WG_FIXTURE')+WG_TEST+WG_MAIN+helpers+receive+WG_BODY)
     subprocess.run([os.environ.get('CC','gcc'),*flags,str(path/'test.c'),'-o',str(binary),*libs],check=True)
     subprocess.run([str(binary)],check=True,timeout=45)

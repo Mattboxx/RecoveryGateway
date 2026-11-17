@@ -383,3 +383,5 @@ CONFIG_LWIP_PPP_CHAP_SUPPORT=y
 # 3.0.1 images: SNMP agent and dynamic DNS compiled in, both off until enabled
 CONFIG_TSR_SNMP=y
 CONFIG_TSR_DDNS=y
+# Tunnel slots (internal RAM; handshake state is in PSRAM). The map has no peer limit.
+CONFIG_ML_MAX_PEERS=20

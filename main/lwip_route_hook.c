@@ -494,15 +494,15 @@ static void route_supervisor_task(void *arg)
          * destination matching one of these CIDRs into the WG tunnel — the
          * way `tailscale up --accept-routes` does on the official client. */
         supervisor_routes_t new_routes = {0};
+        unsigned dropped_routes = 0;
         if (tailscale_accept_routes) {
             microlink_t *ml = tailscale_get_microlink();
             int peer_n = ml ? microlink_get_peer_count(ml) : 0;
-            for (int i = 0; i < peer_n &&
-                 new_routes.count < TAILSCALE_ACCEPTED_ROUTES_MAX; i++) {
+            for (int i = 0; i < peer_n; i++) {
                 microlink_peer_info_t pi;
                 if (microlink_get_peer_info(ml, i, &pi) != ESP_OK) continue;
-                for (int r = 0; r < pi.subnet_route_count &&
-                     new_routes.count < TAILSCALE_ACCEPTED_ROUTES_MAX; r++) {
+                for (int r = 0; r < pi.subnet_route_count; r++) {
+                    if (new_routes.count >= TAILSCALE_ACCEPTED_ROUTES_MAX) { dropped_routes++; continue; }
                     new_routes.routes[new_routes.count].network =
                         pi.subnet_routes[r].network;
                     new_routes.routes[new_routes.count].prefix_len =
@@ -510,6 +510,13 @@ static void route_supervisor_task(void *arg)
                     new_routes.count++;
                 }
             }
+        }
+        static unsigned s_dropped_logged;
+        if (dropped_routes != s_dropped_logged) {
+            s_dropped_logged = dropped_routes;
+            if (dropped_routes)
+                ESP_LOGW(TAG, "Accepted routes: %u beyond the %d this gateway routes are ignored",
+                         dropped_routes, TAILSCALE_ACCEPTED_ROUTES_MAX);
         }
         /* Packet hooks also run in TCP/IP context: publish entries/count
          * together without depending on CONFIG_LWIP_TCPIP_CORE_LOCKING. */

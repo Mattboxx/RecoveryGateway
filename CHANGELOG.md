@@ -6,6 +6,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.17 adds to beta.16 (beta.16 was a local candidate):
+
+- **Every advertised subnet is reachable.** A peer could carry only its own
+  address and ONE more route in the WireGuard layer: a second subnet, or a
+  subnet next to an exit route, failed to attach (logged only) and was
+  unreachable. Up to 32 per peer now (extra entries in PSRAM, used only by
+  peers that have them). Routes kept per peer for routing rose from 8 to 16,
+  and accepted routes in total from 32 to 64; anything beyond is reported in
+  the log instead of being dropped silently.
+- **No limit on ACL rules.** Expanded rules (sources x destinations) were
+  capped at 128 and a larger policy was refused whole, blocking the tunnel;
+  the rule table is now sized by the policy. Named filter groups: 32.
+- **Node key expiry.** The Tailscale page shows when this gateway's node key
+  expires and warns 14 days ahead (also in the event log, once a day).
+  When the key expires, entering a valid auth key renews it at the next
+  start for the same device (old key sent as OldNodeKey), without a factory
+  reset.
+- **Clear registration state.** The Tailscale and Status pages say why the
+  gateway is not connected: auth key refused or needed, waiting for approval
+  in the admin console, node key expired. The old "Auth key invalid" badge
+  was shown for working tag-owned devices and is gone.
+- **Tailnet Lock** is detected and shown with the `tailscale lock sign`
+  command for this gateway (it does not verify node signatures itself).
+- **Peers and tunnels** in use are shown on the Tailscale page; 20 tunnel
+  slots instead of 16 at about the same internal RAM (WireGuard handshake
+  state and the peer job queue moved to PSRAM); faster ownership checks with
+  many peers (sorted index); reconnects skip the registration request after
+  a successful one in the same start.
+
 3.0.25-beta.16 fixes two Tailnet defects present since the first MicroLink
 releases, reported by a user on official Tailscale (3.0.24):
 

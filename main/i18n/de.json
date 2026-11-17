@@ -2284,5 +2284,21 @@
  "Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.": "Veröffentliche einen Befehl als Nachricht im obigen Thema, zum Beispiel aus der ntfy-App. Gelesen werden nur Nachrichten, die gesendet werden, während das Gateway zuhört.",
  "Alerts sent:": "Gesendete Warnungen:",
  "commands received:": "empfangene Befehle:",
- "command errors:": "Befehlsfehler:"
+ "command errors:": "Befehlsfehler:",
+ "Enter a new auth key": "Neuen Auth-Key eingeben",
+ "Node key expires": "Node-Key läuft ab",
+ "The node key expires within 14 days. To keep this gateway connected, disable key expiry for it in the Tailscale admin console, or enter a new auth key after it expires.": "Der Node-Key läuft in weniger als 14 Tagen ab. Damit dieses Gateway verbunden bleibt, deaktiviere den Schlüsselablauf für dieses Gerät in der Tailscale-Admin-Konsole oder gib nach dem Ablauf einen neuen Auth-Key ein.",
+ "Peers in the tailnet map": "Peers in der Tailnet-Map",
+ "Tunnels in use": "Tunnel in Verwendung",
+ "Tailnet Lock is on. Sign this gateway from a signing device:": "Tailnet Lock ist aktiv. Signiere dieses Gateway von einem signierenden Gerät aus:",
+ "This gateway does not verify node signatures itself: it relies on the control server for peer keys.": "Dieses Gateway prüft Node-Signaturen nicht selbst: Für die Peer-Schlüssel verlässt es sich auf den Control-Server.",
+ "Auth key needed": "Auth-Key erforderlich",
+ "Node key expired": "Node-Key abgelaufen",
+ "Waiting for approval": "Wartet auf Freigabe",
+ "The auth key was refused (used, expired or revoked). The gateway is trying its existing registration.": "Der Auth-Key wurde abgelehnt (verwendet, abgelaufen oder widerrufen). Das Gateway versucht es mit seiner bestehenden Registrierung.",
+ "This gateway is not authorized and its auth key was refused (a single-use key can be used only once). Generate a new auth key in the Tailscale admin console and enter it here.": "Dieses Gateway ist nicht autorisiert und sein Auth-Key wurde abgelehnt (ein Einmal-Key kann nur einmal verwendet werden). Erzeuge in der Tailscale-Admin-Konsole einen neuen Auth-Key und gib ihn hier ein.",
+ "This gateway is not authorized. Enter an auth key from the Tailscale admin console.": "Dieses Gateway ist nicht autorisiert. Gib einen Auth-Key aus der Tailscale-Admin-Konsole ein.",
+ "Registered, waiting for approval: approve this device in the Tailscale admin console (Machines).": "Registriert, wartet auf Freigabe: Gib dieses Gerät in der Tailscale-Admin-Konsole frei (Machines).",
+ "The node key of this gateway expired. Enter a valid auth key: the key is renewed at the next start, for the same device with its settings.": "Der Node-Key dieses Gateways ist abgelaufen. Gib einen gültigen Auth-Key ein: Der Schlüssel wird beim nächsten Start erneuert, für dasselbe Gerät mit seinen Einstellungen.",
+ "The control server refused the registration. Check the auth key and the control server address.": "Der Control-Server hat die Registrierung abgelehnt. Prüfe den Auth-Key und die Adresse des Control-Servers."
 }

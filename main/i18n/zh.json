@@ -2331,5 +2331,21 @@
  "Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.": "在上方主题中以消息形式发布命令，例如通过 ntfy 应用。只读取网关监听期间发送的消息。",
  "Alerts sent:": "已发送提醒：",
  "commands received:": "已收到命令：",
- "command errors:": "命令错误："
+ "command errors:": "命令错误：",
+ "Enter a new auth key": "输入新的认证密钥",
+ "Node key expires": "节点密钥到期",
+ "The node key expires within 14 days. To keep this gateway connected, disable key expiry for it in the Tailscale admin console, or enter a new auth key after it expires.": "节点密钥将在 14 天内到期。要让此网关保持连接，请在 Tailscale 管理控制台中为该设备关闭密钥到期，或在到期后输入新的认证密钥。",
+ "Peers in the tailnet map": "Tailnet 映射中的节点",
+ "Tunnels in use": "使用中的隧道",
+ "Tailnet Lock is on. Sign this gateway from a signing device:": "Tailnet Lock 已开启。请在可签名的设备上为此网关签名：",
+ "This gateway does not verify node signatures itself: it relies on the control server for peer keys.": "此网关不会自行验证节点签名：对等节点的密钥依赖控制服务器提供。",
+ "Auth key needed": "需要认证密钥",
+ "Node key expired": "节点密钥已到期",
+ "Waiting for approval": "等待批准",
+ "The auth key was refused (used, expired or revoked). The gateway is trying its existing registration.": "认证密钥被拒绝（已使用、已过期或已撤销）。网关正在尝试使用现有注册。",
+ "This gateway is not authorized and its auth key was refused (a single-use key can be used only once). Generate a new auth key in the Tailscale admin console and enter it here.": "此网关未获授权，且其认证密钥被拒绝（一次性密钥只能使用一次）。请在 Tailscale 管理控制台生成新的认证密钥并在此输入。",
+ "This gateway is not authorized. Enter an auth key from the Tailscale admin console.": "此网关未获授权。请输入来自 Tailscale 管理控制台的认证密钥。",
+ "Registered, waiting for approval: approve this device in the Tailscale admin console (Machines).": "已注册，等待批准：请在 Tailscale 管理控制台（Machines）中批准此设备。",
+ "The node key of this gateway expired. Enter a valid auth key: the key is renewed at the next start, for the same device with its settings.": "此网关的节点密钥已到期。请输入有效的认证密钥：下次启动时会为同一设备续订密钥，并保留其设置。",
+ "The control server refused the registration. Check the auth key and the control server address.": "控制服务器拒绝了注册。请检查认证密钥和控制服务器地址。"
 }

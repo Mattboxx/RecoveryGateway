@@ -121,6 +121,13 @@ extern void wifi_ap_policy_set_auto_off(bool auto_off);
 
 static const char *TAG = "web_ui";
 
+static const char *reg_state_name(uint8_t s)
+{
+    static const char *const names[] = {"ok", "key_retry", "need_new_key", "need_key", "approval", "key_expired", "refused"};
+    return s < sizeof names / sizeof names[0] ? names[s] : "ok";
+}
+
+
 /* index.html is generated as a gzipped C source by main/CMakeLists.txt
  * via the gen_index_html_gz.py helper. Stored compressed (≈5× smaller
  * than raw) and served with Content-Encoding: gzip — every modern
@@ -573,6 +580,7 @@ static esp_err_t status_handler(httpd_req_t *req)
             }
             cJSON_AddBoolToObject  (ts, "identity_persistent", diag.identity_persistent);
             cJSON_AddStringToObject(ts, "identity_pubkey_prefix", diag.identity_pubkey_prefix);
+            cJSON_AddStringToObject(ts, "reg_state", reg_state_name(diag.reg_state));
         }
     }
     cJSON_AddItemToObject(root, "tailscale", ts);
@@ -3445,6 +3453,14 @@ static esp_err_t tailscale_handler(httpd_req_t *req)
                                         diag.identity_persistent);
                 cJSON_AddStringToObject(runtime, "identity_pubkey_prefix",
                                         diag.identity_pubkey_prefix);
+                /* Registration state, own key expiry, Tailnet Lock, map/tunnels. */
+                cJSON_AddStringToObject(runtime, "reg_state", reg_state_name(diag.reg_state));
+                cJSON_AddNumberToObject(runtime, "key_expiry", (double)diag.key_expiry);
+                cJSON_AddBoolToObject  (runtime, "tailnet_lock", diag.tailnet_lock);
+                if (diag.tailnet_lock) cJSON_AddStringToObject(runtime, "node_key", diag.node_key);
+                cJSON_AddNumberToObject(runtime, "map_peers", diag.map_peers);
+                cJSON_AddNumberToObject(runtime, "tunnels_active", diag.tunnels_active);
+                cJSON_AddNumberToObject(runtime, "tunnel_slots", diag.tunnel_slots);
                 /* DERP region diagnostics (ported from the old http_server UI,
                  * 2026-05-28). derp_home_region = the region the ESP actually
                  * connects to (netcheck may override the default); derp_rtts =

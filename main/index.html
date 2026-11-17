@@ -3236,6 +3236,28 @@
             <span class="stat-label">Node identity</span>
             <span class="stat-value mono" id="ts-identity-full">—</span>
           </div>
+          <div class="alert alert-warning" id="ts-reg-notice" style="display:none; margin:0 0 0.5rem 0;">
+            <span id="ts-reg-notice-text"></span>
+            <a href="#" id="ts-reg-notice-key" style="display:none;">Enter a new auth key</a>
+          </div>
+          <div class="stat-row" id="ts-key-expiry-row" style="display:none;">
+            <span class="stat-label">Node key expires</span>
+            <span class="stat-value mono" id="ts-key-expiry">—</span>
+          </div>
+          <div class="form-hint" id="ts-key-expiry-hint" style="display:none; margin-bottom:0.5rem;">The node key expires within 14 days. To keep this gateway connected, disable key expiry for it in the Tailscale admin console, or enter a new auth key after it expires.</div>
+          <div class="stat-row" id="ts-tunnels-row" style="display:none;">
+            <span class="stat-label">Peers in the tailnet map</span>
+            <span class="stat-value mono" id="ts-map-peers">—</span>
+          </div>
+          <div class="stat-row" id="ts-tunnels-row2" style="display:none;">
+            <span class="stat-label">Tunnels in use</span>
+            <span class="stat-value mono" id="ts-tunnels">—</span>
+          </div>
+          <div class="alert alert-warning" id="ts-lock-notice" style="display:none; margin:0 0 0.5rem 0;">
+            <div>Tailnet Lock is on. Sign this gateway from a signing device:</div>
+            <code class="mono" id="ts-lock-cmd" data-no-i18n style="word-break:break-all;"></code>
+            <div>This gateway does not verify node signatures itself: it relies on the control server for peer keys.</div>
+          </div>
           <div style="display:flex; justify-content:flex-end; margin:0 0 0.5rem 0;">
             <button class="btn btn-ghost btn-sm text-danger" id="ts-reset-identity" type="button"
                     title="Erase the device's stored node-key and reboot. Use when the control plane no longer recognises the current node-key.">
@@ -5343,9 +5365,15 @@
         tsBadge.className = 'badge ' + (ts.startup_retrying ? 'badge-warning' : 'badge-danger');
         tsBadge.textContent = ts.startup_retrying ? 'Retrying startup' : 'Startup failed';
         tsBadge.title = ts.startup_error;
-      } else if (ts.register_user_id === 0) {
+      } else if (ts.reg_state === 'need_new_key' || ts.reg_state === 'need_key' || ts.reg_state === 'refused') {
         tsBadge.className = 'badge badge-danger';
-        tsBadge.innerHTML = '<span class="badge-dot"></span> Auth key invalid';
+        tsBadge.textContent = 'Auth key needed';
+      } else if (ts.reg_state === 'key_expired') {
+        tsBadge.className = 'badge badge-danger';
+        tsBadge.textContent = 'Node key expired';
+      } else if (ts.reg_state === 'approval') {
+        tsBadge.className = 'badge badge-warning';
+        tsBadge.textContent = 'Waiting for approval';
       } else if (ts.connected && ts.authority_ready === false) {
         tsBadge.className = 'badge badge-warning';
         tsBadge.textContent = 'Policy pending';
@@ -9497,6 +9525,45 @@
     // =====================================================================
     // TAILSCALE PAGE
     // =====================================================================
+    /* Registration problems, own key expiry, Tailnet Lock and the tunnel
+     * slots, from /api/tailscale runtime. Whole sentences (translated). */
+    var TS_REG_TEXT = {
+      key_retry: 'The auth key was refused (used, expired or revoked). The gateway is trying its existing registration.',
+      need_new_key: 'This gateway is not authorized and its auth key was refused (a single-use key can be used only once). Generate a new auth key in the Tailscale admin console and enter it here.',
+      need_key: 'This gateway is not authorized. Enter an auth key from the Tailscale admin console.',
+      approval: 'Registered, waiting for approval: approve this device in the Tailscale admin console (Machines).',
+      key_expired: 'The node key of this gateway expired. Enter a valid auth key: the key is renewed at the next start, for the same device with its settings.',
+      refused: 'The control server refused the registration. Check the auth key and the control server address.'
+    };
+    function renderTsRegistration(r) {
+      var notice = document.getElementById('ts-reg-notice');
+      if (!notice) return;
+      var text = TS_REG_TEXT[r.reg_state];
+      notice.style.display = text ? '' : 'none';
+      document.getElementById('ts-reg-notice-text').textContent = text || '';
+      var keyLink = document.getElementById('ts-reg-notice-key');
+      keyLink.style.display = (r.reg_state && r.reg_state !== 'approval' && r.reg_state !== 'key_retry') ? '' : 'none';
+      keyLink.onclick = function (e) { e.preventDefault(); var k = document.getElementById('ts-auth-key'); if (k) { k.scrollIntoView({block: 'center'}); k.focus(); } };
+      var exp = typeof r.key_expiry === 'number' ? r.key_expiry : 0;
+      var expRow = document.getElementById('ts-key-expiry-row');
+      expRow.style.display = exp > 0 ? '' : 'none';
+      if (exp > 0) {
+        var d = new Date(exp * 1000);
+        document.getElementById('ts-key-expiry').textContent = d.toLocaleString('sv-SE', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
+      }
+      var soon = exp > 0 && exp * 1000 - Date.now() < 14 * 86400000;
+      document.getElementById('ts-key-expiry-hint').style.display = soon ? '' : 'none';
+      var hasCounts = typeof r.map_peers === 'number';
+      document.getElementById('ts-tunnels-row').style.display = hasCounts ? '' : 'none';
+      document.getElementById('ts-tunnels-row2').style.display = hasCounts ? '' : 'none';
+      if (hasCounts) {
+        document.getElementById('ts-map-peers').textContent = String(r.map_peers);
+        document.getElementById('ts-tunnels').textContent = r.tunnels_active + ' / ' + r.tunnel_slots;
+      }
+      var lock = document.getElementById('ts-lock-notice');
+      lock.style.display = r.tailnet_lock ? '' : 'none';
+      document.getElementById('ts-lock-cmd').textContent = r.tailnet_lock && r.node_key ? 'tailscale lock sign ' + r.node_key : '';
+    }
     function update4via6Preview() {
       var enabled = document.getElementById('ts-4via6-enabled').checked;
       var fields = document.getElementById('ts-4via6-fields');
@@ -9663,6 +9730,7 @@
               ident.textContent = '—';
             }
           })();
+          renderTsRegistration(r);
           var badge = document.getElementById('ts-page-badge');
           badge.title = '';
           /* register_user_id === 0 means the control plane took the
@@ -9674,9 +9742,15 @@
             badge.className = 'badge ' + (r.startup_retrying ? 'badge-warning' : 'badge-danger');
             badge.textContent = r.startup_retrying ? 'Retrying startup' : 'Startup failed';
             badge.title = r.startup_error;
-          } else if (r.register_user_id === 0) {
+          } else if (r.reg_state === 'need_new_key' || r.reg_state === 'need_key' || r.reg_state === 'refused') {
             badge.className = 'badge badge-danger';
-            badge.innerHTML = '<span class="badge-dot"></span> Auth key invalid';
+            badge.textContent = 'Auth key needed';
+          } else if (r.reg_state === 'key_expired') {
+            badge.className = 'badge badge-danger';
+            badge.textContent = 'Node key expired';
+          } else if (r.reg_state === 'approval') {
+            badge.className = 'badge badge-warning';
+            badge.textContent = 'Waiting for approval';
           } else if (r.connected && r.authority_ready === false) {
             badge.className = 'badge badge-warning';
             badge.textContent = 'Policy pending';

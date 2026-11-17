@@ -2331,5 +2331,21 @@
  "Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.": "Publica un comando como mensaje en el tema de arriba, por ejemplo desde la app ntfy. Solo se leen los mensajes enviados mientras la pasarela escucha.",
  "Alerts sent:": "Avisos enviados:",
  "commands received:": "comandos recibidos:",
- "command errors:": "errores de comandos:"
+ "command errors:": "errores de comandos:",
+ "Enter a new auth key": "Introduce una nueva clave de autenticación",
+ "Node key expires": "Caducidad de la clave del nodo",
+ "The node key expires within 14 days. To keep this gateway connected, disable key expiry for it in the Tailscale admin console, or enter a new auth key after it expires.": "La clave del nodo caduca en menos de 14 días. Para mantener conectada esta pasarela, desactiva la caducidad de la clave para este dispositivo en la consola de administración de Tailscale, o introduce una nueva clave de autenticación cuando caduque.",
+ "Peers in the tailnet map": "Pares en el mapa de la tailnet",
+ "Tunnels in use": "Túneles en uso",
+ "Tailnet Lock is on. Sign this gateway from a signing device:": "Tailnet Lock está activado. Firma esta pasarela desde un dispositivo de firma:",
+ "This gateway does not verify node signatures itself: it relies on the control server for peer keys.": "Esta pasarela no verifica por sí misma las firmas de los nodos: confía en el servidor de control para las claves de los pares.",
+ "Auth key needed": "Se necesita una clave de autenticación",
+ "Node key expired": "Clave del nodo caducada",
+ "Waiting for approval": "Esperando aprobación",
+ "The auth key was refused (used, expired or revoked). The gateway is trying its existing registration.": "La clave de autenticación fue rechazada (usada, caducada o revocada). La pasarela está probando su registro existente.",
+ "This gateway is not authorized and its auth key was refused (a single-use key can be used only once). Generate a new auth key in the Tailscale admin console and enter it here.": "Esta pasarela no está autorizada y su clave de autenticación fue rechazada (una clave de un solo uso solo sirve una vez). Genera una nueva clave de autenticación en la consola de administración de Tailscale e introdúcela aquí.",
+ "This gateway is not authorized. Enter an auth key from the Tailscale admin console.": "Esta pasarela no está autorizada. Introduce una clave de autenticación de la consola de administración de Tailscale.",
+ "Registered, waiting for approval: approve this device in the Tailscale admin console (Machines).": "Registrado, esperando aprobación: aprueba este dispositivo en la consola de administración de Tailscale (Machines).",
+ "The node key of this gateway expired. Enter a valid auth key: the key is renewed at the next start, for the same device with its settings.": "La clave del nodo de esta pasarela ha caducado. Introduce una clave de autenticación válida: la clave se renueva en el próximo arranque, para el mismo dispositivo con sus ajustes.",
+ "The control server refused the registration. Check the auth key and the control server address.": "El servidor de control rechazó el registro. Comprueba la clave de autenticación y la dirección del servidor de control."
 }

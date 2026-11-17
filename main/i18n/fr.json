@@ -2284,5 +2284,21 @@
  "Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.": "Publiez une commande comme message dans le sujet ci-dessus, par exemple depuis l’app ntfy. Seuls les messages envoyés pendant que la passerelle écoute sont lus.",
  "Alerts sent:": "Alertes envoyées :",
  "commands received:": "commandes reçues :",
- "command errors:": "erreurs de commande :"
+ "command errors:": "erreurs de commande :",
+ "Enter a new auth key": "Saisir une nouvelle clé d’authentification",
+ "Node key expires": "Expiration de la clé du nœud",
+ "The node key expires within 14 days. To keep this gateway connected, disable key expiry for it in the Tailscale admin console, or enter a new auth key after it expires.": "La clé du nœud expire dans moins de 14 jours. Pour garder cette passerelle connectée, désactivez l’expiration de la clé pour cet appareil dans la console d’administration Tailscale, ou saisissez une nouvelle clé d’authentification après l’expiration.",
+ "Peers in the tailnet map": "Pairs dans la carte du tailnet",
+ "Tunnels in use": "Tunnels utilisés",
+ "Tailnet Lock is on. Sign this gateway from a signing device:": "Tailnet Lock est activé. Signez cette passerelle depuis un appareil de signature :",
+ "This gateway does not verify node signatures itself: it relies on the control server for peer keys.": "Cette passerelle ne vérifie pas elle-même les signatures des nœuds : elle se fie au serveur de contrôle pour les clés des pairs.",
+ "Auth key needed": "Clé d’authentification requise",
+ "Node key expired": "Clé du nœud expirée",
+ "Waiting for approval": "En attente d’approbation",
+ "The auth key was refused (used, expired or revoked). The gateway is trying its existing registration.": "La clé d’authentification a été refusée (utilisée, expirée ou révoquée). La passerelle essaie son enregistrement existant.",
+ "This gateway is not authorized and its auth key was refused (a single-use key can be used only once). Generate a new auth key in the Tailscale admin console and enter it here.": "Cette passerelle n’est pas autorisée et sa clé d’authentification a été refusée (une clé à usage unique ne sert qu’une fois). Générez une nouvelle clé d’authentification dans la console d’administration Tailscale et saisissez-la ici.",
+ "This gateway is not authorized. Enter an auth key from the Tailscale admin console.": "Cette passerelle n’est pas autorisée. Saisissez une clé d’authentification de la console d’administration Tailscale.",
+ "Registered, waiting for approval: approve this device in the Tailscale admin console (Machines).": "Enregistrée, en attente d’approbation : approuvez cet appareil dans la console d’administration Tailscale (Machines).",
+ "The node key of this gateway expired. Enter a valid auth key: the key is renewed at the next start, for the same device with its settings.": "La clé du nœud de cette passerelle a expiré. Saisissez une clé d’authentification valide : la clé est renouvelée au prochain démarrage, pour le même appareil avec ses réglages.",
+ "The control server refused the registration. Check the auth key and the control server address.": "Le serveur de contrôle a refusé l’enregistrement. Vérifiez la clé d’authentification et l’adresse du serveur de contrôle."
 }

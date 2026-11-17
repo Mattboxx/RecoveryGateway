@@ -228,12 +228,12 @@ static void bounds_and_ranges(void) {
         assert(apply(ALL));cJSON *map=cJSON_CreateObject();assert(map);
         if(scenario==0) {
             cJSON *groups=cJSON_AddObjectToObject(map,"PacketFilters");
-            for(unsigned i=0;i<9;i++){char name[8];snprintf(name,sizeof name,"g%u",i);assert(cJSON_AddArrayToObject(groups,name));}
+            for(unsigned i=0;i<33;i++){char name[8];snprintf(name,sizeof name,"g%u",i);assert(cJSON_AddArrayToObject(groups,name));}
         } else if(scenario==1) {
+            /* An inverted port range is invalid (rule count has no cap). */
             cJSON *rules=cJSON_AddArrayToObject(map,"PacketFilter");
-            cJSON *rule=cJSON_Parse(TCP_RULE);assert(rule);cJSON_AddItemToArray(rules,rule);
-            cJSON *src=cJSON_GetObjectItemCaseSensitive(rule,"SrcIPs");
-            for(unsigned i=0;i<128;i++)cJSON_AddItemToArray(src,cJSON_CreateString("100.64.0.1"));
+            cJSON *rule=cJSON_Parse("{\"SrcIPs\":[\"100.64.0.1\"],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":90,\"Last\":80}}]}");
+            assert(rule);cJSON_AddItemToArray(rules,rule);
         } else if(scenario==2) {
             /* Same ID 17 times: a duplicate, not a count limit (there is none). */
             cJSON *peers=cJSON_AddArrayToObject(map,"Peers");
@@ -382,12 +382,76 @@ static void large_maps(void) {
     assert(!strcmp(ml_policy_last_reject(),"peer-prefixes"));
     assert(!apply("{\"Peers\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"KeyExpiry\":\"tomorrow\",\"Addresses\":[\"100.64.0.1/32\"]}]}"));
     assert(!strcmp(ml_policy_last_reject(),"peer-expiry"));
-    puts("PASS: maps of any size (300 peers with a 41-prefix peer, deltas, 2000 peers), exact ownership, duplicate and OOM refusals, precise reasons");
+    /* ACL rules of any count: 40 sources x 30 destinations = 1200 rules. */
+    ml_policy_reset();map=large_map(40,0,0);
+    cJSON *pf=cJSON_GetObjectItemCaseSensitive(map,"PacketFilter");cJSON_DeleteItemFromArray(pf,0);
+    cJSON *rule=cJSON_CreateObject(),*srcs=cJSON_AddArrayToObject(rule,"SrcIPs"),*dsts=cJSON_AddArrayToObject(rule,"DstPorts");
+    cJSON_AddItemToArray(cJSON_AddArrayToObject(rule,"IPProto"),cJSON_CreateNumber(6));
+    for(unsigned i=1;i<=40;i++){char ip[32];snprintf(ip,sizeof ip,"100.65.0.%u",i);cJSON_AddItemToArray(srcs,cJSON_CreateString(ip));}
+    for(unsigned d=0;d<30;d++){cJSON *dp=cJSON_CreateObject();cJSON_AddStringToObject(dp,"IP","100.64.0.10");
+        cJSON *ports=cJSON_AddObjectToObject(dp,"Ports");cJSON_AddNumberToObject(ports,"First",8000+d);cJSON_AddNumberToObject(ports,"Last",8000+d);
+        cJSON_AddItemToArray(dsts,dp);}
+    cJSON_AddItemToArray(pf,rule);assert(ml_policy_apply(map));cJSON_Delete(map);
+    ml_policy_get_status(&st);assert(st.expanded_rules==1200);
+    assert(rx(4,6,"100.65.0.7","100.64.0.10",40000,8029,2,k7));
+    assert(!rx(4,6,"100.65.0.7","100.64.0.10",40000,8030,2,k7));
+    puts("PASS: maps of any size (300 peers with a 41-prefix peer, deltas, 2000 peers, 1200 ACL rules), exact ownership, duplicate and OOM refusals, precise reasons");
+    ml_policy_reset();
+}
+/* The ownership index answers exactly like the reference scan: random maps
+ * with nested/overlapping/duplicate prefixes across peers, ties, expired
+ * peers, IPv4 and IPv6, CGNAT rules. */
+static uint32_t rnd_state=12345;
+static uint32_t rnd(void){rnd_state^=rnd_state<<13;rnd_state^=rnd_state>>17;rnd_state^=rnd_state<<5;return rnd_state;}
+static void index_differential(void) {
+    unsigned checks=0,owned=0;
+    for(unsigned round=0;round<60;round++){
+        ml_policy_reset();
+        cJSON *map=cJSON_Parse("{" NODE ",\"PacketFilter\":[" ALL_RULE "]}");assert(map);
+        cJSON *list=cJSON_AddArrayToObject(map,"Peers");unsigned peers=1+rnd()%40;
+        for(unsigned i=1;i<=peers;i++){
+            char text[2048];int n=snprintf(text,sizeof text,"{\"ID\":%u,\"Key\":\"nodekey:%060x%04x\",%s\"AllowedIPs\":[\"100.66.%u.%u/32\",\"fd7a:115c:a1e0::%x/128\"",
+                i,0u,i,(rnd()%7==0)?"\"KeyExpiry\":\"2020-01-01T00:00:00Z\",":"",i/256,i%256,i);
+            unsigned extra=rnd()%6;
+            for(unsigned r=0;r<extra;r++){
+                unsigned kind=rnd()%5,bits;
+                if(kind==0){bits=8+rnd()%25;n+=snprintf(text+n,sizeof text-n,",\"10.%u.%u.0/%u\"",rnd()%4,rnd()%4,bits);}
+                else if(kind==1){n+=snprintf(text+n,sizeof text-n,",\"0.0.0.0/0\"");}
+                else if(kind==2){bits=10+rnd()%23;n+=snprintf(text+n,sizeof text-n,",\"100.66.%u.0/%u\"",rnd()%3,bits);}
+                else if(kind==3){bits=48+rnd()%81;n+=snprintf(text+n,sizeof text-n,",\"fd00:%x::/%u\"",rnd()%3,bits);}
+                else {n+=snprintf(text+n,sizeof text-n,",\"192.168.%u.0/24\"",rnd()%3);}
+            }
+            snprintf(text+n,sizeof text-n,"]}");
+            cJSON *v=cJSON_Parse(text);assert(v);cJSON_AddItemToArray(list,v);
+        }
+        assert(ml_policy_apply(map));cJSON_Delete(map);
+        policy *cur=acquire();assert(cur&&cur->index);
+        for(unsigned q=0;q<400;q++){
+            uint8_t ip[16]={0},key[32]={0};unsigned fam=rnd()%4==0?6:4;
+            if(fam==4){unsigned pick=rnd()%4;
+                if(pick==0){ip[0]=10;ip[1]=rnd()%4;ip[2]=rnd()%4;ip[3]=rnd();}
+                else if(pick==1){ip[0]=100;ip[1]=66;ip[2]=rnd()%3;ip[3]=rnd()%(peers+2);}
+                else if(pick==2){ip[0]=192;ip[1]=168;ip[2]=rnd()%3;ip[3]=rnd();}
+                else {for(int b=0;b<4;b++)ip[b]=rnd();}}
+            else {if(rnd()%2){ip[0]=0xfd;ip[1]=0x00;ip[2]=0;ip[3]=rnd()%3;}else{memcpy(ip,(uint8_t[]){0xfd,0x7a,0x11,0x5c,0xa1,0xe0},6);ip[15]=rnd()%(peers+2);}
+                for(int b=4;b<15;b++)if(rnd()%3==0)ip[b]=rnd();}
+            unsigned who=1+rnd()%peers;
+            if(fam==4&&ip[0]==100&&ip[3]>=1&&ip[3]<=peers&&rnd()%2)who=ip[2]*256u+ip[3]; /* the /32 owner, often */
+            if(who<1||who>peers)who=1;
+            key[30]=(uint8_t)(who>>8);key[31]=(uint8_t)who;
+            bool a=peer_owns(cur,key,ip,(uint8_t)fam),b=peer_owns_scan(cur,key,ip,(uint8_t)fam);
+            if(a!=b){printf("MISMATCH round %u q %u fam %u\n",round,q,fam);assert(a==b);}
+            checks++;owned+=a;
+        }
+        release(cur);
+    }
+    if(owned<200){printf("owned only %u\n",owned);assert(owned>=200);}
+    printf("PASS: ownership index equals the reference scan on %u random queries (%u owned; 60 random maps with overlaps, ties, expired peers, IPv4/IPv6)\n",checks,owned);
     ml_policy_reset();
 }
 int main(void) {
-    peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();concurrency();
-    printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); entries=%d peers=sized by the map (%zu bytes per peer, %zu per prefix) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),ENTRIES,sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
+    peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();concurrency();
+    printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); rules, peers, prefixes sized by the map (%zu, %zu, %zu bytes each) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),sizeof(entry),sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
 }
 '''
 
@@ -398,6 +462,9 @@ wg_source=(ML/'components/wireguard_lwip/src/wireguardif.c').read_text(encoding=
 # The receive path's saturation counter lives outside this function (tested in forward_drop_counters).
 wg_receive=('#include "ml_perf.h"\nstatic volatile uint32_t s_wg_rx_input_refused;\n'
             'static inline void wg_tx_count_drop(volatile uint32_t *c){(*c)++;}\n')+'static void wireguardif_process_data_message'+wg_source.split('static void wireguardif_process_data_message',1)[1].split('\nstatic struct pbuf *wireguardif_initiate_handshake',1)[0]
+_helpers = wg_source[wg_source.index('static int peer_allowed_count('):]
+_helpers = _helpers[:_helpers.index('\nbool wireguardif_has_host_route(')]
+wg_receive = _helpers + wg_receive
 WG_FIXTURE = r'''
 /* Execute the ACTUAL receive function. Crypto/replay and netif are explicit
  * test doubles, NOT a real encrypted transport or a physical packet trace. */
@@ -416,10 +483,11 @@ WG_FIXTURE = r'''
 typedef uint16_t u16_t;
 typedef struct {uint32_t addr;uint8_t type;} ip_addr_t;
 struct netif {int (*input)(struct pbuf*,struct netif*);};
-struct wireguard_device {struct netif *netif;};
 struct wireguard_keypair {bool receiving_valid,initiator;uint32_t keypair_millis,last_rx;};
 struct wireguard_allowed_ip {bool valid;ip_addr_t ip,mask;};
 struct wireguard_peer {uint8_t public_key[32];struct wireguard_allowed_ip allowed_source_ips[4];uint32_t last_rx,last_data_tx,keepalive_interval;bool send_handshake;struct wireguard_keypair kp;};
+#define WIREGUARD_EXTRA_SRC_IPS 4
+struct wireguard_device {struct netif *netif;struct wireguard_peer peers[1];struct wireguard_allowed_ip (*extra_ips)[WIREGUARD_EXTRA_SRC_IPS];uint8_t extra_count[1];};
 struct message_transport_data {uint32_t receiver;uint8_t counter[8],enc_packet[160];};
 struct ip_hdr {uint8_t vhl,tos;uint16_t len,id,offset;uint8_t ttl,proto;uint16_t check;uint32_t src,dest;};
 #define IPH_V(h) ((h)->vhl>>4)
@@ -462,9 +530,10 @@ static struct pbuf *(*reassembly_hook)(struct pbuf*,const uint8_t[32]);
 WG_TESTS = r'''
 #undef ml_policy_rx
 int main(void) {
-    struct netif n={.input=deliver};struct wireguard_device d={.netif=&n};
+    struct netif n={.input=deliver};static struct wireguard_device d;d.netif=&n;
     (void)key_b;
-    struct wireguard_peer peer={.kp={.receiving_valid=true}};memcpy(peer.public_key,key_a,32);
+    #define peer (d.peers[0])
+    peer=(struct wireguard_peer){.kp={.receiving_valid=true}};memcpy(peer.public_key,key_a,32);
     peer.allowed_source_ips[0]=(struct wireguard_allowed_ip){.valid=true,.ip={.addr=htonl(0x64400001),.type=4},.mask={.addr=0xffffffff,.type=4}};
     ip_addr_t outer={0};
     for(unsigned scenario=0;scenario<8;scenario++) {

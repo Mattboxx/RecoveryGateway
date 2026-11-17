@@ -19,6 +19,7 @@ reconnects and 3 restarts (the persisted record survives them), and checks:
   new key does not take the registered device offline;
 - no key: the server's authorization request is a refusal, not "connected";
 - the persisted record binds node key and auth key, never holds the key.
+Synthetic key strings only (no credential-shaped values).
 Also checks the wiring in ml_coord.c/microlink.c structurally.
 """
 import os
@@ -38,7 +39,7 @@ assert 'if (sent_key) {' in reg and reg.count('"AuthKey"') == 1, 'the key is add
 assert reg.index('ml_reg_auth_result(') < reg.index('ml_identity_mark_registered(ml);'), 'record only after acceptance'
 assert 'return outcome == ML_REG_RETRY ? -2 : -1;' in reg
 assert 'state = reg == -2 ? COORD_TCP_CONNECT : COORD_RECONNECTING;' in coord
-assert 'ml->reg_auth.registered = ml_identity_registered(ml);' in reg, 'record read after the NVS key override'
+assert 'ml->reg_auth.registered = !ml->renewing && ml_identity_registered(ml);' in reg, 'record read after the NVS key override'
 assert 'NVS_KEY_REG_MARKER' in main and 'nvs_commit' in main[main.index('void ml_identity_mark_registered('):]
 
 PROGRAM = r'''
@@ -105,7 +106,7 @@ int main(void){
     /* 3. Device deleted in the console, key used: bounded, clear refusal. */
     forget_node(e.node);retries=0;
     assert(connect_once(&e,&retries,&why)==0&&retries==2);
-    assert(why&&strstr(why,"enter a new auth key"));
+    assert(why&&strstr(why,"a new auth key is needed")&&strlen(why)<48);
     int before=invalid_key_errors;assert(connect_once(&e,&retries,&why)==0&&invalid_key_errors==before);  /* key not resent this boot */
     /* ... a new key entered (restart with it) registers it again. */
     strcpy(keys[2].key,"synthetic-key-three");keys[2].single_use=true;e.key=keys[2].key;boot(&e);
@@ -117,7 +118,7 @@ int main(void){
     assert(connect_once(&d,&retries,&why)==1&&invalid_key_errors==before);
     /* 5. No key: authorization request is a refusal, not a connection. */
     device f;memset(&f,0,sizeof f);f.node[0]=9;f.key="";boot(&f);
-    assert(connect_once(&f,&retries,&why)==0&&why&&strstr(why,"enter an auth key"));
+    assert(connect_once(&f,&retries,&why)==0&&why&&strstr(why,"an auth key is needed"));
     /* 6. Error without the key: refused. */
     ml_reg_auth_t s={.registered=true};assert(ml_reg_auth_result(&s,true,false,true,false,&why)==ML_REG_REFUSED);
     /* 7. Record: binds node and key, never contains the key. */
