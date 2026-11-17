@@ -130,6 +130,7 @@ typedef struct {
 /* ---- State ---- */
 
 static atomic_bool s_present = false;   /* card mounted              */
+static bool s_probed;                   /* a mount was tried this boot (under s_state_mutex) */
 static atomic_bool s_enabled = false;   /* recorder active           */
 static _Atomic uint8_t s_sd_level      = SDLOG_LVL_WARN;  /* SD recorder sink level (read live) */
 static _Atomic uint8_t s_console_level = SDLOG_LVL_WARN;  /* console sink level (read live by the hook) */
@@ -806,6 +807,18 @@ void sdlog_set_microlink(void *ml)
     if (s_ml_mutex) xSemaphoreGive(s_ml_mutex);
 }
 
+/* Mounts the card if that was not tried yet (or `retry`). With the
+ * recorder off nothing touches the SD bus at boot: no probe, no driver, no
+ * "card init failed" errors on boards without a card; the first look at the
+ * recorder (its status in the web UI) or enabling it probes then. Caller
+ * holds s_state_mutex (or runs before anything else can, at init). */
+static void probe_card_locked(bool retry)
+{
+    if (atomic_load(&s_present) || (s_probed && !retry)) return;
+    s_probed = true;
+    mount_card();   /* sets s_present; failure is non-fatal */
+}
+
 esp_err_t sdlog_init(void)
 {
     s_state_mutex = xSemaphoreCreateMutex();
@@ -814,7 +827,7 @@ esp_err_t sdlog_init(void)
     if (!s_state_mutex || !s_file_mutex || !s_ml_mutex) return ESP_ERR_NO_MEM;
 
     load_config();
-    mount_card();   /* sets s_present; failure is non-fatal */
+    if (atomic_load(&s_enabled)) probe_card_locked(false);   /* off: no SD probe at boot */
 
     /* Install the hook unconditionally so runtime enable/disable works.
      * Runs after the UART console is up, so the saved fn is its hook. */
@@ -838,6 +851,9 @@ bool sdlog_is_enabled(void)   { return atomic_load(&s_enabled); }
 
 esp_err_t sdlog_enable(uint8_t sd_level)
 {
+    xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+    probe_card_locked(true);          /* the owner asks for it: look (again) */
+    xSemaphoreGive(s_state_mutex);
     if (!atomic_load(&s_present)) return ESP_ERR_INVALID_STATE;
     if (sd_level < SDLOG_LVL_ERROR) sd_level = SDLOG_LVL_ERROR;  /* OFF == disable() */
     if (sd_level > SDLOG_LVL_INFO)  sd_level = SDLOG_LVL_INFO;
@@ -880,6 +896,11 @@ esp_err_t sdlog_set_console_level(uint8_t level)
 
 void sdlog_get_status(sdlog_status_t *out)
 {
+    if (s_state_mutex) {                 /* first look: probe the card once */
+        xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+        probe_card_locked(false);
+        xSemaphoreGive(s_state_mutex);
+    }
     if (!out) return;
     memset(out, 0, sizeof *out);
     out->present       = atomic_load(&s_present);

@@ -6,6 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.14 (local candidate) adds to beta.13, from the serial log of
+board A during the stable/beta comparison (both present in 3.0.24 too):
+
+- **No microSD probe at boot while the SD recorder is off.** Boards without
+  a card logged three SD init errors and spent a moment on every boot. The
+  card is now looked for when the recorder is on, the first time its status
+  is shown (Diagnostics or the microSD card), or when the recorder is
+  enabled (a card inserted later is found then).
+- **MQTT waits for the uplink address** before its first broker attempt, which
+  always failed at boot ("Host is unreachable") and logged errors.
+
 3.0.25-beta.13 adds the following to beta.8
 (beta.9 to beta.12 were local candidates on the way: beta.11 made DNS over TCP
 ask the resolver over UDP first, after board A showed that its home router
