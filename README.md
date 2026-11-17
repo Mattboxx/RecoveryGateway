@@ -35,7 +35,7 @@ Tailscale to use Wake-on-LAN or the backup uplinks.
 | Use case | What the ESP32 does |
 | --- | --- |
 | **Wake and check a NAS or PC — no VPN needed** | Send Wake-on-LAN and verify that the device answers, from a Telegram bot or an ntfy topic. Works with or without Tailscale. [Setup and command reference](https://mattboxx.github.io/esp32-tailnet-gateway/remote-recovery/#commands). |
-| **Keep IoT devices online** | Use wired Ethernet (W5500 module, or a USB adapter in the beta) or a mobile SIM (UART modem, or USB modems and 4G sticks in the beta) as the main or the backup uplink, with automatic failover and an optional monthly data limit. [Hardware](https://mattboxx.github.io/esp32-tailnet-gateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
+| **Keep IoT devices online** | Use a mobile SIM or wired Ethernet as the main or the backup uplink, with automatic failover and an optional monthly data limit. **SIM:** a 4G/LTE modem wired to the board's pins (UART, e.g. SIM7600 or A7670 modules), or plugged into its USB port (USB LTE modems and 4G sticks, beta). **Ethernet:** a W5500 module on the pins (SPI), or a USB Ethernet adapter or phone tethering on the USB port (beta). [Hardware](https://mattboxx.github.io/esp32-tailnet-gateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
 | **Connect devices that cannot run Tailscale** | Forward one TCP or UDP service from the local LAN to a Tailnet peer. Restrict the source by IP/CIDR. |
 | **Reach a remote LAN** | Advertise approved subnets to Tailnet clients. Configure the gateway's own Wi-Fi for IoT devices. |
 | **Monitor and automate** | Track events and resource trends locally. Optionally use MQTT and Home Assistant, ntfy, Telegram, email or SNMP. |
