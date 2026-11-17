@@ -235,12 +235,15 @@ static void bounds_and_ranges(void) {
             cJSON *src=cJSON_GetObjectItemCaseSensitive(rule,"SrcIPs");
             for(unsigned i=0;i<128;i++)cJSON_AddItemToArray(src,cJSON_CreateString("100.64.0.1"));
         } else if(scenario==2) {
+            /* Same ID 17 times: a duplicate, not a count limit (there is none). */
             cJSON *peers=cJSON_AddArrayToObject(map,"Peers");
             for(unsigned i=0;i<17;i++)cJSON_AddItemToArray(peers,cJSON_Parse(PEER_A));
         } else if(scenario==3) {
+            /* A range is not a valid AllowedIPs prefix. */
             cJSON *peers=cJSON_AddArrayToObject(map,"PeersChanged"), *peer=cJSON_Parse(PEER_A);
             cJSON_AddItemToArray(peers,peer);cJSON *ips=cJSON_AddArrayToObject(peer,"AllowedIPs");
-            for(unsigned i=0;i<17;i++)cJSON_AddItemToArray(ips,cJSON_CreateString("100.64.0.1/32"));
+            cJSON_AddItemToArray(ips,cJSON_CreateString("100.64.0.1/32"));
+            cJSON_AddItemToArray(ips,cJSON_CreateString("100.64.0.1-100.64.0.2"));
         } else {
             cJSON *groups=cJSON_AddObjectToObject(map,"PacketFilters");char name[65];memset(name,'x',64);name[64]=0;
             assert(cJSON_AddArrayToObject(groups,name));
@@ -323,9 +326,68 @@ static void peer_replacement(void) {
     assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
     puts("PASS: full-capacity peer replacement, removal-before-upsert, full-map precedence and keepalive fields cannot mutate/initialize authority");
 }
+/* Maps of any size: no 16-peer / 16-prefix cap (a tailnet of 18 devices was
+ * refused whole as "peer-update" in 3.0.24 and blocked the tunnel). */
+static void peer_json(char *out,size_t cap,unsigned i,unsigned key,unsigned routes) {
+    int n=snprintf(out,cap,"{\"ID\":%u,\"Key\":\"nodekey:%060x%04x\",\"Addresses\":[\"100.65.%u.%u/32\"],\"AllowedIPs\":[\"100.65.%u.%u/32\"",
+                   i,0u,key,i/256,i%256,i/256,i%256);
+    for(unsigned r=0;r<routes;r++) n+=snprintf(out+n,cap-n,",\"10.%u.%u.0/24\"",i%200,r);
+    snprintf(out+n,cap-n,"]}");
+}
+static cJSON *large_map(unsigned peers,unsigned routes_of_last,int dup_key_of) {
+    cJSON *map=cJSON_Parse("{" NODE ",\"PacketFilter\":[" ALL_RULE "]}");assert(map);
+    cJSON *list=cJSON_AddArrayToObject(map,"Peers");char text[4096];
+    for(unsigned i=1;i<=peers;i++){
+        unsigned key=(dup_key_of>0&&i==peers)?(unsigned)dup_key_of:i;
+        peer_json(text,sizeof text,i,key,i==peers?routes_of_last:0);
+        cJSON *v=cJSON_Parse(text);assert(v);cJSON_AddItemToArray(list,v);
+    }
+    return map;
+}
+static void key_of(uint8_t key[32],unsigned i){memset(key,0,32);key[30]=(uint8_t)(i>>8);key[31]=(uint8_t)i;}
+static void large_maps(void) {
+    uint8_t k300[32],k7[32],k301[32];key_of(k300,300);key_of(k7,7);key_of(k301,301);
+    ml_policy_reset();
+    cJSON *map=large_map(300,40,0);assert(ml_policy_apply(map));cJSON_Delete(map);
+    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready&&st.peers==300);
+    /* Ownership still exact among 300 peers and 41 prefixes of one peer. */
+    assert(rx(4,6,"100.65.1.44","100.64.0.10",40000,80,2,k300));
+    assert(!rx(4,6,"100.65.1.44","100.64.0.10",40000,80,2,k7));
+    assert(rx(4,6,"10.100.39.7","100.64.0.10",40000,80,2,k300));
+    assert(!rx(4,6,"10.100.39.7","100.64.0.10",40000,80,2,k7));
+    /* Deltas on a large authority: join, then removal. */
+    char text[512];peer_json(text,sizeof text,301,301,0);
+    char delta[600];snprintf(delta,sizeof delta,"{\"PeersChanged\":[%s]}",text);
+    assert(apply(delta));ml_policy_get_status(&st);assert(st.peers==301);
+    assert(rx(4,6,"100.65.1.45","100.64.0.10",40000,80,2,k301));
+    assert(apply("{\"PeersRemoved\":[300]}"));ml_policy_get_status(&st);assert(st.peers==300);
+    assert(!rx(4,6,"100.65.1.44","100.64.0.10",40000,80,2,k300));
+    /* A duplicate key among many peers is still refused, with its reason. */
+    map=large_map(64,0,7);assert(!ml_policy_apply(map));cJSON_Delete(map);
+    assert(!strcmp(ml_policy_last_reject(),"duplicate-peer"));
+    assert(!rx(4,6,"100.65.0.7","100.64.0.10",40000,80,2,k7));
+    /* 2000 peers: accepted (memory, not a constant, is the bound). */
+    map=large_map(2000,0,0);assert(ml_policy_apply(map));cJSON_Delete(map);
+    ml_policy_get_status(&st);assert(st.peers==2000);
+    uint8_t k1999[32];key_of(k1999,1999);
+    assert(rx(4,6,"100.65.7.207","100.64.0.10",40000,80,2,k1999));
+    /* Allocation failure: refused as no-memory, data blocked, not a crash. */
+    allocation_fail=1;map=large_map(20,0,0);assert(!ml_policy_apply(map));cJSON_Delete(map);allocation_fail=0;
+    assert(!strcmp(ml_policy_last_reject(),"no-memory"));
+    assert(!rx(4,6,"100.65.0.7","100.64.0.10",40000,80,2,k7));
+    /* Precise reasons instead of one generic "peer-update". */
+    assert(!apply("{\"Peers\":[{\"ID\":1,\"Key\":\"nodekey:zz\",\"Addresses\":[\"100.64.0.1/32\"]}]}"));
+    assert(!strcmp(ml_policy_last_reject(),"peer-key"));
+    assert(!apply("{\"Peers\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"not-an-ip\"]}]}"));
+    assert(!strcmp(ml_policy_last_reject(),"peer-prefixes"));
+    assert(!apply("{\"Peers\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"KeyExpiry\":\"tomorrow\",\"Addresses\":[\"100.64.0.1/32\"]}]}"));
+    assert(!strcmp(ml_policy_last_reject(),"peer-expiry"));
+    puts("PASS: maps of any size (300 peers with a 41-prefix peer, deltas, 2000 peers), exact ownership, duplicate and OOM refusals, precise reasons");
+    ml_policy_reset();
+}
 int main(void) {
-    peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();concurrency();
-    printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); entries=%d peers=%d groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),ENTRIES,PEERS,GROUPS,FLOWS);
+    peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();concurrency();
+    printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); entries=%d peers=sized by the map (%zu bytes per peer, %zu per prefix) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),ENTRIES,sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
 }
 '''
 

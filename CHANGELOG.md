@@ -6,6 +6,37 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.16 fixes two Tailnet defects present since the first MicroLink
+releases, reported by a user on official Tailscale (3.0.24):
+
+- **Single-use auth keys no longer take the gateway offline.** The default
+  auth key in the Tailscale admin console is single-use. The gateway sent
+  it again at every control reconnect and restart; the control server
+  refuses a used key even for a registered device, so the device appeared
+  in the console and then stayed offline with "invalid key". The key is
+  now presented only to log in, as the official client does: once the
+  device is registered with it, reconnects and restarts register the known
+  identity without it. A record of the registered identity (node key and a
+  hash of the auth key, never the key) is kept in flash. If the key is
+  refused, the device retries once without it (it may already be
+  registered); if the device was deleted in the console, it stops with
+  "enter a new auth key" instead of retrying forever. A device that needs
+  approval or an authorization link is no longer treated as connected.
+- **No 16-peer limit.** A tailnet with more than 16 other devices (or a
+  device with more than 16 routes) was refused as a whole
+  ("Authorization/peer update needs a full refresh ... reason=peer-update")
+  and every tunnel was blocked; stale devices count. The map, the policy
+  and the peer table are now sized by the tailnet (PSRAM); 300 and 2000
+  peer maps are tested. Tunnel slots (in internal RAM) stay limited to 16
+  at a time: when they are full, a peer that comes online or needs one
+  takes the slot of an offline peer, then of the one quiet longest (2
+  minutes at least); a peer in use or the priority peer never loses its
+  slot.
+- **Clearer reasons and safer identity storage.** A refused map now names
+  the check (peer-key, peer-prefixes, duplicate-peer, too-large ...).
+  Saving new identity keys checks for errors instead of logging success,
+  and public keys are derived from the stored private keys.
+
 3.0.25-beta.15 adds to beta.13 (beta.14 was a local candidate), from the
 serial log of board A during the stable/beta comparison (the first two are
 present in 3.0.24 too):
