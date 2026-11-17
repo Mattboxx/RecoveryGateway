@@ -2312,5 +2312,19 @@
  "Mobile data: {}% of the monthly limit used ({} MB of {} MB)": "移动数据：已用每月上限的 {}%（{} MB / {} MB）",
  "Mobile data: monthly limit of {} MB reached; mobile data paused until the next period": "移动数据：已达到每月 {} MB 上限；移动数据暂停至下一周期",
  "Mobile data: monthly limit of {} MB reached": "移动数据：已达到每月 {} MB 上限",
- "Remote console on port {} listens without encryption on the local network or the access point: the password typed there can be read on that network; limit it to the tailnet": "端口 {} 上的远程控制台在本地网络或接入点上以未加密方式监听：在此输入的密码可能在该网络中被读取；请仅限 tailnet 使用"
+ "Remote console on port {} listens without encryption on the local network or the access point: the password typed there can be read on that network; limit it to the tailnet": "端口 {} 上的远程控制台在本地网络或接入点上以未加密方式监听：在此输入的密码可能在该网络中被读取；请仅限 tailnet 使用",
+ "Access saved": "访问设置已保存",
+ "Administration answers on every network.": "管理界面在所有网络上响应。",
+ "Administration now answers only on the tailnet and the access point.": "管理界面现在只在 tailnet 和接入点上响应。",
+ "Administration reachable from": "管理界面可从以下位置访问",
+ "Count the traffic of each device": "统计每台设备的流量",
+ "Every network that reaches the gateway": "任何能访问网关的网络",
+ "Only the tailnet and the gateway's access point": "仅 tailnet 和网关的接入点",
+ "Save access": "保存访问设置",
+ "Shows what each device sent and received through the gateway since it was first seen. Off by default: while on, every packet on the access point is counted (a small CPU cost); turning it off forgets the counts.": "显示每台设备自首次出现以来经网关发送和接收的数据量。默认关闭：开启后会统计接入点上的每个数据包（少量 CPU 开销）；关闭时清除计数。",
+ "The community is still \"public\", which every SNMP tool tries first: choose a private one.": "团体名仍为 \"public\"，所有 SNMP 工具都会首先尝试它：请设置一个私有团体名。",
+ "The web page has no encryption on the local network: limiting it keeps the login off that network. While the gateway is not connected to the tailnet, the local network keeps access, so you cannot lock yourself out. Open this page through the tailnet or the access point to turn it on.": "网页在本地网络上未加密：加以限制可避免登录经过该网络。网关未连接 tailnet 时，本地网络仍可访问，因此不会把自己锁在外面。请通过 tailnet 或接入点打开此页面来启用。",
+ "this page is open through the local network: open it through the tailnet or the access point first, then limit access": "此页面是通过本地网络打开的：请先通过 tailnet 或接入点打开，然后再限制访问",
+ "Mobile data now carries the Internet traffic": "互联网流量现在经由移动数据传输",
+ "Mobile data no longer carries the Internet traffic": "互联网流量不再经由移动数据传输"
 }

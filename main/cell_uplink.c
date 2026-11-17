@@ -2,6 +2,9 @@
  * Original implementation, Mattboxx Edition. SPDX-License-Identifier: GPL-3.0-only */
 #include "cell_uplink.h"
 #include "cell_quota.h"
+#include "cell_hilink.h"
+#include "history.h"
+#include "esp_timer.h"
 #include "uplink_services.h"
 #include "eth_uplink.h"
 #include "json_guard.h"
@@ -270,6 +273,15 @@ int cell_usb_plan(uint16_t vid, uint16_t pid, const uint8_t *cfg, size_t len, ui
     if (out->count) out->how = CELL_USB_HOW_PROBE;
     else out->network_only = net;
     return out->count;
+}
+int cell_carry_update(cell_carry_t *c, bool carrying, uint32_t now_s)
+{
+    if (carrying == c->reported) {c->pending = false; return CELL_CARRY_NONE;}
+    if (!c->pending) {c->pending = true; c->since_s = now_s; return CELL_CARRY_NONE;}
+    if (now_s - c->since_s < CELL_CARRY_SETTLE_S) return CELL_CARRY_NONE;
+    c->reported = carrying;
+    c->pending = false;
+    return carrying ? CELL_CARRY_STARTED : CELL_CARRY_ENDED;
 }
 /* --- cell core (end) --- */
 
@@ -553,6 +565,21 @@ static uint64_t cell_total_bytes(void)
          + netif_hooks_get_usbnet_bytes_in() + netif_hooks_get_usbnet_bytes_out();
 }
 
+/* Event history (and notifications) when mobile data starts or stops
+ * carrying the Internet traffic; a warning in failover mode, where it means
+ * Wi-Fi/Ethernet are down and data may cost money. */
+static cell_carry_t s_carry;
+static void report_carrying(void)
+{
+    bool carrying = s_netif && uplink_internet_netif() == s_netif && atomic_load(&s_has_ip);
+    int change = cell_carry_update(&s_carry, carrying, (uint32_t)(esp_timer_get_time() / 1000000));
+    if (change == CELL_CARRY_STARTED)
+        history_event(HIST_EV_UPLINK, s_running.mode == CELL_MODE_PRIMARY ? HIST_INFO : HIST_WARN,
+                      "Mobile data now carries the Internet traffic");
+    else if (change == CELL_CARRY_ENDED)
+        history_event(HIST_EV_UPLINK, HIST_INFO, "Mobile data no longer carries the Internet traffic");
+}
+
 static void apply_choice(void)
 {
     if (tailscale_exit_node_ip != 0) return;
@@ -834,13 +861,29 @@ static void cell_task(void *arg)
                 /* The stick dials by itself (its own APN/PIN settings); the
                  * gateway runs DHCP over USB and watches the data path. */
                 set_state(CELL_DIALING, "");
-                TickType_t last_choice = xTaskGetTickCount();
+                TickType_t last_choice = xTaskGetTickCount(), last_signal = 0;
+                bool hilink = s_status.usb_vid == HILINK_VENDOR;
                 while (usb_port_net_alive()) {
                     vTaskDelay(pdMS_TO_TICKS(250));
                     if (atomic_load(&s_has_ip) && s_status.state != CELL_CONNECTED) set_state(CELL_CONNECTED, "");
+                    /* Huawei HiLink stick: signal and operator from its own
+                     * web API once a minute (read-only, bounded). */
+                    if (hilink && atomic_load(&s_has_ip) && (!last_signal || xTaskGetTickCount() - last_signal > pdMS_TO_TICKS(60000))) {
+                        last_signal = xTaskGetTickCount();
+                        esp_netif_ip_info_t ip = {0};
+                        int16_t dbm = 0;
+                        char name[sizeof s_status.operator_name] = "";
+                        if (esp_netif_get_ip_info(s_netif, &ip) == ESP_OK && cell_hilink_poll(ip.gw.addr, &dbm, name, sizeof name)) {
+                            xSemaphoreTake(s_lock, portMAX_DELAY);
+                            if (dbm) s_status.rssi_dbm = dbm;
+                            if (name[0]) snprintf(s_status.operator_name, sizeof s_status.operator_name, "%s", name);
+                            xSemaphoreGive(s_lock);
+                        }
+                    }
                     if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {
                         cell_quota_tick(cell_total_bytes());
                         apply_choice();
+                        report_carrying();
                         last_choice = xTaskGetTickCount();
                     }
                 }
@@ -915,6 +958,7 @@ static void cell_task(void *arg)
             if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {
                 cell_quota_tick(cell_total_bytes());
                 apply_choice();
+                report_carrying();
                 last_choice = xTaskGetTickCount();
             }
         }
@@ -928,7 +972,11 @@ static void cell_task(void *arg)
         failures = 0;
 retry:
         if (++failures > 30) failures = 30;
-        vTaskDelay(pdMS_TO_TICKS(backoff_s(failures - 1) * 1000));
+        /* Waits in steps, so the end of mobile data use is still reported. */
+        for (uint32_t waited = 0, total = backoff_s(failures - 1); waited < total; waited += 5) {
+            vTaskDelay(pdMS_TO_TICKS((total - waited < 5 ? total - waited : 5) * 1000));
+            report_carrying();
+        }
     }
     free(buffer);
     vTaskDelete(NULL);

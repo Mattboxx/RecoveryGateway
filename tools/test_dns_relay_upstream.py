@@ -13,7 +13,9 @@ cached under the new question. Checked with a scripted recvfrom():
 - dns_resp_ttl: short responses not cached, names ending in a compression
   pointer after labels parsed, min TTL clamped; every byte access bounds-
   checked over 200,000 random mutations;
-- the worker sends a random ID upstream and restores the client's ID.
+- the worker sends a random ID upstream and restores the client's ID;
+- the cache is two-way set-associative: two names of one set both stay, a
+  third evicts the entry expiring first, a name is refreshed in place.
 
 3.0.25 (answers above 1 KB reached clients cut, and were cached):
 - the EDNS(0) payload size of a forwarded query is lowered to the relay's
@@ -56,7 +58,8 @@ helpers = (function('static int dns_question_len(') + function('static int dns_s
 checked = re.sub(r'\bp\[([^\]]+)\]', r'AT(\1)', helpers)
 tcp_helpers = function('static bool tcp_all(') + function('static int tcp_read_msg(') + function('static bool tcp_write_msg(')
 cache_decl = source.split('/* ---- SPIRAM direct-mapped response cache ---- */', 1)[1].split('static atomic_uint s_cache_epoch;', 1)[0]
-cache_helpers = cache_decl + function('static uint32_t fnv1a(') + function('static bool cache_get(') + function('static void cache_put(')
+cache_helpers = (cache_decl + function('static uint32_t fnv1a(') + '#define DNS_CACHE_WAYS 2\n' + function('static uint32_t cache_set(')
+                 + function('static bool cache_same_key(') + function('static bool cache_get(') + function('static void cache_put('))
 
 PROGRAM = r'''
 #include <errno.h>
@@ -151,6 +154,32 @@ int main(void) {
     CHECK(cache_get(q, key_len, SRV, 1, buf, &cached_len) && cached_len == rlen);
     CHECK(!cache_get(q, key_len, SRV + 1, 1, buf, &cached_len));
     CHECK(!cache_get(q, key_len, SRV, 2, buf, &cached_len));
+    /* Two-way sets: two names of the same set both stay; a third evicts the
+     * one expiring first; the same name is updated in place. */
+    {
+        memset(entries, 0, sizeof entries);
+        uint8_t qa[64], qb[64], qc[64]; int la = 0, lb = 0, lc = 0; char nm[32]; int found = 0;
+        uint32_t want = 0;
+        for (int i = 0; i < 2000 && found < 3; i++) {
+            snprintf(nm, sizeof nm, "host%d.example", i); build_q(1, nm);
+            if (found == 0) want = cache_set(q, qlen - 12);
+            if (cache_set(q, qlen - 12) != want) continue;
+            if (found == 0) {memcpy(qa, q, qlen); la = qlen;} else if (found == 1) {memcpy(qb, q, qlen); lb = qlen;} else {memcpy(qc, q, qlen); lc = qlen;}
+            found++;
+        }
+        CHECK(found == 3);
+        cache_put(qa, la - 12, SRV, 1, r, rlen, 300);
+        now_us += 1000000;
+        cache_put(qb, lb - 12, SRV, 1, r, rlen, 300);
+        int n = 0;
+        CHECK(cache_get(qa, la - 12, SRV, 1, buf, &n) && cache_get(qb, lb - 12, SRV, 1, buf, &n));
+        cache_put(qa, la - 12, SRV, 1, r, rlen, 600);                 /* same name: in place */
+        CHECK(cache_get(qb, lb - 12, SRV, 1, buf, &n));
+        cache_put(qc, lc - 12, SRV, 1, r, rlen, 300);                 /* b expires first: b goes */
+        CHECK(cache_get(qa, la - 12, SRV, 1, buf, &n) && cache_get(qc, lc - 12, SRV, 1, buf, &n) && !cache_get(qb, lb - 12, SRV, 1, buf, &n));
+        now_us = 1000000;
+        build_q(0xBEEF, "www.example.com"); build_r(300);
+    }
 
     nscript = spos = 0; add(r, rlen, SRV, P53);
     CHECK(recv_now(buf) == rlen && memcmp(buf, r, rlen) == 0);
@@ -265,10 +294,10 @@ int main(void) {
 '''
 
 
-def run(code):
+def run(code, cache=None):
     with tempfile.TemporaryDirectory() as tmp:
         c = Path(tmp) / 'relay.c'
-        c.write_text(PROGRAM.replace('@@HELPERS@@', code).replace('@@CACHE@@', cache_helpers).replace('@@TCP@@', tcp_helpers), encoding='utf-8')
+        c.write_text(PROGRAM.replace('@@HELPERS@@', code).replace('@@CACHE@@', cache if cache is not None else cache_helpers).replace('@@TCP@@', tcp_helpers), encoding='utf-8')
         exe = Path(tmp) / ('relay.exe' if os.name == 'nt' else 'relay')
         subprocess.run(['gcc', '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-Wno-unused-parameter', '-Wno-unused-variable', str(c), '-o', str(exe)], check=True)
         return subprocess.run([str(exe)], capture_output=True, text=True)
@@ -286,7 +315,13 @@ print('dns relay upstream: only matching answers accepted, bounded, TTL parser i
 # Pre-3.0.25 behaviour: no EDNS clamp, TC answers cached.
 for old, new in (('type == 41 && size > max', 'type == 41 && size > max && !rrs && rrs'),
                  ('if (AT(2) & 0x02) return 0;', ''),
-                 ('r[4] << 8) | r[5]) != 1) return 0;', 'r[4] << 8) | r[5]) != 1) return rlen;')):
-    assert old in checked, old
-    assert run(checked.replace(old, new)).returncode != 0, 'mutant survived: ' + old
+                 ('r[4] << 8) | r[5]) != 1) return 0;', 'r[4] << 8) | r[5]) != 1) return rlen;'),
+                 ('w < DNS_CACHE_WAYS && !hit', 'w < 1 && !hit')):
+    target = checked if old in checked else None
+    if target is None:
+        assert old in cache_helpers, old
+        bad = run(checked, cache_helpers.replace(old, new))
+    else:
+        bad = run(checked.replace(old, new))
+    assert bad.returncode != 0, 'mutant survived: ' + old
 print('dns relay 3.0.25: EDNS size clamped, oversized answers made truncated replies, TC not cached, TCP framing bounded')

@@ -76,6 +76,7 @@
 #include "tailnet_forward.h"
 #include "mac_deny.h"
 #include "history.h"
+#include "ap_traffic.h"
 #include "notify_channels.h"
 #include "telegram_commands.h"
 #if CONFIG_TSR_DDNS
@@ -1299,6 +1300,7 @@ void app_main(void)
      * esp_wifi_start() posts asynchronous start events; installing after it
      * can race netif_add() and lose the ACL, traffic and STA TTL hooks. */
     eth_uplink_init();   /* optional SPI Ethernet: prepared, not started */
+    ap_traffic_init();   /* setting only; counting while on */
     netif_hooks_init();
 
     /* Start WiFi */

@@ -2313,5 +2313,19 @@
  "Mobile data: {}% of the monthly limit used ({} MB of {} MB)": "Dati mobili: usato il {}% del limite mensile ({} MB su {} MB)",
  "Mobile data: monthly limit of {} MB reached; mobile data paused until the next period": "Dati mobili: raggiunto il limite mensile di {} MB; dati mobili in pausa fino al prossimo periodo",
  "Mobile data: monthly limit of {} MB reached": "Dati mobili: raggiunto il limite mensile di {} MB",
- "Remote console on port {} listens without encryption on the local network or the access point: the password typed there can be read on that network; limit it to the tailnet": "La console remota sulla porta {} ascolta senza cifratura sulla rete locale o sull’access point: la password digitata lì può essere letta su quella rete; limitala alla tailnet"
+ "Remote console on port {} listens without encryption on the local network or the access point: the password typed there can be read on that network; limit it to the tailnet": "La console remota sulla porta {} ascolta senza cifratura sulla rete locale o sull’access point: la password digitata lì può essere letta su quella rete; limitala alla tailnet",
+ "Access saved": "Accesso salvato",
+ "Administration answers on every network.": "L’amministrazione risponde su tutte le reti.",
+ "Administration now answers only on the tailnet and the access point.": "Ora l’amministrazione risponde solo sulla tailnet e sull’access point.",
+ "Administration reachable from": "Amministrazione raggiungibile da",
+ "Count the traffic of each device": "Conta il traffico di ogni dispositivo",
+ "Every network that reaches the gateway": "Ogni rete che raggiunge il gateway",
+ "Only the tailnet and the gateway's access point": "Solo la tailnet e l’access point del gateway",
+ "Save access": "Salva l’accesso",
+ "Shows what each device sent and received through the gateway since it was first seen. Off by default: while on, every packet on the access point is counted (a small CPU cost); turning it off forgets the counts.": "Mostra quanto ogni dispositivo ha inviato e ricevuto attraverso il gateway da quando è stato visto la prima volta. Spento di serie: quando è acceso ogni pacchetto sull’access point viene contato (un piccolo costo di CPU); spegnendolo i conteggi vengono dimenticati.",
+ "The community is still \"public\", which every SNMP tool tries first: choose a private one.": "La community è ancora \"public\", la prima che ogni strumento SNMP prova: scegline una privata.",
+ "The web page has no encryption on the local network: limiting it keeps the login off that network. While the gateway is not connected to the tailnet, the local network keeps access, so you cannot lock yourself out. Open this page through the tailnet or the access point to turn it on.": "Sulla rete locale la pagina web non è cifrata: limitandola, il login non passa su quella rete. Finché il gateway non è connesso alla tailnet la rete locale mantiene l’accesso, quindi non puoi restare chiuso fuori. Per attivarla apri questa pagina tramite la tailnet o l’access point.",
+ "this page is open through the local network: open it through the tailnet or the access point first, then limit access": "questa pagina è aperta tramite la rete locale: aprila prima tramite la tailnet o l’access point, poi limita l’accesso",
+ "Mobile data now carries the Internet traffic": "Ora il traffico Internet passa sui dati mobili",
+ "Mobile data no longer carries the Internet traffic": "Il traffico Internet non passa più sui dati mobili"
 }

@@ -74,7 +74,7 @@ async function fixture(browser, options = {}) {
       else body = state.ntfyBody || ntfy;
     } else if (url.pathname === '/api/snmp') {
       if (state.snmpFailures) { state.snmpFailures--; status = 503; }
-      body = state.snmpBody || { enabled: false, running: false, community: 'fixture' };
+      body = state.snmpBody || { enabled: false, running: false, has_community: true, community_is_default: false };
     } else if (url.pathname === '/api/system') {
       if (route.request().method() === 'POST') {
         state.savedSystem = route.request().postDataJSON();
@@ -202,6 +202,8 @@ async function fixture(browser, options = {}) {
         body = state.speedPolls < 2 ? {running: true, bytes: 1048576, elapsed_ms: 1000, kbps: 8389, first_byte_ms: 40, http: 200, result: ''}
                                     : {running: false, bytes: 12582912, elapsed_ms: 10000, kbps: 10066, first_byte_ms: 40, http: 200, result: 'time limit reached'}; }
     }
+    if (url.pathname === '/api/dhcp/leases' && state.leasesBody) body = state.leasesBody;
+    if (url.pathname === '/api/system' && route.request().method() === 'POST' && state.systemReject) { status = 400; body = state.systemReject; state.systemReject = null; }
     if (state.rejectProtected && ['/api/mqtt', '/api/ntfy'].includes(url.pathname)) status = 401;
     await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   });
@@ -460,6 +462,42 @@ async function main() {
       assert.equal('enabled' in f.state.savedCellular, false);
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
+    // Administration scope: shown from /api/system, saved alone; a refusal
+    // (page opened through the LAN) shows the gateway's reason, not a success.
+    {
+      f = await fixture(browser, { page: 'system/security', systemBody: { web_auth_enabled: true, session_timeout_s: 0, admin_scope: 'anywhere',
+        wifi_power_save: false, wifi_power_save_active: false, wifi_power_save_known: true } });
+      await f.page.waitForFunction(() => document.getElementById('sys-admin-scope').value === 'anywhere');
+      assert.equal(await f.page.locator('#sys-admin-scope-save').isDisabled(), true);
+      f.state.systemReject = 'this page is open through the local network: open it through the tailnet or the access point first, then limit access';
+      await f.page.locator('#sys-admin-scope').selectOption('tailnet_ap');
+      await f.page.locator('#sys-admin-scope-save').click();
+      await f.page.waitForFunction(() => /through the local network/.test(document.body.textContent));
+      assert.equal(await f.page.locator('#sys-admin-scope-save').isDisabled(), false);
+      f.state.savedSystem = null;
+      await f.page.locator('#sys-admin-scope-save').click();
+      for (let i = 0; i < 50 && !f.state.savedSystem; i++) await f.page.waitForTimeout(100);
+      assert.deepEqual(f.state.savedSystem, { admin_scope: 'tailnet_ap' });
+      await f.page.waitForFunction(() => document.getElementById('sys-admin-scope').value === 'tailnet_ap');
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Traffic per AP device: off -> no column; switching on posts the setting
+    // and shows each device's sent/received bytes.
+    {
+      const client = { mac: '02:11:22:33:44:55', ip: '192.168.4.2', hostname: 'phone', name: '', rssi: -50, reserved: false };
+      f = await fixture(browser, { page: 'network/clients', leasesBody: { clients: [client], leases: [], traffic_counted: false } });
+      await f.page.waitForFunction(() => document.querySelector('#dhcp-clients-body table'));
+      assert.equal(await f.page.locator('#dhcp-clients-body th', { hasText: 'Traffic' }).count(), 0);
+      assert.equal(await f.page.locator('#dhcp-traffic-on').isChecked(), false);
+      f.state.leasesBody = { clients: [{ ...client, sent_bytes: 2048, received_bytes: 3 * 1048576 }], leases: [], traffic_counted: true };
+      f.state.savedSystem = null;
+      await f.page.locator('label:has(#dhcp-traffic-on)').click();
+      for (let i = 0; i < 50 && !f.state.savedSystem; i++) await f.page.waitForTimeout(100);
+      assert.deepEqual(f.state.savedSystem, { ap_client_traffic: true });
+      await f.page.waitForFunction(() => /↑2\.0 KB ↓3\.0 MB/.test(document.getElementById('dhcp-clients-body').textContent));
+      assert.equal(await f.page.locator('#dhcp-clients-body th', { hasText: 'Traffic' }).count(), 1);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Cellular over USB waiting for a device, then refused for internal RAM: a
     // "Waiting" badge (not "Connecting"), and firmware messages in Italian with
     // their numbers kept.
@@ -649,17 +687,27 @@ async function main() {
 
     // New upstream SNMP settings use the same honest unknown-state model:
     // no failed read may turn a running listener into an unchecked switch.
-    f = await fixture(browser, { page: 'system/logging', snmpBody: { enabled: true, running: true, community: 'fixture' } });
+    f = await fixture(browser, { page: 'system/logging', snmpBody: { enabled: true, running: true, has_community: true, community_is_default: false } });
     await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Running');
     assert.equal(await f.page.locator('#sys-snmp-en').isChecked(), true);
     f.state.snmpFailures = 2;
     await f.page.locator('#sys-snmp-reload').click();
     await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Unavailable');
     assert.equal(await f.page.locator('#sys-snmp-en').isChecked(), true);
-    f.state.snmpBody = { enabled: false, running: false, community: 'fixture' };
+    f.state.snmpBody = { enabled: false, running: false, has_community: true, community_is_default: false };
     await f.page.locator('#sys-snmp-reload').click();
     await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Disabled');
     assert.equal(await f.page.locator('#sys-snmp-card').getAttribute('data-feature-state'), 'disabled');
+    // The community is write-only: never shown, a placeholder says it is
+    // kept; "public" gets a warning; saving with the field empty keeps it.
+    assert.equal(await f.page.locator('#sys-snmp-community').inputValue(), '');
+    assert.equal(await f.page.locator('#sys-snmp-community').getAttribute('placeholder'), 'Saved — leave empty to keep');
+    assert.equal(await f.page.locator('#sys-snmp-community-hint').isVisible(), false);
+    f.state.snmpBody = { enabled: true, running: true, has_community: true, community_is_default: true };
+    await f.page.locator('#sys-snmp-reload').click();
+    await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Running');
+    assert.equal(await f.page.locator('#sys-snmp-community-hint').isVisible(), true);
+    assert.equal((await f.page.content()).includes('fixture-secret'), false);
     assert.deepEqual(f.errors, []);
     await f.context.close(); count++;
     // An unlimited idle timer must not imply that password protection is off.

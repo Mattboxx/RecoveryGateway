@@ -2312,5 +2312,19 @@
  "Mobile data: {}% of the monthly limit used ({} MB of {} MB)": "Datos móviles: usado el {} % del límite mensual ({} MB de {} MB)",
  "Mobile data: monthly limit of {} MB reached; mobile data paused until the next period": "Datos móviles: alcanzado el límite mensual de {} MB; datos móviles en pausa hasta el próximo periodo",
  "Mobile data: monthly limit of {} MB reached": "Datos móviles: alcanzado el límite mensual de {} MB",
- "Remote console on port {} listens without encryption on the local network or the access point: the password typed there can be read on that network; limit it to the tailnet": "La consola remota en el puerto {} escucha sin cifrado en la red local o el punto de acceso: la contraseña escrita allí puede leerse en esa red; limítala a la tailnet"
+ "Remote console on port {} listens without encryption on the local network or the access point: the password typed there can be read on that network; limit it to the tailnet": "La consola remota en el puerto {} escucha sin cifrado en la red local o el punto de acceso: la contraseña escrita allí puede leerse en esa red; limítala a la tailnet",
+ "Access saved": "Acceso guardado",
+ "Administration answers on every network.": "La administración responde en todas las redes.",
+ "Administration now answers only on the tailnet and the access point.": "La administración ahora solo responde en la tailnet y en el punto de acceso.",
+ "Administration reachable from": "Administración accesible desde",
+ "Count the traffic of each device": "Contar el tráfico de cada dispositivo",
+ "Every network that reaches the gateway": "Cualquier red que llegue a la pasarela",
+ "Only the tailnet and the gateway's access point": "Solo la tailnet y el punto de acceso de la pasarela",
+ "Save access": "Guardar el acceso",
+ "Shows what each device sent and received through the gateway since it was first seen. Off by default: while on, every packet on the access point is counted (a small CPU cost); turning it off forgets the counts.": "Muestra lo que cada dispositivo ha enviado y recibido a través de la pasarela desde que se vio por primera vez. Desactivado por defecto: activado, se cuenta cada paquete del punto de acceso (un pequeño coste de CPU); al desactivarlo se olvidan los contadores.",
+ "The community is still \"public\", which every SNMP tool tries first: choose a private one.": "La comunidad sigue siendo \"public\", la primera que prueba cualquier herramienta SNMP: elige una privada.",
+ "The web page has no encryption on the local network: limiting it keeps the login off that network. While the gateway is not connected to the tailnet, the local network keeps access, so you cannot lock yourself out. Open this page through the tailnet or the access point to turn it on.": "En la red local la página web no está cifrada: al limitarla, el inicio de sesión no pasa por esa red. Mientras la pasarela no esté conectada a la tailnet, la red local conserva el acceso, así que no puedes quedarte fuera. Abre esta página a través de la tailnet o del punto de acceso para activarlo.",
+ "this page is open through the local network: open it through the tailnet or the access point first, then limit access": "esta página está abierta a través de la red local: ábrela primero a través de la tailnet o del punto de acceso y luego limita el acceso",
+ "Mobile data now carries the Internet traffic": "El tráfico de Internet ahora va por los datos móviles",
+ "Mobile data no longer carries the Internet traffic": "El tráfico de Internet ya no va por los datos móviles"
 }

@@ -101,6 +101,8 @@
 #include "upstream_validation.h"
 #include "boot_timeline.h"
 #include "wifi_usb_budget.h"
+#include "web_access.h"
+#include "ap_traffic.h"
 #include "esp_attr.h"
 extern volatile int ap_connect;
 extern volatile int connect_count;
@@ -230,6 +232,8 @@ static void  ip4_hbo_to_str(uint32_t hbo, char *out, size_t out_size);
 static char *device_name_dup(void);
 static int   subnet_mask_prefix_len(uint32_t mask_nbo);
 static bool  s_web_auth_enabled;
+static uint8_t s_web_scope;
+static bool  socket_addr(int fd, bool peer, web_addr_t *out);
 
 /* Browser-request screening shared by authenticated routes and the pre-auth
  * account endpoints. A write needs a matching Origin when one is sent and
@@ -2567,6 +2571,11 @@ static esp_err_t dhcp_leases_handler(httpd_req_t *req)
         cJSON_AddStringToObject(e, "name",     res_name ? res_name : "");
         cJSON_AddNumberToObject(e, "rssi",     sta->rssi);
         cJSON_AddBoolToObject  (e, "reserved", reserved);
+        uint64_t sent = 0, received = 0;
+        if (ap_traffic_get(sta->mac, &sent, &received)) {
+            cJSON_AddNumberToObject(e, "sent_bytes", (double)sent);          /* by the device */
+            cJSON_AddNumberToObject(e, "received_bytes", (double)received);
+        }
         cJSON_AddItemToArray(clients_arr, e);
     }
 
@@ -2591,6 +2600,7 @@ static esp_err_t dhcp_leases_handler(httpd_req_t *req)
 
     cJSON_AddItemToObject(root, "clients", clients_arr);
     cJSON_AddItemToObject(root, "leases",  leases_arr);
+    cJSON_AddBoolToObject(root, "traffic_counted", ap_traffic_on);
 
     char *body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -3961,6 +3971,8 @@ static esp_err_t system_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "session_timeout_s",   s_session_timeout_s);
     cJSON_AddNumberToObject(root, "session_remaining_s", session_remaining_s_for_req(req));
     cJSON_AddBoolToObject(root, "web_auth_enabled", s_web_auth_enabled);
+    cJSON_AddStringToObject(root, "admin_scope", s_web_scope == WEB_ADMIN_TAILNET_AP ? "tailnet_ap" : "anywhere");
+    cJSON_AddBoolToObject(root, "ap_client_traffic", ap_traffic_on);
     cJSON_AddBoolToObject(root, "web_password_set", is_web_password_set());
     cJSON_AddNumberToObject(root, "web_port", web_ui_configured_port());
     cJSON_AddBoolToObject(root, "wifi_power_save", wifi_power_save_configured());
@@ -4060,6 +4072,28 @@ static esp_err_t reserve_restart(httpd_req_t *req, TaskHandle_t *task)
     return ESP_ERR_NO_MEM;
 }
 
+/* The access point address while the AP runs, else 0. */
+static uint32_t web_admin_ap_ip(void)
+{
+    if (!wifi_ap_runtime_enabled()) return 0;
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    esp_netif_ip_info_t info = {0};
+    return ap && esp_netif_get_ip_info(ap, &info) == ESP_OK ? info.ip.addr : 0;
+}
+
+/* New connection: with administration limited to the tailnet and the AP, a
+ * connection to another gateway address (the LAN one) is closed at once. */
+static esp_err_t web_open(httpd_handle_t hd, int fd)
+{
+    if (s_web_scope == WEB_ADMIN_TAILNET_AP) {
+        web_addr_t local;
+        bool up = tailscale_is_connected();
+        if (!socket_addr(fd, false, &local) || !web_admin_allowed(s_web_scope, &local, web_admin_ap_ip(), tailscale_tunnel_ip, up))
+            return ESP_FAIL;
+    }
+    return web_idle_open(hd, fd);
+}
+
 static esp_err_t system_save_handler(httpd_req_t *req)
 {
     if (require_auth(req) != ESP_OK) return ESP_FAIL;
@@ -4091,10 +4125,38 @@ static esp_err_t system_save_handler(httpd_req_t *req)
                             "web_port must be a whole number from 1 to 65535");
         return ESP_FAIL;
     }
+    const cJSON *scope_j = cJSON_GetObjectItem(root, "admin_scope");
+    uint8_t scope = s_web_scope;
+    if (scope_j) {
+        if (!cJSON_IsString(scope_j) || (strcmp(scope_j->valuestring, "anywhere") && strcmp(scope_j->valuestring, "tailnet_ap"))) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "admin_scope must be anywhere or tailnet_ap");
+            return ESP_FAIL;
+        }
+        scope = strcmp(scope_j->valuestring, "tailnet_ap") ? WEB_ADMIN_ANYWHERE : WEB_ADMIN_TAILNET_AP;
+        /* Never cut off the browser that asks: it must already use an
+         * address that stays allowed (judged as if the tailnet were up). */
+        web_addr_t local;
+        if (scope == WEB_ADMIN_TAILNET_AP && (!socket_addr(httpd_req_to_sockfd(req), false, &local)
+                || !web_admin_allowed(scope, &local, web_admin_ap_ip(), tailscale_tunnel_ip, true))) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "this page is open through the local network: open it through the tailnet or the access point first, then limit access");
+            return ESP_FAIL;
+        }
+    }
+    const cJSON *traffic_j = cJSON_GetObjectItem(root, "ap_client_traffic");
+    if (traffic_j && !cJSON_IsBool(traffic_j)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ap_client_traffic must be a boolean");
+        return ESP_FAIL;
+    }
     if (!save_txn_begin()) {
         cJSON_Delete(root);
         return send_save_response(req);
     }
+    if (scope_j) nvs_save_u8("web_scope", scope);
+    if (traffic_j) nvs_save_u8("ap_traffic", cJSON_IsTrue(traffic_j) ? 1 : 0);
     if (wp) {
         esp_err_t port_err = web_ui_save_port((uint16_t)wp->valuedouble, &web_port_changed);
         if (port_err == ESP_ERR_INVALID_STATE) {
@@ -4190,6 +4252,8 @@ static esp_err_t system_save_handler(httpd_req_t *req)
             session_extend_all_alive();
         }
         if (cJSON_IsBool(wa)) s_web_auth_enabled = cJSON_IsTrue(wa);
+        if (scope_j) s_web_scope = scope;
+        if (traffic_j && cJSON_IsTrue(traffic_j) != ap_traffic_on) (void)ap_traffic_set(cJSON_IsTrue(traffic_j));
         if (tx_power >= 8) esp_wifi_set_max_tx_power((int8_t)tx_power);
     } else {
         tz_changed = web_port_changed = tx_default_restart = false;
@@ -5076,12 +5140,25 @@ typedef struct {
     char     token[WEB_UI_SESSION_TOKEN_LEN * 2 + 1];   /* hex; "" = unused */
     uint64_t expires_us;
     uint64_t last_used_order;
+    web_addr_t peer;                                     /* client address at login */
 } web_session_t;
 
 static web_session_t s_sessions[WEB_UI_SESSION_MAX] = {0};
 static uint64_t s_session_activity_order;
 static uint32_t      s_session_timeout_s = WEB_UI_SESSION_TIMEOUT_DEF_S;
 static bool          s_web_auth_enabled = true;
+static uint8_t       s_web_scope = WEB_ADMIN_ANYWHERE;   /* NVS "web_scope" */
+
+/* The client (peer) or gateway (local) address of a socket. */
+static bool socket_addr(int fd, bool peer, web_addr_t *out)
+{
+    struct sockaddr_storage a = {0};
+    socklen_t len = sizeof a;
+    if (fd < 0 || (peer ? getpeername(fd, (struct sockaddr *)&a, &len) : getsockname(fd, (struct sockaddr *)&a, &len)) != 0) return false;
+    if (a.ss_family == AF_INET) {*out = web_addr_v4(((const struct sockaddr_in *)&a)->sin_addr.s_addr); return true;}
+    if (a.ss_family == AF_INET6) {memcpy(out->b, ((const struct sockaddr_in6 *)&a)->sin6_addr.s6_addr, 16); return true;}
+    return false;
+}
 
 static void hex_encode(const uint8_t *src, size_t len, char *out)
 {
@@ -5146,6 +5223,8 @@ static void session_timeout_load(void)
 
 static void web_auth_setting_load(void)
 {
+    uint8_t scope = WEB_ADMIN_ANYWHERE;
+    s_web_scope = nvs_param_get_u8("web_scope", &scope) == ESP_OK && scope == WEB_ADMIN_TAILNET_AP ? WEB_ADMIN_TAILNET_AP : WEB_ADMIN_ANYWHERE;
     uint8_t enabled = 1;
     if (nvs_param_get_u8("web_auth_en", &enabled) == ESP_OK) {
         s_web_auth_enabled = enabled != 0;
@@ -5191,12 +5270,16 @@ static int session_find_for_req(httpd_req_t *req)
         return -1;
     }
     uint64_t now = (uint64_t)esp_timer_get_time();
+    web_addr_t peer;
+    bool peer_known = socket_addr(httpd_req_to_sockfd(req), true, &peer);
     for (int i = 0; i < WEB_UI_SESSION_MAX; i++) {
         if (!s_sessions[i].token[0])    continue;
         if (now >= s_sessions[i].expires_us) continue;
         if (session_cookie_matches(hdr, s_sessions[i].token)) {
             free(hdr);
-            return i;
+            /* Bound to the address that logged in: a cookie copied off the
+             * plain-HTTP network is useless from another device. */
+            return peer_known && web_addr_same(&peer, &s_sessions[i].peer) ? i : -1;
         }
     }
     free(hdr);
@@ -5223,9 +5306,12 @@ static int session_pick_new_slot(void)
 
 /* Forge a fresh token, install it in the slot, return a pointer to
  * the token string (still owned by the slot). */
-static const char *session_create(void)
+static const char *session_create(httpd_req_t *req)
 {
+    web_addr_t peer;
+    if (!socket_addr(httpd_req_to_sockfd(req), true, &peer)) return NULL;
     int idx = session_pick_new_slot();
+    s_sessions[idx].peer = peer;
     uint8_t raw[WEB_UI_SESSION_TOKEN_LEN];
     esp_fill_random(raw, sizeof raw);
     hex_encode(raw, sizeof raw, s_sessions[idx].token);
@@ -5559,7 +5645,8 @@ static esp_err_t auth_login_handler(httpd_req_t *req)
 
     memset(guard, 0, sizeof *guard);
 
-    const char *new_token = session_create();
+    const char *new_token = session_create(req);
+    if (!new_token) {httpd_resp_send_500(req); return ESP_FAIL;}   /* client address unknown */
     char cookie[160];
     if (s_session_timeout_s == 0) {
         snprintf(cookie, sizeof cookie,
@@ -5695,7 +5782,8 @@ static esp_err_t auth_setup_handler(httpd_req_t *req)
 
     /* Log the new operator in straight away so the SPA can transition
      * from the wizard into the normal dashboard without a second POST. */
-    const char *setup_token = session_create();
+    const char *setup_token = session_create(req);
+    if (!setup_token) {httpd_resp_send_500(req); return ESP_FAIL;}
     char cookie[160];
     if (s_session_timeout_s == 0) {
         snprintf(cookie, sizeof cookie,
@@ -6095,7 +6183,10 @@ static esp_err_t snmp_get_handler(httpd_req_t *req)
 
     cJSON_AddBoolToObject  (root, "enabled",       enabled);
     cJSON_AddBoolToObject  (root, "running",       running);
-    cJSON_AddStringToObject(root, "community",     community);
+    /* The community is a password: write-only, like the other secrets. */
+    cJSON_AddBoolToObject  (root, "has_community", community[0] != '\0');
+    cJSON_AddBoolToObject  (root, "community_is_default", !strcmp(community, "public"));
+    secure_wipe(community, sizeof community);
     cJSON_AddStringToObject(root, "sys_name",      sys_name);
     cJSON_AddStringToObject(root, "sys_contact",   sys_contact);
     cJSON_AddStringToObject(root, "sys_location",  sys_location);
@@ -6155,6 +6246,7 @@ static esp_err_t snmp_post_handler(httpd_req_t *req)
                                     "SNMP field exceeds 255 bytes");
                 return ESP_FAIL;
             }
+            if (i == 0 && !j->valuestring[0]) continue;   /* empty community: keep the saved one */
             strcpy(values[i], j->valuestring);
         }
     }
@@ -6252,7 +6344,7 @@ esp_err_t web_ui_init(void)
      * keep-alive connections cannot hold every slot. 12 waiting plus 4
      * served covers a burst of 16; waiting connections hold only a TCP PCB. */
     conf.lru_purge_enable         = false;
-    conf.open_fn                  = web_idle_open;
+    conf.open_fn                  = web_open;
     conf.backlog_conn             = 12;
     conf.server_port              = web_ui_configured_port();
     web_ui_set_active_port(conf.server_port);

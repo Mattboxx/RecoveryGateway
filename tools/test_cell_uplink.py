@@ -20,6 +20,7 @@ source = (ROOT / 'main/cell_uplink.c').read_text(encoding='utf-8')
 header = (ROOT / 'main/cell_uplink.h').read_text(encoding='utf-8')
 types = 'enum {CELL_MODE_FAILOVER' + header.split('enum {CELL_MODE_FAILOVER', 1)[1].split('/* Core (pure, host-tested). */', 1)[0]
 types += 'typedef struct {uint8_t streak;} cell_selector_t;\n#define CELL_STABLE_SAMPLES 3\n'
+types += '#define CELL_CARRY_SETTLE_S' + header.split('#define CELL_CARRY_SETTLE_S', 1)[1].split('int cell_carry_update(', 1)[0]
 core = source.split('/* --- cell core (begin) --- */', 1)[1].split('/* --- cell core (end) --- */', 1)[0]
 records = '#define CELL_MAGIC' + source.split('#define CELL_MAGIC', 1)[1].split('\nstatic SemaphoreHandle_t s_lock;', 1)[0] + '\n'
 
@@ -265,7 +266,14 @@ int main(void){
     bad=r;bad.config.tx=33;bad.checksum=record_checksum(&bad);memcpy(blob,&bad,sizeof bad);load(&out);assert(!out.enabled);
     blob_size=sizeof r-1;memcpy(blob,&r,sizeof r);load(&out);assert(!out.enabled);
     blob_size=0;load(&out);assert(!out.enabled);open_fail=1;blob_size=sizeof r;load(&out);assert(!out.enabled);
-    puts("PASS: actual cellular validation per transport (UART pins, USB), AT parsers and line classifier, USB interface plan (known, ACM, probe, manual, RNDIS/ECM refusal, malformed, fuzz), failover/primary selection, fail-closed record load and v1 migration (no modem)");
+    /* Mobile data carrying the traffic: reported once a change has lasted 30 s. */
+    cell_carry_t cc={0};
+    assert(cell_carry_update(&cc,true,100)==CELL_CARRY_NONE&&cell_carry_update(&cc,true,129)==CELL_CARRY_NONE);
+    assert(cell_carry_update(&cc,true,130)==CELL_CARRY_STARTED&&cell_carry_update(&cc,true,500)==CELL_CARRY_NONE);
+    assert(cell_carry_update(&cc,false,600)==CELL_CARRY_NONE&&cell_carry_update(&cc,true,610)==CELL_CARRY_NONE);   /* a short flip */
+    assert(cell_carry_update(&cc,false,700)==CELL_CARRY_NONE&&cell_carry_update(&cc,false,740)==CELL_CARRY_ENDED);
+    assert(cell_carry_update(&cc,false,9999)==CELL_CARRY_NONE);
+    puts("PASS: actual cellular validation per transport (UART pins, USB), AT parsers and line classifier, USB interface plan (known, ACM, probe, manual, RNDIS/ECM refusal, malformed, fuzz), failover/primary selection, mobile data use reported after 30 s (short flips quiet), fail-closed record load and v1 migration (no modem)");
 }
 '''
 

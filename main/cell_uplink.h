@@ -77,6 +77,13 @@ typedef struct {uint8_t streak;} cell_selector_t;
 /* true: route Internet traffic over cellular. Failover takes it only while
  * the WiFi/Ethernet uplink is down; primary after a short stable window. */
 bool cell_uplink_choose(cell_selector_t *s, uint8_t mode, bool other_ok, bool cell_ok);
+/* Reporting when mobile data starts or stops carrying the Internet traffic:
+ * a change is reported once it has lasted CELL_CARRY_SETTLE_S (short flips
+ * stay quiet). Returns CELL_CARRY_* for the change to report now. */
+#define CELL_CARRY_SETTLE_S 30
+enum {CELL_CARRY_NONE, CELL_CARRY_STARTED, CELL_CARRY_ENDED};
+typedef struct {bool reported, pending; uint32_t since_s;} cell_carry_t;
+int cell_carry_update(cell_carry_t *c, bool carrying, uint32_t now_s);
 /* One AT response line: 1 final OK (or `final` seen), 0 final error, -1 not final. */
 int cell_at_line(const char *line, const char *final);
 /* USB serial interface plan from a raw configuration descriptor (bounded

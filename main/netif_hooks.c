@@ -26,6 +26,7 @@
 
 #include "acl.h"
 #include "netif_hooks.h"
+#include "ap_traffic.h"
 #include "tailnet_forward.h"
 
 /* MTU-management knobs published by tailscale_mtu.c. ap_mss_clamp is
@@ -437,6 +438,7 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *netif)
      * the uplink LAN tested by the wizard. Headers are in the first pbuf. */
     if (p && !first_boot_ap_frame_allowed((const uint8_t *)p->payload, p->len)) { pbuf_free(p); return ERR_OK; }
     if (acl_drops(acl_check_and_tap(ACL_TO_AP, p, true))) { pbuf_free(p); return ERR_OK; }
+    if (ap_traffic_on && p) ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, true);
     /* PMTU: tell the client to back off when it sends a DF packet
      * bigger than the tunnel can carry. Runs BEFORE we forward so the
      * client gets the signal even when we'd otherwise drop the frame. */
@@ -451,6 +453,7 @@ static err_t ap_linkoutput_hook(struct netif *netif, struct pbuf *p)
 {
     if (p) s_ap_bytes_out += p->tot_len;
     if (acl_drops(acl_check_and_tap(ACL_FROM_AP, p, true))) { return ERR_OK; }
+    if (ap_traffic_on && p) ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, false);
     /* And clamp again on outbound — SYN-ACK from upstream toward the
      * client also needs its MSS bounded. */
     clamp_tcp_mss(p, ap_mss_clamp);

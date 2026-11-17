@@ -3103,6 +3103,10 @@
           </div>
           <button class="btn btn-secondary btn-sm" id="dhcp-clients-refresh">Refresh</button>
         </div>
+        <div class="card-body" style="padding-bottom:0;">
+          <label class="feature-switch"><input type="checkbox" id="dhcp-traffic-on"><span class="feature-switch-track" aria-hidden="true"></span><span>Count the traffic of each device</span></label>
+          <span class="form-hint">Shows what each device sent and received through the gateway since it was first seen. Off by default: while on, every packet on the access point is counted (a small CPU cost); turning it off forgets the counts.</span>
+        </div>
         <div class="card-body-flush" id="dhcp-clients-body">
           <div style="padding:1rem; color:var(--text-muted);">— loading —</div>
         </div>
@@ -4281,6 +4285,17 @@
           <div style="text-align:right; margin-bottom:1rem;">
             <button class="btn btn-primary btn-md" id="sys-web-auth-save" disabled>Save password gate</button>
           </div>
+          <div class="form-group">
+            <label class="form-label" for="sys-admin-scope">Administration reachable from</label>
+            <select class="input" id="sys-admin-scope" style="max-width:28rem;">
+              <option value="anywhere">Every network that reaches the gateway</option>
+              <option value="tailnet_ap">Only the tailnet and the gateway's access point</option>
+            </select>
+            <span class="form-hint">The web page has no encryption on the local network: limiting it keeps the login off that network. While the gateway is not connected to the tailnet, the local network keeps access, so you cannot lock yourself out. Open this page through the tailnet or the access point to turn it on.</span>
+          </div>
+          <div style="text-align:right; margin-bottom:1rem;">
+            <button class="btn btn-primary btn-md" id="sys-admin-scope-save" disabled>Save access</button>
+          </div>
           <p class="form-hint" style="margin:0 0 0.75rem 0;">After this much idle time the web UI logs you out and asks for the password again. Every click or tab refresh resets the countdown.</p>
           <div class="form-group">
             <label class="form-label" for="sys-auth-to">Idle timeout</label>
@@ -4518,7 +4533,7 @@
           <p class="form-hint" id="sys-snmp-load-status" role="status">Settings have not loaded yet.</p>
           <label class="feature-switch"><input type="checkbox" id="sys-snmp-en" disabled><span class="feature-switch-track" aria-hidden="true"></span><span>Enable read-only SNMP agent</span></label>
           <div class="grid grid-cols-2 mt-4">
-            <div class="form-group"><label class="form-label" for="sys-snmp-community">Community</label><input class="input" type="password" id="sys-snmp-community" maxlength="255" autocomplete="off" spellcheck="false" disabled></div>
+            <div class="form-group"><label class="form-label" for="sys-snmp-community">Community</label><input class="input" type="password" id="sys-snmp-community" maxlength="255" autocomplete="off" spellcheck="false" disabled><span class="form-hint" id="sys-snmp-community-hint" hidden>The community is still "public", which every SNMP tool tries first: choose a private one.</span></div>
             <div class="form-group"><label class="form-label" for="sys-snmp-sysname">System name</label><input class="input" id="sys-snmp-sysname" maxlength="255" disabled></div>
             <div class="form-group"><label class="form-label" for="sys-snmp-contact">Contact</label><input class="input" id="sys-snmp-contact" maxlength="255" disabled></div>
             <div class="form-group"><label class="form-label" for="sys-snmp-location">Location</label><input class="input" id="sys-snmp-location" maxlength="255" disabled></div>
@@ -8803,6 +8818,8 @@
       apiFetch('/api/dhcp/leases')
         .then(function (r) { return r.json(); })
         .then(function (d) {
+          s_dhcp_traffic = !!d.traffic_counted;
+          document.getElementById('dhcp-traffic-on').checked = s_dhcp_traffic;
           renderDhcpClients (d.clients || []);
           renderDhcpLeases  (d.leases  || []);
         }).catch(function () {
@@ -8813,6 +8830,14 @@
         });
     }
 
+    var s_dhcp_traffic = false;
+    document.getElementById('dhcp-traffic-on').addEventListener('change', function () {
+      var el = this, on = el.checked;
+      apiFetch('/api/system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ap_client_traffic: on})})
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function () { loadDhcpLeases(); })
+        .catch(function (e) { el.checked = !on; showToast('error', 'Not saved', e.message, 5000); });
+    });
     function renderDhcpClients(clients) {
       var body = document.getElementById('dhcp-clients-body');
       if (!clients.length) {
@@ -8820,7 +8845,7 @@
         return;
       }
       var html = '<div class="table-wrap"><table class="table"><thead><tr>'
-               + '<th>MAC</th><th>IP</th><th>Name</th><th>Hostname</th><th>RSSI</th><th></th>'
+               + '<th>MAC</th><th>IP</th><th>Name</th><th>Hostname</th><th>RSSI</th>' + (s_dhcp_traffic ? '<th>' + escapeHtml(window.I18N ? I18N.t('Traffic') : 'Traffic') + '</th>' : '') + '<th></th>'
                + '</tr></thead><tbody>';
       clients.forEach(function (c) {
         var name = c.name || '';
@@ -8833,6 +8858,7 @@
               + '<td>' + escapeHtml(name) + resBadge + '</td>'
               + '<td>' + escapeHtml(c.hostname || '') + '</td>'
               + '<td class="mono">' + rssi + '</td>'
+              + (s_dhcp_traffic ? '<td class="mono">' + (typeof c.sent_bytes === 'number' ? '↑' + formatBytes(c.sent_bytes) + ' ↓' + formatBytes(c.received_bytes) : '—') + '</td>' : '')
               + '<td style="text-align:right; white-space:nowrap;">'
               + (canReserve
                   ? '<button class="btn btn-secondary btn-sm dhcp-reserve-from" data-mac="' + escapeHtml(c.mac) + '" data-ip="' + escapeHtml(c.ip) + '" data-name="' + escapeHtml(c.hostname || '') + '" type="button">Reserve</button> '
@@ -10895,6 +10921,8 @@
           var authToggle = document.getElementById('sys-web-auth-enabled');
           authToggle.checked = d.web_auth_enabled !== false;
           document.getElementById('sys-web-auth-save').disabled = true;
+          document.getElementById('sys-admin-scope').value = d.admin_scope === 'tailnet_ap' ? 'tailnet_ap' : 'anywhere';
+          document.getElementById('sys-admin-scope-save').disabled = true;
 
           /* Idle session timeout — snap the select to whichever option
            * matches the persisted value, falling back to 30 min if the
@@ -11811,7 +11839,12 @@
         if (!d || typeof d.enabled !== 'boolean' || typeof d.running !== 'boolean')
           throw new Error('Invalid settings response');
         document.getElementById('sys-snmp-en').checked = d.enabled;
-        document.getElementById('sys-snmp-community').value = d.community || '';
+        /* Write-only: the saved community is never sent back. */
+        var comm = document.getElementById('sys-snmp-community');
+        comm.value = '';
+        comm.placeholder = d.has_community ? (window.I18N ? I18N.t('Saved — leave empty to keep') : 'Saved — leave empty to keep') : '';
+        comm.dataset.saved = d.has_community ? '1' : '';
+        document.getElementById('sys-snmp-community-hint').hidden = !d.community_is_default;
         document.getElementById('sys-snmp-sysname').value = d.sys_name || '';
         document.getElementById('sys-snmp-contact').value = d.sys_contact || '';
         document.getElementById('sys-snmp-location').value = d.sys_location || '';
@@ -11847,7 +11880,7 @@
       btn.addEventListener('click', function () {
         if (!s_snmpLoaded) return;
         var community = document.getElementById('sys-snmp-community').value;
-        if (document.getElementById('sys-snmp-en').checked && !community) {
+        if (document.getElementById('sys-snmp-en').checked && !community && !document.getElementById('sys-snmp-community').dataset.saved) {
           showToast('error', 'Invalid community', 'Enter a nonempty SNMP community.', 4000);
           return;
         }
@@ -11919,6 +11952,23 @@
 
     document.getElementById('sys-web-auth-enabled').addEventListener('change', function () {
       document.getElementById('sys-web-auth-save').disabled = false;
+    });
+    document.getElementById('sys-admin-scope').addEventListener('change', function () {
+      document.getElementById('sys-admin-scope-save').disabled = false;
+    });
+    document.getElementById('sys-admin-scope-save').addEventListener('click', function () {
+      var btn = this, scope = document.getElementById('sys-admin-scope').value;
+      btn.disabled = true;
+      apiFetch('/api/system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({admin_scope: scope})})
+        .then(function (r) {
+          if (r.ok) return r.json();
+          return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+        })
+        .then(function () {
+          showToast('success', 'Access saved', scope === 'tailnet_ap' ? 'Administration now answers only on the tailnet and the access point.' : 'Administration answers on every network.', 5000);
+          loadSystem();
+        })
+        .catch(function (e) { btn.disabled = false; showToast('error', 'Not saved', window.I18N ? I18N.t(e.message) : e.message, 8000); });
     });
     document.getElementById('sys-web-auth-save').addEventListener('click', function () {
       var enabled = document.getElementById('sys-web-auth-enabled').checked;

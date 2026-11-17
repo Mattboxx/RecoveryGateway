@@ -366,23 +366,36 @@ static uint32_t fnv1a(const uint8_t *d, int n)
     return h;
 }
 
+/* Two-way set-associative: a question may live in either entry of its set,
+ * so two busy names that hash to the same set no longer evict each other. */
+#define DNS_CACHE_WAYS 2
+static uint32_t cache_set(const uint8_t *q, int key_len)
+{
+    return (fnv1a(q + 12, key_len) % (DNS_CACHE_ENTRIES / DNS_CACHE_WAYS)) * DNS_CACHE_WAYS;
+}
+
+static bool cache_same_key(const dns_cache_entry_t *e, const uint8_t *q, int key_len)
+{
+    return e->expiry_us != 0 && e->key_len == key_len && memcmp(e->key, q + 12, key_len) == 0;
+}
+
 /* Look the question up. On hit, copies the response to out (*out_len set) and
  * rewrites the txid to the querying client's. Returns true on hit. */
 static bool cache_get(const uint8_t *q, int key_len, uint32_t upstream, uint32_t epoch,
                       uint8_t *out, int *out_len)
 {
     if (!s_cache || !s_cache_mtx) return false;
-    uint32_t slot = fnv1a(q + 12, key_len) % DNS_CACHE_ENTRIES;
+    uint32_t set = cache_set(q, key_len);
     bool hit = false;
     xSemaphoreTake(s_cache_mtx, portMAX_DELAY);
-    dns_cache_entry_t *e = &s_cache[slot];
-    if (e->expiry_us != 0 && e->key_len == key_len &&
-        e->upstream == upstream && e->epoch == epoch &&
-        esp_timer_get_time() < e->expiry_us &&
-        memcmp(e->key, q + 12, key_len) == 0) {
-        memcpy(out, e->resp, e->resp_len);
-        *out_len = e->resp_len;
-        hit = true;
+    int64_t now = esp_timer_get_time();
+    for (uint32_t w = 0; w < DNS_CACHE_WAYS && !hit; w++) {
+        dns_cache_entry_t *e = &s_cache[set + w];
+        if (cache_same_key(e, q, key_len) && e->upstream == upstream && e->epoch == epoch && now < e->expiry_us) {
+            memcpy(out, e->resp, e->resp_len);
+            *out_len = e->resp_len;
+            hit = true;
+        }
     }
     xSemaphoreGive(s_cache_mtx);
     if (hit) { out[0] = q[0]; out[1] = q[1]; }   /* match the client's transaction id */
@@ -395,11 +408,18 @@ static void cache_put(const uint8_t *q, int key_len, uint32_t upstream, uint32_t
     if (!s_cache || !s_cache_mtx) return;
     if (key_len <= 0 || key_len > DNS_CACHE_KEY_MAX) return;
     if (resp_len <= 0 || resp_len > DNS_RELAY_BUF_SIZE) return;
-    uint32_t slot = fnv1a(q + 12, key_len) % DNS_CACHE_ENTRIES;
+    uint32_t set = cache_set(q, key_len);
     xSemaphoreTake(s_cache_mtx, portMAX_DELAY);
-    dns_cache_entry_t *e = &s_cache[slot];
-    bool was_other = (e->expiry_us != 0 &&
-                      !(e->key_len == key_len && memcmp(e->key, q + 12, key_len) == 0));
+    /* The same question's entry, else a free or expired one, else the one
+     * that expires first. */
+    int64_t now = esp_timer_get_time();
+    dns_cache_entry_t *e = NULL;
+    for (uint32_t w = 0; w < DNS_CACHE_WAYS && !e; w++)
+        if (cache_same_key(&s_cache[set + w], q, key_len)) e = &s_cache[set + w];
+    for (uint32_t w = 0; w < DNS_CACHE_WAYS && !e; w++)
+        if (s_cache[set + w].expiry_us == 0 || now >= s_cache[set + w].expiry_us) e = &s_cache[set + w];
+    if (!e) e = s_cache[set].expiry_us <= s_cache[set + 1].expiry_us ? &s_cache[set] : &s_cache[set + 1];
+    bool was_other = e->expiry_us != 0 && now < e->expiry_us && !cache_same_key(e, q, key_len);
     e->expiry_us = esp_timer_get_time() + (int64_t)ttl_s * 1000000;
     e->upstream  = upstream;
     e->epoch     = epoch;

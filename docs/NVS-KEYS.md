@@ -14,6 +14,8 @@ guessed configuration. Stable 1.13 does not read any of these keys.
 | `eth_cfg` | eth_uplink.c | Ethernet connection (SPI/USB), pins/IP/preference; SPI written as record v1 (as 3.0.24), USB as v2 | Ethernet off |
 | `svc_watch` | service_check.c | Service watch enable/notify/interval | watch off |
 | `ntfy_sysev` | ntfy_integration.c | candidate: 0=off, 1=both (legacy on), 2=power-on only, 3=other system events only; main v1 record unchanged; older rollback reads 2/3 as optional events off | events off |
+| `web_scope` | web_ui.c | administration reachable from: 0 every network, 1 only the tailnet and the access point (3.0.25) | every network |
+| `ap_traffic` | ap_traffic.c | count traffic per access-point device: 1 on (3.0.25) | off |
 | `cell_qcfg` | cell_quota.c | monthly mobile data limit: limit MB (0 off), warning %, period start day, pause at the limit (record v1, checksum; 3.0.25) | limit off |
 | `cell_quse` | cell_quota.c | mobile data used this period and alerts sent (record v1); written only with a limit set, after 1 MB and 10 minutes or at an alert; erased when the limit is turned off (3.0.25) | counter 0 |
 | `cell_cfg` | cell_uplink.c | cellular connection (UART/USB, USB mode/interface), pins, APN, PIN, mode; UART with default USB settings written as record v1 (as 3.0.24), otherwise v2 | cellular off |

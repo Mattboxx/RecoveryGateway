@@ -6,7 +6,40 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-3.0.25-beta.9 (local candidate, not published) adds the following to beta.8.
+3.0.25-beta.10 (local candidate, not published) adds the following to beta.8
+(beta.9 was the first local candidate with the fixes and the data limit).
+
+### Security
+
+- **Web sessions are bound to the client address that logged in.** The web
+  page uses plain HTTP; a session cookie copied off the local network or the
+  access point is refused from any other address (the owner's session stays
+  valid). A new login is needed when a device changes network.
+- **Administration can be limited to the tailnet and the access point**
+  (System → Access, off by default). Connections to the gateway's other
+  addresses (the LAN one) are closed. While the gateway is not connected to
+  the tailnet the local network keeps access, so the owner cannot be locked
+  out; the setting can only be turned on from a browser that keeps access.
+- **The SNMP community is write-only** like the other secrets: the API no
+  longer returns it (an empty field keeps the saved one), and the card warns
+  while it is still "public".
+
+### Changed
+
+- The DNS relay cache is two-way set-associative: two busy names that hash
+  to the same place no longer evict each other.
+
+### Added
+
+- **Traffic per access-point device** (Network → Clients, off by default):
+  bytes each device sent and received through the gateway. While off the
+  packet path only checks a flag and nothing is stored.
+- **Event when mobile data starts or stops carrying the Internet traffic**
+  (a warning in failover mode, where it means Wi-Fi and Ethernet are down);
+  changes shorter than 30 s are not reported.
+- **Signal and operator for Huawei HiLink 4G sticks** in USB network mode,
+  read once a minute from the stick's own local web API (experimental, not
+  validated with a physical stick).
 
 ### Fixed
 
