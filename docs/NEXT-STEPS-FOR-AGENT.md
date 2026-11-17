@@ -2,6 +2,7 @@
 
 ## Active — 3.0.25-beta.1 USB modems, sticks, adapters and tethering
 
+- 2026-11-17: beta.15 (`a217099`, pre-release `v3.0.25-beta.15`) is current and installed on board A (VALIDATION-STATUS): beta.13 plus quieter boot (SD, MQTT) and silent refusal of out-of-scope web connections. README/site/branding positioning (c602715, 3e6e094) goes live only with the next merge to Main.
 - Branch `feat/usb-cellular-20261115` (worktree `.codex/workspaces/tailnet-usb-cell-20261115`, pushed to the fork), published as the pre-release `v3.0.25-beta.2` from `6af276d` (v3.0.24 stays Latest); MicroLink unchanged (`763f5d4`). ADR-036, docs/CELLULAR.md, docs/ETHERNET.md, docs/USB-DEVICES.md.
 - Board B runs the exact beta image with the USB connection off. Not merged to Main.
 - Beta.6 (`43f82f8`, pre-release `v3.0.25-beta.6`) matched 3.0.24 on board A with USB off (alternating A/B, VALIDATION-STATUS). Beta.7 (`8c51bbf`, pre-release `v3.0.25-beta.7`) is current: no internal RAM for the USB code while off (`main/usb_flash.lf`, PSRAM state, ring buffer); board A with USB off has 620 B more internal RAM free than 3.0.24 with equal speed and ping. Board B smoke pending until it is connected again. Beta.8 (`79d2782`, pre-release `v3.0.25-beta.8`, installed on board A): 15 s beacon timeout against the router's ~12 h beacon pauses (ADR-037; check board A `/api/events` for "reason 200" after 19:23 2026-11-16 and the next days), USB power warnings in setup and on the Network page, a titled pins/USB step in setup, the website/README USB guide (`website/pages/25-usb-devices.html`, README section) with suggested test devices. The owner keeps 3.0.25 a beta until a real USB modem/stick and an RTL8153 adapter are tested on board B; then the stable flow.
@@ -292,6 +293,10 @@ and remaining-case lists are internal maintainer records, not release content.
 - Owner authorized installing it on board A over Tailscale once validation passes (recorded 2026-11-17). The lab runner (pid 18364) is not running: install needs the owner to restart `run_lab.ps1` or to upload `firmware.bin` via System -> Firmware.
 - After install: check `/api/status` version, DNS relay over TCP (`dig +tcp` through the AP/LAN listener), a large TXT answer over UDP (TC, then TCP), the DNS diagnostics counters, and the Cellular data-limit section (no modem needed). Real USB modem tests stay pending.
 - Review backlog from the 2026-11-17 audit is listed in the owner report (security hardening and feature ideas); none implemented yet.
+
+## 3.0.25-beta.15 (2026-11-17)
+
+- Published 2026-11-17 as the GitHub pre-release v3.0.25-beta.15 (tag at a217099, 4 assets re-downloaded and verified with `SHA256SUMS.txt`); v3.0.24 stays Latest. Beta.14 was not published (superseded).
 
 ## 3.0.25-beta.13 (2026-11-17)
 
