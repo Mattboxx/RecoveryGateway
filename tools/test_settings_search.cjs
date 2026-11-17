@@ -130,6 +130,40 @@ async function type(page, text) { await page.fill('#search-input', text); await 
       assert.deepEqual(f.errors, []);
       await f.context.close();
     }
+    {
+      /* 3.0.25 functions are found by name and by synonym, with their place. */
+      const f = await open(browser);
+      await f.page.click('#searchBtn');
+      const expectations = [
+        ['data limit', /Monthly data limit/, /Network/],
+        ['mobile data', /Monthly data limit|Monthly limit/, /Network/],
+        ['traffic', /Count the traffic of each device/, /Network/],
+        ['administration', /Administration reachable from/, /System/],
+        ['resources', /Health & resources/, /^Diagnostics/],
+        ['community', /Community/, /System/],
+        ['commands', /Allowed commands/, /Automation/],
+      ];
+      for (const [word, title, place] of expectations) {
+        const r = await type(f.page, word);
+        const hit = r.find(x => title.test(x.title));
+        assert.ok(hit, word + ': ' + JSON.stringify(r.slice(0, 5)));
+        assert.match(hit.path, place, word + ' path: ' + hit.path);
+      }
+      await f.page.keyboard.press('Escape');
+      assert.deepEqual(f.errors, []);
+      await f.context.close();
+    }
+    {
+      const f = await open(browser, { lang: 'it' });
+      await f.page.waitForFunction(() => document.documentElement.lang.startsWith('it'));
+      await f.page.click('#searchBtn');
+      for (const [word, title] of [['limite dati', /Limite dati mensile|Limite mensile/], ['traffico', /traffico/i], ['risorse', /Stato e risorse/], ['comandi', /Comandi consentiti/]]) {
+        const r = await type(f.page, word);
+        assert.ok(r.some(x => title.test(x.title)), 'it ' + word + ': ' + JSON.stringify(r.slice(0, 5)));
+      }
+      assert.deepEqual(f.errors, []);
+      await f.context.close();
+    }
     for (const [lang, word, expect] of [['zh', '密码', /密码/], ['de', 'Passwort', /Passwort/i], ['it', 'aggiornamento', /aggiorn|firmware/i]]) {
       /* Translated interface: the search reads the page in that language;
        * Chinese words need no spaces. */

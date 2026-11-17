@@ -806,7 +806,12 @@ async function main() {
       events:[],monitoring:true,guard:true,guard_deferring:true,remote_commands:false,recovery_state:'idle',internal_free:17191,internal_min:15000,internal_largest:7000,sockets_used:12,socket_limit:31,
       minimum_internal:16384,minimum_largest:8192,socket_reserve:4,interval_s:60} });
     await f.page.waitForFunction(() => !document.getElementById('ops-settings-save').disabled);
-    assert.equal(await f.page.locator('#ops-guard-warning').isHidden(), false);
+    assert.equal(await f.page.locator('#ops-guard-warning').evaluate(e => e.hidden), false);
+    // Health & resources lives under Diagnostics -> Hardware (3.0.25) and loads there.
+    assert.equal(await f.page.locator('#ops-health-card').evaluate(e => e.closest('.subpage').dataset.sub + '/' + e.closest('.page-section').id), 'hardware/page-tools');
+    await f.page.evaluate(() => { location.hash = '#tools/hardware'; });
+    await f.page.waitForFunction(() => document.getElementById('ops-guard-warning').offsetParent !== null);
+    await f.page.evaluate(() => { location.hash = '#operations'; });
     assert.match(await f.page.locator('#ops-summary').textContent(), /free internal 17191 B/);
     await f.page.route('http://esp32.test/api/operations', route => route.request().method() === 'POST'
       ? route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'This device was checked less than a minute ago; try again shortly' }) })

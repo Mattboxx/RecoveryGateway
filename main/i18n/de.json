@@ -2279,5 +2279,10 @@
  "The web page has no encryption on the local network: limiting it keeps the login off that network. While the gateway is not connected to the tailnet, the local network keeps access, so you cannot lock yourself out. Open this page through the tailnet or the access point to turn it on.": "Im lokalen Netz ist die Webseite unverschlüsselt: Mit der Einschränkung läuft die Anmeldung nicht über dieses Netz. Solange das Gateway nicht mit dem Tailnet verbunden ist, behält das lokale Netz den Zugriff, du kannst dich also nicht aussperren. Öffne diese Seite zum Einschalten über das Tailnet oder den Access Point.",
  "this page is open through the local network: open it through the tailnet or the access point first, then limit access": "diese Seite ist über das lokale Netz geöffnet: Öffne sie zuerst über das Tailnet oder den Access Point und schränke dann den Zugriff ein",
  "Mobile data now carries the Internet traffic": "Der Internetverkehr läuft jetzt über mobile Daten",
- "Mobile data no longer carries the Internet traffic": "Der Internetverkehr läuft nicht mehr über mobile Daten"
+ "Mobile data no longer carries the Internet traffic": "Der Internetverkehr läuft nicht mehr über mobile Daten",
+ "Allowed commands": "Erlaubte Befehle",
+ "Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.": "Veröffentliche einen Befehl als Nachricht im obigen Thema, zum Beispiel aus der ntfy-App. Gelesen werden nur Nachrichten, die gesendet werden, während das Gateway zuhört.",
+ "Alerts sent:": "Gesendete Warnungen:",
+ "commands received:": "empfangene Befehle:",
+ "command errors:": "Befehlsfehler:"
 }

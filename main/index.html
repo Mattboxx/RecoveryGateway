@@ -1983,6 +1983,9 @@
     .trend-main { margin-top: var(--sp-4); }
     .trend-main-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
     .trend-main-title { font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+    .cmd-section { margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+    .cmd-section-title { font-size: var(--text-sm); margin: 0 0 0.35rem 0; }
+    .cmd-reference { margin-top: var(--sp-2); }
     .trend-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); font-size: var(--text-xs); color: var(--fg-muted); }
     .trend-sw { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
     .trend-plot { position: relative; margin-top: var(--sp-2); min-height: 230px; }
@@ -3741,6 +3744,28 @@
       </div>
 
       <div class="subpage" data-sub="hardware" role="tabpanel" aria-label="Hardware">
+      <!-- ===== Health & resources (moved from Operations, 3.0.25) ===== -->
+      <div class="card mt-4" id="ops-health-card">
+        <div class="card-header">
+          <div class="card-header-left"><span class="card-title">Health &amp; resources</span></div>
+          <button class="btn btn-secondary btn-sm" id="ops-health-refresh" type="button">Refresh</button>
+        </div>
+        <div class="card-body">
+        <p id="ops-summary" role="status">Not loaded</p>
+        <p class="form-hint ops-guard-warning" id="ops-guard-warning" role="status" hidden>The resource admission guard is pausing optional work now: MQTT, ntfy, device checks and recovery wait until free internal RAM, its largest block and free sockets are above the thresholds. Lower the thresholds (advanced settings) or turn the guard off.</p><p class="form-hint">Control connected does not prove the tunnel or a remote service works. No public Internet probe runs automatically.</p>
+        <details><summary>Actual firmware capabilities</summary><p id="ops-capability-status" role="status">Not loaded</p><ul id="ops-capabilities"></ul></details>
+        <details data-advanced>
+          <summary>Resource guard settings</summary>
+          <label class="feature-switch"><input type="checkbox" id="ops-guard"><span class="feature-switch-track" aria-hidden="true"></span><span>Resource admission guard</span></label>
+          <p class="form-hint">Guard thresholds are engineering defaults, not calibrated device limits.</p>
+          <div class="form-row"><div class="form-group"><label class="form-label" for="ops-min">Minimum internal free bytes</label><input class="input" id="ops-min" type="number" min="0" max="262144" placeholder="e.g. 16384"><span class="form-hint">Below this free internal RAM new checks wait (resource guard).</span></div>
+          <div class="form-group"><label class="form-label" for="ops-largest">Minimum largest block</label><input class="input" id="ops-largest" type="number" min="0" max="131072" placeholder="e.g. 8192"></div>
+          <div class="form-group"><label class="form-label" for="ops-sockets">Reserved socket slots</label><input class="input" id="ops-sockets" type="number" min="0" max="31" placeholder="e.g. 4"><span class="form-hint">Sockets kept free for the VPN and this web page.</span></div>
+          </div>
+          <button class="btn btn-secondary" id="ops-guard-save" type="button" disabled>Save resource guard</button>
+          <span class="form-hint" id="ops-guard-save-status" role="status"></span>
+        </details>
+      </div></div>
       <!-- ===== Hardware diagnostics ===== -->
       <div class="card mt-4">
         <div class="card-header">
@@ -3823,22 +3848,6 @@
         </div>
       </div>
 
-      <div class="card mb-4"><div class="card-header"><span class="card-title">Health &amp; resources</span></div><div class="card-body">
-        <p id="ops-summary" role="status">Not loaded</p>
-        <p class="form-hint ops-guard-warning" id="ops-guard-warning" role="status" hidden>The resource admission guard is pausing optional work now: MQTT, ntfy, device checks and recovery wait until free internal RAM, its largest block and free sockets are above the thresholds. Lower the thresholds (advanced settings) or turn the guard off.</p><p class="form-hint">Control connected does not prove the tunnel or a remote service works. No public Internet probe runs automatically.</p>
-        <details><summary>Actual firmware capabilities</summary><p id="ops-capability-status" role="status">Not loaded</p><ul id="ops-capabilities"></ul></details>
-        <details data-advanced>
-          <summary>Resource guard settings</summary>
-          <label class="feature-switch"><input type="checkbox" id="ops-guard"><span class="feature-switch-track" aria-hidden="true"></span><span>Resource admission guard</span></label>
-          <p class="form-hint">Guard thresholds are engineering defaults, not calibrated device limits.</p>
-          <div class="form-row"><div class="form-group"><label class="form-label" for="ops-min">Minimum internal free bytes</label><input class="input" id="ops-min" type="number" min="0" max="262144" placeholder="e.g. 16384"><span class="form-hint">Below this free internal RAM new checks wait (resource guard).</span></div>
-          <div class="form-group"><label class="form-label" for="ops-largest">Minimum largest block</label><input class="input" id="ops-largest" type="number" min="0" max="131072" placeholder="e.g. 8192"></div>
-          <div class="form-group"><label class="form-label" for="ops-sockets">Reserved socket slots</label><input class="input" id="ops-sockets" type="number" min="0" max="31" placeholder="e.g. 4"><span class="form-hint">Sockets kept free for the VPN and this web page.</span></div>
-          </div>
-          <button class="btn btn-secondary" id="ops-guard-save" type="button" disabled>Save resource guard</button>
-          <span class="form-hint" id="ops-guard-save-status" role="status"></span>
-        </details>
-      </div></div>
       <div class="card mb-4" data-capability="health"><div class="card-header"><span class="card-title">Layered connectivity checks</span></div><div class="card-body">
         <p class="form-hint">Optional, OFF by default. No built-in cloud target. One check every configured interval, sharing the recovery worker. A closed gateway port does not prove the router is down; a TCP connection does not verify application health. DNS answers may be cached.</p>
         <label class="feature-switch"><input type="checkbox" id="health-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Enable configured connectivity checks</span></label>
@@ -3975,13 +3984,23 @@
             <div class="form-group"><label class="form-label" for="ntfy-topic">Topic</label><input class="input mono" id="ntfy-topic" placeholder="private-random-topic"></div>
           </div>
           <div class="alert alert-warning" id="ntfy-transport-warning" style="display:none; margin-bottom:var(--sp-4);">Plain HTTP exposes the ntfy token, notifications and remote commands in transit. Prefer <code class="mono">https://</code>.</div>
-          <div class="form-group"><label class="form-label" for="ntfy-token">Access token</label><input class="input" type="password" id="ntfy-token" autocomplete="new-password" placeholder="Optional — leave empty to keep"><label class="form-hint" style="display:flex;gap:0.35rem;align-items:center;"><input type="checkbox" id="ntfy-token-clear"> Clear saved token</label></div>
+          <div class="form-group"><label class="form-label" for="ntfy-token">Access token</label><input class="input" type="password" id="ntfy-token" autocomplete="new-password" placeholder="Optional — leave empty to keep"><label class="form-hint" style="display:flex;gap:0.35rem;align-items:center;"><input type="checkbox" id="ntfy-token-clear"> Forget the saved token</label></div>
           <div class="grid grid-cols-2">
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-system-events"><span class="feature-switch-track" aria-hidden="true"></span><span>Other restarts, Tailscale restored after an alert, update available</span></label><span class="form-hint">Off by default. Separate from power-on alerts below. Updates are announced, never installed by this option.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-poweron-events"><span class="feature-switch-track" aria-hidden="true"></span><span>Blackout: notify when power returns</span></label><span class="form-hint">Reports a power-on reset, not a crash or software restart. First power-up and reconnecting the cable can look the same. Sent when the uplink is available; outage duration is unknown.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-alerts"><span class="feature-switch-track" aria-hidden="true"></span><span>Alert when internet works but Tailscale stays down</span></label><div class="feature-inline-dependent" id="ntfy-alert-settings"><label class="form-label" for="ntfy-delay" style="margin-top:0.5rem;">Failure delay (seconds)</label><input class="input mono" type="number" id="ntfy-delay" min="15" max="3600" value="120"></div></div>
-            <div class="form-group"><label class="form-label" for="ntfy-commands">Remote commands</label><select class="input" id="ntfy-commands"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="ntfy-command-settings"><label class="form-label" for="ntfy-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="ntfy-poll" min="5" max="300" value="15"></div></div>
-            <details class="form-hint"><summary>Command reference</summary>
+          </div>
+          <div class="cmd-section">
+            <h4 class="cmd-section-title">Remote commands</h4>
+            <p class="form-hint">Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.</p>
+          <div class="grid grid-cols-2">
+            <div class="form-group"><label class="form-label" for="ntfy-commands">Allowed commands</label><select class="input" id="ntfy-commands"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="ntfy-command-settings"><label class="form-label" for="ntfy-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="ntfy-poll" min="5" max="300" value="15"></div></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="ntfy-down-only"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="ntfy-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
+            <div class="form-group feature-inline-dependent" id="ntfy-info-details-setting"><label class="feature-switch"><input type="checkbox" id="ntfy-info-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in ntfy messages.</span></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="ntfy-direct-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
+          </div>
+            <details class="form-hint cmd-reference"><summary>Command reference</summary>
               <ul>
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
@@ -3994,11 +4013,7 @@
               <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
             </details>
           </div>
-          <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-down-only"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
-          <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
-          <div class="form-group feature-inline-dependent" id="ntfy-info-details-setting"><label class="feature-switch"><input type="checkbox" id="ntfy-info-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in ntfy messages.</span></div>
-          <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-direct-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
-          <div class="form-hint mono" id="ntfy-status">Commands: info · wol DEVICE_NAME · wol aa:bb:cc:dd:ee:ff</div>
+          <div class="form-hint mono" id="ntfy-status">—</div>
         </div>
         <div class="form-footer">
           <span class="form-footer-hint">Alerts report connectivity only; local logs are never included. ntfy and its server can see message contents when enabled.</span>
@@ -4023,15 +4038,24 @@
           <div class="form-group feature-master-control"><label class="feature-switch"><input type="checkbox" id="nt-tg-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Send to Telegram</span></label>
             <span class="form-hint">Create a bot with @BotFather, send it any message, then use your chat id (for example from @userinfobot).</span></div>
           <div class="grid grid-cols-2">
-            <div class="form-group"><label class="form-label" for="nt-tg-token">Bot token</label><input class="input mono" type="password" id="nt-tg-token" autocomplete="new-password" placeholder="123456789:AA… — leave empty to keep"><label class="form-hint" style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="nt-tg-clear"> Forget the saved token</label></div>
+            <div class="form-group"><label class="form-label" for="nt-tg-token">Bot token</label><input class="input mono" type="password" id="nt-tg-token" autocomplete="new-password" placeholder="123456789:AA… — leave empty to keep"><label class="form-hint" style="display:flex;gap:0.35rem;align-items:center;"><input type="checkbox" id="nt-tg-clear"> Forget the saved token</label></div>
             <div class="form-group"><label class="form-label" for="nt-tg-chat">Destination user id</label><input class="input mono" id="nt-tg-chat" placeholder="Your numeric Telegram user id">
               <details class="form-hint"><summary>How do I find my Telegram user id?</summary><ol><li>Open <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">@userinfobot</a> in Telegram, press Start and copy your numeric Id. This is a third-party helper; never share your bot token with it.</li><li>Open your own notification bot and send /start so it can message you.</li><li>Paste your user id here, save and use Send test. Use your personal id, not the bot's id or @username.</li></ol><p>Groups and channels remain supported with their chat id or @channel. Advanced: obtain message.chat.id using your own bot's <a href="https://core.telegram.org/bots/api#getupdates" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Telegram getUpdates API</a>.</p></details></div>
             <div class="form-group"><label class="form-label" for="nt-tg-events">Send</label><select class="input" id="nt-tg-events"><option value="problems">Warnings and errors (recommended)</option><option value="all">All events</option></select></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-startup"><span class="feature-switch-track" aria-hidden="true"></span><span>Other restarts</span></label><span class="form-hint">Software, update and other normal starts. Crash, watchdog and brownout errors keep their separate warning/error path.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-poweron"><span class="feature-switch-track" aria-hidden="true"></span><span>Blackout: notify when power returns</span></label><span class="form-hint">Reports a power-on reset, separate from a crash. First power-up or reconnecting the cable can look the same. Sent after power returns and the network is available; outage duration is unknown.</span></div>
-            <h4 style="font-size:var(--text-sm); margin:1rem 0 0.35rem 0;">Remote commands</h4>
+          </div>
+          <div class="cmd-section">
+            <h4 class="cmd-section-title">Remote commands</h4>
             <p class="form-hint">Send commands to your configured bot, with or without a leading slash. Commands older than 10 minutes are ignored.</p>
-            <details class="form-hint"><summary>Command reference</summary>
+          <div class="grid grid-cols-2">
+            <div class="form-group"><label class="form-label" for="nt-tg-cmd">Allowed commands</label><select class="input" id="nt-tg-cmd"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="nt-tg-cmd-settings"><label class="form-label" for="nt-tg-cmd-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="nt-tg-cmd-poll" min="5" max="300" value="15"></div></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-down"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
+            <div class="form-group feature-inline-dependent" id="nt-tg-cmd-details-setting"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in Telegram messages.</span></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
+          </div>
+            <details class="form-hint cmd-reference"><summary>Command reference</summary>
               <ul>
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
@@ -4043,11 +4067,6 @@
               <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
               <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
             </details>
-            <div class="form-group"><label class="form-label" for="nt-tg-cmd">Remote commands</label><select class="input" id="nt-tg-cmd"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="nt-tg-cmd-settings"><label class="form-label" for="nt-tg-cmd-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="nt-tg-cmd-poll" min="5" max="300" value="15"></div></div>
-            <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-down"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
-            <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
-            <div class="form-group feature-inline-dependent" id="nt-tg-cmd-details-setting"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in Telegram messages.</span></div>
-            <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
           </div>
           <p class="form-hint mono" id="nt-tg-status">—</p>
           <p class="form-hint" id="nt-tg-note" role="status">Loading…</p>
@@ -6245,7 +6264,7 @@
       if (page === 'automation') { loadWol(); loadMqtt(); loadNtfy(); ntUi.load(); }
       if (page === 'operations') { loadWol(); loadOperations(); }
       if (page === 'system') { loadSystem(); loadProfiles(); loadMigration(); histUi.loadSnapshots(); }
-      if (page === 'tools') { loadDiag(); loadPrecrashLog(); histUi.loadEvents(); }
+      if (page === 'tools') { loadDiag(); loadPrecrashLog(); histUi.loadEvents(); loadOperations(); }
     }
 
     /* Post-login crash check. If the most recent reset_history entry is a
@@ -7873,8 +7892,11 @@
       });
       /* Dependent fields follow their switches, like the ntfy card. */
       function tgCommandStates() {
-        setFeatureDependentState('nt-tg-cmd-settings', el('nt-tg-cmd').value !== 'off');
-        setFeatureDependentState('nt-tg-cmd-details-setting', el('nt-tg-cmd-info').checked);
+        var on = el('nt-tg-cmd').value !== 'off';
+        setFeatureDependentState('nt-tg-cmd-settings', on);
+        el('nt-tg-cmd').closest('.cmd-section').querySelectorAll('.cmd-option').forEach(function (o) {
+          o.classList.add('feature-inline-dependent'); o.classList.toggle('feature-disabled', !on); });
+        setFeatureDependentState('nt-tg-cmd-details-setting', on && el('nt-tg-cmd-info').checked);
       }
       ['nt-tg-cmd', 'nt-tg-cmd-info'].forEach(function (id) { el(id).addEventListener('change', tgCommandStates); });
       el('nt-tg-save').addEventListener('click', function () {
@@ -8420,6 +8442,7 @@
       finally{if(sequence===s_ops_sequence){s_ops_loading=false;opsControls();}}
     }
     document.getElementById('ops-refresh').onclick=loadOperations;
+    document.getElementById('ops-health-refresh').onclick=loadOperations;
     document.getElementById('ops-cancel').onclick=function(){opsAction({action:'cancel'});};
     async function readOpsSettings() {
       var response=await fetch('/api/operations',{cache:'no-store'});
@@ -10754,8 +10777,11 @@
       var enabled = document.getElementById('ntfy-enabled').checked;
       setFeatureCardState('ntfy-card', enabled);
       setFeatureDependentState('ntfy-alert-settings', enabled && document.getElementById('ntfy-alerts').checked);
-      setFeatureDependentState('ntfy-command-settings', enabled && document.getElementById('ntfy-commands').value !== 'off');
-      setFeatureDependentState('ntfy-info-details-setting', enabled && document.getElementById('ntfy-info').checked);
+      var commandsOn = enabled && document.getElementById('ntfy-commands').value !== 'off';
+      setFeatureDependentState('ntfy-command-settings', commandsOn);
+      document.getElementById('ntfy-commands').closest('.cmd-section').querySelectorAll('.cmd-option').forEach(function (o) {
+        o.classList.add('feature-inline-dependent'); o.classList.toggle('feature-disabled', !commandsOn); });
+      setFeatureDependentState('ntfy-info-details-setting', commandsOn && document.getElementById('ntfy-info').checked);
       var server = document.getElementById('ntfy-server').value.trim().toLowerCase();
       document.getElementById('ntfy-transport-warning').style.display =
         enabled && /^http:\/\//.test(server) ? 'flex' : 'none';
@@ -10784,8 +10810,8 @@
         var badge = document.getElementById('ntfy-badge');
         badge.textContent = d.enabled ? (d.last_publish_ok ? 'Enabled · reachable' : 'Enabled') : 'Disabled';
         badge.className = 'badge ' + (!d.enabled ? 'badge-neutral' : (d.last_publish_ok ? 'badge-success' : 'badge-warning'));
-        document.getElementById('ntfy-status').textContent = 'Commands: info · wol DEVICE_NAME · wol aa:bb:cc:dd:ee:ff · alerts: '
-          + (d.alerts_sent || 0) + ' · commands: ' + (d.commands_received || 0) + ' · errors: ' + (d.command_errors || 0);
+        document.getElementById('ntfy-status').textContent = UT('Alerts sent:') + ' ' + (d.alerts_sent || 0) + ' · ' + UT('commands received:') + ' '
+          + (d.commands_received || 0) + ' · ' + UT('command errors:') + ' ' + (d.command_errors || 0);
         document.getElementById('ntfy-save').disabled = true;
       });
     }
@@ -13291,7 +13317,13 @@
       ['port', 'porta', 'porte', 'ports'],
       ['trend', 'trends', 'grafici', 'grafico', 'chart', 'andamento'],
       ['dhcp', 'lease', 'leases', 'dispositivi', 'devices'],
-      ['snmp', 'monitor', 'monitoraggio', 'health', 'salute']
+      ['snmp', 'monitor', 'monitoraggio', 'health', 'salute', 'community'],
+      ['data', 'dati', 'traffico', 'traffic', 'consumo', 'usage', 'quota', 'limite', 'limit', 'volume', 'datenvolumen', 'donnees', 'datos', '流量'],
+      ['cellular', 'cellulare', 'mobile', 'sim', 'lte', '4g', '5g', 'modem', 'chiavetta', 'stick', 'apn', 'mobilfunk', 'movil', '蜂窝', '移动'],
+      ['usb', 'otg', 'tethering', 'adapter', 'adattatore'],
+      ['resources', 'risorse', 'ram', 'memory', 'memoria', 'heap', 'sockets', 'ressourcen', 'ressources', 'recursos', '资源', '内存'],
+      ['administration', 'amministrazione', 'admin', 'accesso', 'access', 'sicurezza', 'security', 'verwaltung', 'zugriff', 'acces', 'acceso', '管理', '访问'],
+      ['commands', 'command', 'comandi', 'comando', 'bot', 'remote', 'remoti', 'befehle', 'commandes', 'comandos', '命令']
     ];
     var GENERIC = /^(save|cancel|close|reload|refresh|ok|apply|edit|remove|delete|add|back|next|show|hide|copy|done|yes|no|start|stop|clear|change|more|less|salva|annulla|chiudi|ricarica|aggiorna|applica|modifica|rimuovi|elimina|aggiungi|indietro|avanti|mostra|nascondi|copia|fatto|si|sì)$/i;
     var CJK = /[぀-ヿ㐀-鿿가-힯]/;

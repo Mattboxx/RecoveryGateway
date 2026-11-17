@@ -2326,5 +2326,10 @@
  "The web page has no encryption on the local network: limiting it keeps the login off that network. While the gateway is not connected to the tailnet, the local network keeps access, so you cannot lock yourself out. Open this page through the tailnet or the access point to turn it on.": "网页在本地网络上未加密：加以限制可避免登录经过该网络。网关未连接 tailnet 时，本地网络仍可访问，因此不会把自己锁在外面。请通过 tailnet 或接入点打开此页面来启用。",
  "this page is open through the local network: open it through the tailnet or the access point first, then limit access": "此页面是通过本地网络打开的：请先通过 tailnet 或接入点打开，然后再限制访问",
  "Mobile data now carries the Internet traffic": "互联网流量现在经由移动数据传输",
- "Mobile data no longer carries the Internet traffic": "互联网流量不再经由移动数据传输"
+ "Mobile data no longer carries the Internet traffic": "互联网流量不再经由移动数据传输",
+ "Allowed commands": "允许的命令",
+ "Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.": "在上方主题中以消息形式发布命令，例如通过 ntfy 应用。只读取网关监听期间发送的消息。",
+ "Alerts sent:": "已发送提醒：",
+ "commands received:": "已收到命令：",
+ "command errors:": "命令错误："
 }

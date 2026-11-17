@@ -6,8 +6,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-3.0.25-beta.10 (local candidate, not published) adds the following to beta.8
-(beta.9 was the first local candidate with the fixes and the data limit).
+3.0.25-beta.12 (local candidate, not published) adds the following to beta.8
+(beta.9 to beta.11 were local candidates on the way: beta.11 made DNS over TCP
+ask the resolver over UDP first, after board A showed that its home router
+refuses DNS over TCP and caps UDP answers at 512 bytes).
 
 ### Security
 
@@ -26,6 +28,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Health & resources moved to Diagnostics → Hardware**, next to memory and
+  partitions, with its own Refresh button.
+- **Telegram and ntfy commands laid out the same way**: notifications first,
+  then a "Remote commands" section with a short explanation, the settings
+  side by side and the command reference at the end (it was scattered across
+  the grid in Telegram and placed oddly in ntfy). Command options look
+  inactive while commands are off; the same words are used for forgetting a
+  saved token; the ntfy status line counts alerts and commands instead of
+  listing part of the commands.
+- Settings search finds the new functions by name and by synonym (data
+  limit, traffic, administration access, resources, community, commands),
+  also in Italian, German, French, Spanish and Chinese.
 - The DNS relay cache is two-way set-associative: two busy names that hash
   to the same place no longer evict each other.
 

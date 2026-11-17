@@ -89,7 +89,10 @@ with tempfile.TemporaryDirectory(prefix='index-variants-') as d:
     # the Network page, with their device lists (about 2.4 KB; owner: clarity
     # before the budget); then from 176000 for the USB power warnings and the
     # titled pins/USB step in setup (about 1.1 KB, owner 2026-11-16: explain
-    # power clearly); the 3584 KiB app slots keep more than 1 MiB free.
-    assert page_gz < 178500, page_gz
+    # power clearly); then from 178500 for the monthly data limit, the access
+    # scope, traffic per device, the write-only SNMP community and the
+    # aligned Telegram/ntfy command sections (about 1.1 KB, owner 2026-11-17:
+    # "Tutte"); the 3584 KiB app slots keep more than 1 MiB free.
+    assert page_gz < 180000, page_gz
 print(f'PASS: actual page generator: page with {len(langs)} languages as separate scripts ({page_gz} gzip bytes), '
       f'English-only page without them and otherwise identical, C arrays decode to the page and scripts (host)')
