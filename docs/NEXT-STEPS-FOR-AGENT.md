@@ -292,3 +292,9 @@ and remaining-case lists are internal maintainer records, not release content.
 - Owner authorized installing it on board A over Tailscale once validation passes (recorded 2026-11-17). The lab runner (pid 18364) is not running: install needs the owner to restart `run_lab.ps1` or to upload `firmware.bin` via System -> Firmware.
 - After install: check `/api/status` version, DNS relay over TCP (`dig +tcp` through the AP/LAN listener), a large TXT answer over UDP (TC, then TCP), the DNS diagnostics counters, and the Cellular data-limit section (no modem needed). Real USB modem tests stay pending.
 - Review backlog from the 2026-11-17 audit is listed in the owner report (security hardening and feature ideas); none implemented yet.
+
+## 3.0.25-beta.13 (2026-11-17)
+
+- To publish as a GitHub pre-release once the full validation passes (owner: "Se passa i test pubblica poi l'ultima beta su github"); v3.0.24 stays Latest.
+- The lab runner's Tailscale adapter index on the owner PC changed from 26 to 28 (WinError 10022 until updated in job scripts).
+- Pending: real USB modem/stick/adapter tests (owner's device needed), HiLink signal, session binding observed from two clients.
