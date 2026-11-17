@@ -53,7 +53,8 @@
 /* DNS over TCP (RFC 7766): what a client does after a truncated UDP answer.
  * One connection at a time (a worker stays free for UDP), one query per
  * connection, bounded waits; the answer buffer lives in PSRAM. */
-#define DNS_TCP_MAX_ANSWER      4096
+#define DNS_TCP_MAX_ANSWER      16384    /* whole answers over TCP (microsoft.com TXT is above 4 KB) */
+#define DNS_UDP_LARGE_ANSWER    4096     /* first ask over UDP with room for this much */
 #define DNS_TCP_CLIENT_MS       1500     /* client must send its query within this */
 #define DNS_TCP_UPSTREAM_MS     DNS_RELAY_UP_TIMEOUT_MS
 #define DNS_TCP_ACTIVE_MAX      1
@@ -583,7 +584,7 @@ static void tcp_serve(dns_work_t *w, uint8_t *answer)
     /* UDP first with a 4 KB answer buffer (works with resolvers that refuse
      * TCP, like many home routers); TCP to the resolver only when even that
      * answer is truncated. */
-    rl = udp_ask(upstream, w->q, qlen, answer, DNS_TCP_MAX_ANSWER);
+    rl = udp_ask(upstream, w->q, qlen, answer, DNS_UDP_LARGE_ANSWER);
     if (rl > 0) {
         answer[0] = client_id[0];
         answer[1] = client_id[1];

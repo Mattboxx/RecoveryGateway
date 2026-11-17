@@ -6,10 +6,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-3.0.25-beta.12 (local candidate, not published) adds the following to beta.8
-(beta.9 to beta.11 were local candidates on the way: beta.11 made DNS over TCP
+3.0.25-beta.13 adds the following to beta.8
+(beta.9 to beta.12 were local candidates on the way: beta.11 made DNS over TCP
 ask the resolver over UDP first, after board A showed that its home router
-refuses DNS over TCP and caps UDP answers at 512 bytes).
+refuses DNS over TCP and caps UDP answers at 512 bytes; beta.13 passes answers
+up to 16 KB over TCP, after microsoft.com answered with more than 4 KB).
 
 ### Security
 

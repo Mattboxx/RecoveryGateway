@@ -28,7 +28,7 @@ cached under the new question. Checked with a scripted recvfrom():
   over-long or short lengths refused, a silent client bounded by the
   deadline, the reply written with its length prefix.
 - tcp_serve (actual): a query over TCP is asked upstream over UDP with a
-  4 KB answer buffer first (home routers often refuse DNS over TCP, found on
+  4 KB answer buffer first; an answer above 4 KB comes back whole over TCP (home routers often refuse DNS over TCP, found on
   board A with 3.0.25-beta.10) and the whole answer goes back with the
   client's ID, no TCP connection to the resolver; a truncated UDP answer
   falls back to TCP; local (tailnet) names are answered without upstream;
@@ -348,7 +348,8 @@ SERVE = r"""
 #define DNS_RELAY_BUF_SIZE 1024
 #define DNS_CACHE_KEY_MAX 256
 #define DNS_RELAY_MAX_STRAY 8
-#define DNS_TCP_MAX_ANSWER 4096
+#define DNS_TCP_MAX_ANSWER 16384
+#define DNS_UDP_LARGE_ANSWER 4096
 #define DNS_TCP_CLIENT_MS 1500
 #define DNS_TCP_UPSTREAM_MS 3500
 #define AF_INET 2
@@ -391,7 +392,7 @@ static int64_t now_us = 1000000;
 static int64_t esp_timer_get_time(void) {return now_us += 1000;}
 /* fd 3: client TCP; fd 7: upstream UDP; fd 9: upstream TCP */
 static uint8_t client_in[600]; static int client_in_len, client_in_pos;
-static uint8_t client_out[8192]; static int client_out_len;
+static uint8_t client_out[20000]; static int client_out_len;
 static uint8_t udp_answer[5000]; static int udp_answer_len;
 static int tcp_connects, closes, udp_sends;
 static uint8_t last_udp_query[600]; static int last_udp_len;
@@ -399,8 +400,10 @@ static int socket(int d, int type, int p) {(void)d; (void)p; return type == SOCK
 static int setsockopt(int f, int l, int o, const void *v, socklen_t n) {(void)f; (void)l; (void)o; (void)v; (void)n; return 0;}
 static int getsockopt(int f, int l, int o, void *v, socklen_t *n) {(void)f; (void)l; (void)o; (void)n; *(int *)v = 0; return 0;}
 static int fcntl(int f, int c, int v) {(void)f; (void)c; (void)v; return 0;}
-static int connect(int f, const struct sockaddr *a, socklen_t n) {(void)f; (void)a; (void)n; tcp_connects++; errno = 111; return -1;}
-static int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *t) {(void)n; (void)r; (void)w; (void)e; (void)t; return 0;}
+static int tcp_connect_ok, tcp_answer_size, up_sent;
+static uint8_t up_query[600]; static int up_query_len; static uint8_t up_reply[20000]; static int up_reply_len, up_reply_pos;
+static int connect(int f, const struct sockaddr *a, socklen_t n) {(void)f; (void)a; (void)n; tcp_connects++; if (tcp_connect_ok) {errno = EINPROGRESS; return -1;} errno = 111; return -1;}
+static int select(int n, fd_set *r, fd_set *w, fd_set *e, struct timeval *t) {(void)n; (void)r; (void)w; (void)e; (void)t; return tcp_connect_ok ? 1 : 0;}
 static int close(int f) {(void)f; closes++; return 0;}
 static int sendto(int f, const void *b, size_t n, int fl, const struct sockaddr *a, socklen_t l)
 {(void)f; (void)fl; (void)a; (void)l; udp_sends++; memcpy(last_udp_query, b, n); last_udp_len = (int)n; return (int)n;}
@@ -419,13 +422,29 @@ static int recvfrom(int f, void *b, size_t cap, int fl, struct sockaddr *from, s
 static int recv(int f, void *b, size_t n, int fl)
 {
     (void)fl;
+    if (f == 9) {                                         /* the resolver over TCP */
+        if (!up_reply_len) {
+            int q = up_query_len - 2; uint8_t *m = up_reply + 2;
+            memcpy(m, up_query + 2, (size_t)q); m[2] = 0x81; m[3] = 0x80; m[7] = 1; m[11] = 0;
+            int len = q - 11; while (len < tcp_answer_size) m[len++] = 'y';
+            up_reply[0] = (uint8_t)(len >> 8); up_reply[1] = (uint8_t)len; up_reply_len = len + 2; up_reply_pos = 0;
+        }
+        if (up_reply_pos >= up_reply_len) return 0;
+        int k = up_reply_len - up_reply_pos; if (k > (int)n) k = (int)n; if (k > 1460) k = 1460;
+        memcpy(b, up_reply + up_reply_pos, (size_t)k); up_reply_pos += k; return k;
+    }
     if (f != 3) {errno = EBADF; return -1;}
     if (client_in_pos >= client_in_len) return 0;
     int k = client_in_len - client_in_pos; if (k > (int)n) k = (int)n;
     memcpy(b, client_in + client_in_pos, (size_t)k); client_in_pos += k; return k;
 }
 static int send(int f, const void *b, size_t n, int fl)
-{(void)fl; if (f != 3) return -1; memcpy(client_out + client_out_len, b, n); client_out_len += (int)n; return (int)n;}
+{
+    (void)fl;
+    if (f == 9) {memcpy(up_query + up_query_len, b, n); up_query_len += (int)n; up_reply_len = 0; return (int)n;}
+    if (f != 3) return -1;
+    memcpy(client_out + client_out_len, b, n); client_out_len += (int)n; return (int)n;
+}
 typedef struct {int tcp; int qlen; uint8_t q[DNS_RELAY_BUF_SIZE];} dns_work_t;
 @@SERVE@@
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d\n", __LINE__); return 1; } } while (0)
@@ -438,7 +457,7 @@ static void build(uint16_t id, const char *name)
     q[qlen++] = 0; q[qlen++] = 0; q[qlen++] = 16; q[qlen++] = 0; q[qlen++] = 1;
     uint8_t opt[] = {0, 0, 41, 0x10, 0x00, 0, 0, 0, 0, 0, 0}; memcpy(q + qlen, opt, sizeof opt); qlen += sizeof opt;
     client_in[0] = (uint8_t)(qlen >> 8); client_in[1] = (uint8_t)qlen; memcpy(client_in + 2, q, (size_t)qlen);
-    client_in_len = qlen + 2; client_in_pos = 0; client_out_len = 0;
+    client_in_len = qlen + 2; client_in_pos = 0; client_out_len = 0; up_query_len = 0; up_reply_len = 0;
 }
 static void answer_of(int size, bool tc)
 {
@@ -464,10 +483,16 @@ int main(void)
     build(0x2222, "huge.example.com"); answer_of(200, true); atomic_store(&s_tcp_active, 1);
     tcp_serve(&w, ans);
     CHECK(tcp_connects == 1 && client_out_len == 0 && atomic_load(&s_tcp_active) == 0);
+    /* 2b. truncated over UDP, a 6 KB answer over TCP: passed on whole */
+    build(0x2b2b, "huge.example.com"); answer_of(200, true); atomic_store(&s_tcp_active, 1);
+    tcp_answer_size = 6000; tcp_connect_ok = 1;
+    tcp_serve(&w, ans);
+    CHECK(client_out_len == 2 + 6000 && client_out[0] == (6000 >> 8) && client_out[2] == 0x2b && client_out[3] == 0x2b);
+    tcp_connect_ok = 0;
     /* 3. no UDP answer at all: TCP tried, the client gets nothing (closed) */
     build(0x3333, "slow.example.com"); udp_answer_len = 0; atomic_store(&s_tcp_active, 1);
     tcp_serve(&w, ans);
-    CHECK(tcp_connects == 2 && client_out_len == 0);
+    CHECK(tcp_connects == 3 && client_out_len == 0);
     /* 4. a tailnet name: answered locally, nothing sent upstream */
     s_local_cb = local_name; int sends = udp_sends;
     build(0x4444, "nas.tail.ts.net"); atomic_store(&s_tcp_active, 1);
@@ -499,7 +524,7 @@ def run_serve(code):
 served = run_serve(serve_code)
 assert served.returncode == 0 and 'tcp serve ok' in served.stdout, (served.returncode, served.stdout, served.stderr[-3000:])
 # 3.0.25-beta.10 asked the resolver over TCP only: fails here as on board A.
-old = 'rl = udp_ask(upstream, w->q, qlen, answer, DNS_TCP_MAX_ANSWER);'
+old = 'rl = udp_ask(upstream, w->q, qlen, answer, DNS_UDP_LARGE_ANSWER);'
 assert old in serve_code
 assert run_serve(serve_code.replace(old, 'rl = 0;')).returncode != 0, 'TCP-only upstream must fail'
 print('dns relay tcp: UDP first with a 4 KB buffer, whole answer to the TCP client, TCP upstream only when truncated, local names, bounded')
