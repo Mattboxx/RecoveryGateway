@@ -74,6 +74,7 @@
 #include "ota_validation.h"
 #include <stdlib.h>
 #include <time.h>
+#include <sys/time.h>
 
 /* Cap on log payloads we surface over /api endpoints — both the live
  * log tail and the pre-crash snapshot share this ceiling so the JSON
@@ -3264,12 +3265,21 @@ static esp_err_t log_raw_handler(httpd_req_t *req)
     bool lost = (since != 0) && (since < oldest);
 
     httpd_resp_set_type(req, "application/json; charset=utf-8");
-    char hdr[160];
+    /* boot_ms: wall-clock time (ms since 1970) at which the log's "(ms)"
+     * counter was 0, so the page shows each line's date and time; 0 while
+     * the clock is not set. Same counter as the log lines (esp_log_timestamp). */
+    long long boot_ms = 0;
+    {
+        struct timeval tv;
+        if (gettimeofday(&tv, NULL) == 0 && tv.tv_sec >= 1700000000)
+            boot_ms = (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000 - (long long)esp_log_timestamp();
+    }
+    char hdr[200];
     snprintf(hdr, sizeof hdr,
-             "{\"seq\":%llu,\"lost\":%s,\"size\":%u,\"cap\":%u,\"data\":\"",
+             "{\"seq\":%llu,\"lost\":%s,\"size\":%u,\"cap\":%u,\"boot_ms\":%lld,\"data\":\"",
              (unsigned long long)new_seq, lost ? "true" : "false",
              (unsigned)log_capture_size(),
-             (unsigned)log_capture_capacity());
+             (unsigned)log_capture_capacity(), boot_ms);
     httpd_resp_sendstr_chunk(req, hdr);
 
     /* Stream JSON-escaped payload. Buffer into 1 KB chunks before

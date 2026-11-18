@@ -12350,6 +12350,29 @@
 
       function nearBottom() { return (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 40; }
 
+      /* Date and time of each line: the device sends when its log counter
+       * started (boot_ms, once its clock is set); "I (12345) TAG: ..." is
+       * shown as "I 2026-11-18 11:23:45 (12345) TAG: ..." in this browser's
+       * time zone. Lines that arrived before the clock was known get their
+       * date as soon as it is. */
+      var bootMs = 0;
+      function pad2(n) { return (n < 10 ? '0' : '') + n; }
+      function logStamp(ms) {
+        var d = new Date(bootMs + ms);
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+          + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+      }
+      function stampSpan(sp) {
+        var m = /^([EWIDV]) \((\d+)\) /.exec(sp.dataset.raw);
+        if (!m || !bootMs) return;
+        sp.textContent = m[1] + ' ' + logStamp(Number(m[2])) + sp.dataset.raw.substring(1) + sp.dataset.trail;
+        delete sp.dataset.raw;
+      }
+      function setBootMs(v) {
+        if (typeof v !== 'number' || v <= 0 || Math.abs(v - bootMs) < 2000) return;
+        bootMs = v;
+        pre.querySelectorAll('span[data-raw]').forEach(stampSpan);
+      }
       function emitLine(line, trail) {
         var c = 'I';
         if (line.length >= 2 && line[1] === ' ') {
@@ -12359,6 +12382,7 @@
         var sp = document.createElement('span');
         sp.className = 'lvl-' + c;
         sp.textContent = line + trail;
+        if (/^[EWIDV] \(\d+\) /.test(line)) { sp.dataset.raw = line; sp.dataset.trail = trail; stampSpan(sp); }
         pre.appendChild(sp);
       }
 
@@ -12385,6 +12409,7 @@
               pre.textContent = ''; carry = '';
               firstTick = false;
             }
+            setBootMs(j.boot_ms);
             if (j.lost) {
               /* The device ring wrapped past our cursor — some lines
                * happened on the device that we missed. The OLD viewer

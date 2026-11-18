@@ -23,6 +23,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Tailscale off and restarts. The page says whether the control server
   confirmed it; if it could not be reached, remove the device in the admin
   console. Joining again needs an auth key and makes a new device.
+- **Logs show date and time.** The live log on the Tools page shows each line
+  as `I 2026-11-18 11:23:45 (12345) tag: ...` in the browser's time zone,
+  also for lines written before the clock was set (they get their date as
+  soon as it is known). microSD log files start each line with the date and
+  time in the gateway's time zone once the clock is set. The pre-crash log
+  of the previous start keeps the time since that start.
 - The **Max peers** field is gone from the Tailscale page: it limited nothing
   since beta.16 (tailnet size is unlimited, 20 tunnels rotate automatically,
   both shown on the page). Saved values and backups are still accepted.

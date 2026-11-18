@@ -157,6 +157,11 @@ async function fixture(browser, options = {}) {
       else {status=202;body={ok:true,state:'pending'};
         const rule=(state.forwardBody.rules||[]).find(r=>r.index===input.index&&r.rule_token===input.rule_token);
         if(rule)rule.destination_check={state:'reachable',summary:'This gateway completed a TCP handshake with the Tailnet destination',next_step:'Enable the rule, then connect from an allowed LAN client',checked_ip:'100.64.0.9',latency_ms:42,age_s:0};}
+    } else if (url.pathname === '/api/log/raw') {
+      const since = Number(url.searchParams.get('since') || 0);
+      const data = state.logData || '';
+      body = {seq: data.length, lost: false, size: data.length, cap: 16384, boot_ms: state.logBootMs || 0,
+        data: data.substring(Math.min(since, data.length))};
     } else if (url.pathname === '/api/tailscale/leave') {
       state.leaveCalls = (state.leaveCalls || 0) + 1;
       body = {ok: true, server: state.leaveServer || 'logged_out'};
@@ -936,6 +941,21 @@ async function main() {
     await f.page.waitForFunction(() => document.getElementById('ts-page-badge').textContent === 'Policy pending');
     assert.match(await f.page.locator('#ts-page-badge').getAttribute('class'), /badge-warning/);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Live log: lines show date and time once the device clock is known,
+    // also lines that arrived before it (browser time zone).
+    {
+      f = await fixture(browser, {page: 'tools', logData: 'W (61000) test: before the clock\n'});
+      await f.page.waitForFunction(() => document.getElementById('tool-log-body').textContent.includes('before the clock'));
+      const pre = () => f.page.evaluate(() => document.getElementById('tool-log-body').textContent);
+      assert.match(await pre(), /^W \(61000\) test: before the clock/m);
+      const boot = new Date(2026, 10, 18, 10, 0, 0).getTime();
+      f.state.logBootMs = boot; f.state.logData += 'E (122500) test: after\n';
+      await f.page.waitForFunction(() => document.getElementById('tool-log-body').textContent.includes('after'));
+      const text = await pre();
+      assert.match(text, /^W 2026-11-18 10:01:01 \(61000\) test: before the clock$/m);
+      assert.match(text, /^E 2026-11-18 10:02:02 \(122500\) test: after$/m);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Leave tailnet: nothing is sent before the confirmation; Cancel sends
     // nothing; the toast says what the control server answered.
     for (const [server, text] of [['logged_out', /logged this gateway out/], ['unreachable', /could not be reached: remove the device/]]) {

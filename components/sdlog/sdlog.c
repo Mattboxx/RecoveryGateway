@@ -618,6 +618,18 @@ static void writer_task(void *arg)
 
 /* ---- vprintf hook (never touches the card) ---- */
 
+/* "YYYY-MM-DD HH:MM:SS " in the device's time zone (Settings: time zone),
+ * or nothing while the clock is not set yet (before NTP): a line then keeps
+ * only its time since boot. Returns the bytes written (20 or 0). */
+static int sdlog_time_prefix(char *out, size_t cap, time_t now)
+{
+    if (now < 1700000000 || cap < 21) return 0;
+    struct tm tm;
+    if (!localtime_r(&now, &tm)) return 0;
+    size_t n = strftime(out, cap, "%Y-%m-%d %H:%M:%S ", &tm);
+    return n == 20 ? 20 : 0;
+}
+
 static int sdlog_vprintf(const char *fmt, va_list args)
 {
     va_list args_copy;
@@ -688,9 +700,12 @@ static int sdlog_vprintf(const char *fmt, va_list args)
 
                 if (clean_len > 0 && pass) {
                     sdlog_msg_t m;
+                    /* Date and time first, so a file read later says when. */
+                    int tp = sdlog_time_prefix(m.data, sizeof m.data, time(NULL));
                     int dl = clean_len;
-                    if (dl > SDLOG_LINE_MAX - 1) dl = SDLOG_LINE_MAX - 1;
-                    memcpy(m.data, s_pktbuf, dl);
+                    if (dl > SDLOG_LINE_MAX - 1 - tp) dl = SDLOG_LINE_MAX - 1 - tp;
+                    memcpy(m.data + tp, s_pktbuf, dl);
+                    dl += tp;
                     m.data[dl] = '\n';
                     m.len = (uint16_t)(dl + 1);
                     if (xQueueSend(s_queue, &m, 0) != pdTRUE)
