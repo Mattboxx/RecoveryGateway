@@ -2,7 +2,7 @@
 
 <img src="assets/brand/png/banner.png" alt="ESP32 Tailnet Gateway — Mattboxx Edition. One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need." width="100%">
 
-# ESP32 Tailnet Gateway — Mattboxx Edition
+# ESP32 Tailnet Gateway 
 
 **Mattboxx Edition · One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need.**
 
@@ -44,7 +44,7 @@ Tailscale to use Wake-on-LAN or the backup uplinks.
 
 1. **Check your board.** Use an ESP32-S3 N8R8 or N16R8 with 8 MB octal PSRAM. See [supported hardware](#8-supported-hardware).
 2. **Install.** Open the [Web Installer](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/) in desktop Chrome or Edge with a USB data cable. You can also use [Easy Install or the advanced downloads](#7-download-firmware).
-3. **Set up.** Join the board's `ESP32-Tailnet-Setup-XXXX` Wi-Fi, pair using the BOOT button or USB setup code, and test your uplink. Open the address shown at the end of the wizard.
+3. **Set up.** Join the board's `ESP32-Tailnet-Setup-XXXX` Wi-Fi, go to http://192.168.4.1, pair using the BOOT button or USB setup code, and test your uplink. Open the address shown at the end of the wizard.
 4. **Join your Tailnet.** Connect to Tailscale or Headscale, then enable the role you need.
 
 [First-boot walkthrough](docs/GETTING-STARTED.md) · [Update an existing gateway](https://mattboxx.github.io/esp32-tailnet-gateway/updating/)
