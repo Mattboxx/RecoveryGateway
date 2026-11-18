@@ -6,10 +6,439 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.25] - 2026-11-18
+
+### Fixed: Tailscale and Headscale access
+
+- **Single-use auth keys no longer take the gateway offline.** The default key
+  of the Tailscale admin console is single-use; the gateway presented it again
+  at every reconnect and restart, the control server refused it ("invalid
+  key") and the device stayed offline. The key is now used only to log in, as
+  the official client does.
+- **No 16-peer limit.** A tailnet with more than 16 other devices (stale ones
+  count) was refused as a whole and every tunnel was blocked. Maps, policy and
+  peer table are sized by the tailnet; 20 tunnels are in use at a time and are
+  given to the peers that need them.
+- **Other cases where the tailnet could not be used:** a gateway alone in its
+  tailnet, ACL rules with "cap:" sources, more than 128 expanded ACL rules,
+  peers with more than one advertised subnet, networks that block port 80
+  (TLS on 443 is used) or NTP (time from the control server), DNS failures
+  (last working control address, DERP map addresses), auth keys pasted with
+  spaces, an expired node key that looped, peers homed on another relay region
+  without a direct path, peer key renewal, a Headscale server that changed
+  its key.
+- WireGuard handshakes and keepalives are sent from the network thread (a
+  race in the network stack could restart the device); a direct path that
+  stopped working is given up after 30 s.
+- Large DNS answers no longer reach access-point clients cut (DNS over TCP,
+  proper truncation).
+- Far fewer flash writes for the peer cache.
+
+### Added
+
+- **Clear Tailscale status**: why the gateway is not connected (key refused or
+  needed, waiting for approval, key expired), node key expiry with a warning
+  14 days ahead and renewal with a new auth key, Tailnet Lock with the signing
+  command, messages from the control server, peers and tunnels in use, and why
+  the control server refused a connection.
+- **Leave tailnet** button: logs out at the control server (as `tailscale
+  logout`), deletes the auth key and identity, turns Tailscale off.
+- **Logs with date and time** (live view and microSD files).
+- **USB uplinks** (experimental, not yet tested with real devices): USB LTE
+  modems and 4G sticks with a SIM, USB Ethernet adapters and phone tethering,
+  chosen in first-boot setup or on the Network page; connection and power
+  guide in the README and on the website. Off by default.
+- Monthly mobile data limit, traffic per access-point device, administration
+  limited to the tailnet and the access point (all off by default).
+
+### Changed
+
+- **LAN → Tailnet tab redesigned**: three steps explain a rule; each rule has a
+  "Stays open" choice (no time limit, 15 minutes … 7 days) applied with Save,
+  so an edited rule no longer silently stops forwarding after a timer was
+  used; clearer field names; a plain address means one device.
+- Web sessions are bound to the address that logged in; the SNMP community is
+  write-only.
+- The **Max peers** setting is gone: it no longer limited anything.
+- Health & resources moved to Diagnostics → Hardware; Telegram and ntfy
+  commands laid out the same way; every string translated.
+
+### Notes of the 3.0.25 betas
+
+3.0.25-beta.25 adds to beta.24:
+
+- **WireGuard handshakes and keepalives are sent from the network thread.**
+  The WireGuard manager sent some packets
+  (handshakes it started, handshake responses, cookies, the keepalive after a
+  handshake) on the network stack directly, next to the network thread, a
+  race that can restart the device (ARP table). They are now handed to the
+  network thread as a copy; the data path is unchanged.
+- **A direct path that stopped working is given up after 30 s** even when the
+  peer is quiet (the case where the peer keeps talking through the relay was
+  already handled since an earlier fix).
+- **Leave tailnet** button on the Tailscale page: logs the gateway out of the
+  control server as `tailscale logout` does (its node key expires there),
+  then deletes the saved auth key and the gateway's tailnet identity, turns
+  Tailscale off and restarts. The page says whether the control server
+  confirmed it; if it could not be reached, remove the device in the admin
+  console. Joining again needs an auth key and makes a new device.
+- **Logs show date and time.** The live log on the Tools page shows each line
+  as `I 2026-11-18 11:23:45 (12345) tag: ...` in the browser's time zone,
+  also for lines written before the clock was set (they get their date as
+  soon as it is known). microSD log files start each line with the date and
+  time in the gateway's time zone once the clock is set. The pre-crash log
+  of the previous start keeps the time since that start.
+- The **Max peers** field is gone from the Tailscale page: it limited nothing
+  since beta.16 (tailnet size is unlimited, 20 tunnels rotate automatically,
+  both shown on the page). Saved values and backups are still accepted.
+
+3.0.25-beta.24 adds to beta.23:
+
+- **LAN → Tailnet tab redesigned.** Three short steps explain what a rule
+  does. Each rule shows on one line whether it has a time limit and when it
+  closes, with one choice: "Stays open: No time limit, 15 minutes, 1 hour,
+  8 hours, 1 day or 7 days" (and optionally delete the rule when the time is
+  up). Save applies the choice. Before, the timer lived in a separate
+  section with seconds and "Arm / renew timer" buttons, and after a timer
+  had been used once, every new or edited rule silently stopped forwarding
+  until it was confirmed there. Now a rule that is not forwarding because of
+  its time limit says so on the rule itself. Clearer field names ("Tailnet
+  service address", "Port on this gateway", "Allowed LAN devices"); one
+  device can be entered as a plain address (192.168.1.50). Service watch,
+  time limit notices and backup/import are under "More options".
+- **Peers homed on another relay region are reachable.** A DERP relay only
+  delivers to devices connected to it. The gateway used one relay (its home
+  region), so traffic it started toward a peer homed elsewhere with no
+  direct path (LAN to tailnet, exit node, wake-on-LAN) was lost until that
+  peer reached out first. When the home relay reports a peer missing, the
+  gateway now opens one more relay connection to that peer's region, as the
+  official client does, and closes it after 60 s idle. Nothing is opened
+  otherwise; it can be compiled out (CONFIG_ML_DERP_AUX).
+- The relay connection accepts the upgrade only with status 101 (as the
+  control connection since beta.23), and a relay ping is answered by the
+  writer task instead of the reader.
+
+3.0.25-beta.23 adds to beta.22:
+
+- **Why the control server refused the connection is shown.** The Tailscale
+  page and the event history now say what the server answered (client
+  version not supported, wrong URL or a proxy that does not pass the
+  upgrade, access refused, rate limit, server or proxy error) instead of
+  "Noise handshake failed". The answer is accepted only with status 101:
+  before, "101" anywhere in an error page passed the check and the failure
+  showed up later with a misleading message.
+
+3.0.25-beta.22 adds to beta.21:
+
+- **Headscale and HTTPS login servers reachable when DNS fails.** The last
+  working address of the control server is now used on every path: the
+  server key request (which comes first after a restart with Headscale and
+  still needed DNS) and HTTPS on port 443, where the certificate is still
+  checked for the server name.
+- **A Headscale server that got a new key is picked up without a restart.**
+  The key was fetched once and kept: after a server reinstall every
+  connection failed until the gateway restarted. A failed handshake now
+  fetches it again.
+- **Far fewer flash writes for the peer cache.** Every map update rewrote
+  the whole cache (about 7.7 KB) once per peer, around 140 KB per reconnect
+  with 18 peers. Now only a peer whose data really changed is written.
+  With a full cache the least recently used peer is replaced, also after
+  the internal counter wraps (before, recent peers could be replaced).
+
+3.0.25-beta.21 adds to beta.20:
+
+- **Peer key rotation without interruption.** A peer that renews its key
+  (seamless renewal sends the new key as a patch) moves to it at once: the
+  old key loses access in the same update and the tunnel is replaced. Before,
+  the update was refused and the whole map reloaded.
+- **A peer without a tunnel slot that reaches out gets one at once** (its
+  discovery message), as the official client configures peers when they
+  connect; before it waited for the 30 s refill or longer.
+- **Control server reachable when DNS fails**: the last address that worked
+  is kept (written only when it changes) and used when the name cannot be
+  resolved; the encrypted handshake still checks the server.
+
+3.0.25-beta.20 adds to beta.19:
+
+- **An expired node key no longer loops.** When the control server marks
+  the node key expired, the gateway registers again (it reconnected every
+  minute without registering, since reconnects skip registration), shows
+  "node key expired" and renews the key at the next start with an auth key.
+- **Ready for a Tailscale control key rotation.** The control server's key
+  is built in; if the encrypted handshake fails, the current key is fetched
+  over verified HTTPS and used (never over plain HTTP).
+
+3.0.25-beta.19 adds to beta.18:
+
+- **Control server liveness pings are answered** (over the encrypted
+  control connection, as the official client does); other ping kinds are
+  logged.
+- **Messages from the control server** (for example an expiring key or an
+  account issue) are shown on the Tailscale page, as plain text.
+- **Tailscale's control server typed by hand** as the login server gets the
+  same port 80 / TLS 443 fallback as the default.
+- The Tailnet access audit (what was fixed in beta.16-19 and what is still
+  open: very large maps without compression, IPv6 inside the tailnet, some
+  protocol features) is in docs/TAILNET-ACCESS-AUDIT.md; Tailnet IPv6 limits
+  are documented in docs/CONFIGURATION.md.
+
+3.0.25-beta.18 adds to beta.17 fixes for cases where the Tailnet could not
+be used at all:
+
+- **A gateway alone in its tailnet (or the first device) works.** The first
+  map of a session omits Peers when the tailnet has no other devices; the
+  gateway then never had peer authority, blocked the tunnel when a device
+  joined, and looped on every reconnect. The first map of a session is now
+  complete as the protocol defines it, even without Peers or PacketFilter.
+- **ACL rules with "cap:" sources** (node capabilities and posture) no
+  longer refuse the whole policy and block all traffic: such a source
+  admits nobody here and the other rules apply.
+- **Networks that block port 80** (or proxy it): after two failed attempts
+  the gateway reaches Tailscale's control server over TLS on port 443, as the
+  official client does, and back.
+- **Networks that block NTP**: the clock is set from the control server's
+  time until NTP answers. Without a clock, node key expiry kept the policy
+  "pending" and blocked the tunnel.
+- **DERP relay**: a failed connection tries the next node of the region,
+  and the node's address from the DERP map is used when DNS fails.
+- **Auth keys pasted with a space or a line break** are saved and used
+  without them (they were refused as "invalid key").
+- **A registered gateway starts without a saved auth key** (the key is only
+  needed to log in; it can be removed after registration), and the
+  "waiting for approval" state clears when the approval arrives in the map.
+  Control server ping requests are logged (not answered yet).
+- Own and peer tailnet addresses are the first IPv4 of the list, not item 0
+  (IPv6-first lists); map responses up to 768 KB (about 250-500 peers in an
+  official map, was 512 KB); registration that needs a new auth key or a
+  console change retries every 5 minutes instead of 30 s.
+
+3.0.25-beta.17 adds to beta.16 (beta.16 was a local candidate):
+
+- **Every advertised subnet is reachable.** A peer could carry only its own
+  address and ONE more route in the WireGuard layer: a second subnet, or a
+  subnet next to an exit route, failed to attach (logged only) and was
+  unreachable. Up to 32 per peer now (extra entries in PSRAM, used only by
+  peers that have them). Routes kept per peer for routing rose from 8 to 16,
+  and accepted routes in total from 32 to 64; anything beyond is reported in
+  the log instead of being dropped silently.
+- **No limit on ACL rules.** Expanded rules (sources x destinations) were
+  capped at 128 and a larger policy was refused whole, blocking the tunnel;
+  the rule table is now sized by the policy. Named filter groups: 32.
+- **Node key expiry.** The Tailscale page shows when this gateway's node key
+  expires and warns 14 days ahead (also in the event log, once a day).
+  When the key expires, entering a valid auth key renews it at the next
+  start for the same device (old key sent as OldNodeKey), without a factory
+  reset.
+- **Clear registration state.** The Tailscale and Status pages say why the
+  gateway is not connected: auth key refused or needed, waiting for approval
+  in the admin console, node key expired. The old "Auth key invalid" badge
+  was shown for working tag-owned devices and is gone.
+- **Tailnet Lock** is detected and shown with the `tailscale lock sign`
+  command for this gateway (it does not verify node signatures itself).
+- **Peers and tunnels** in use are shown on the Tailscale page; 20 tunnel
+  slots instead of 16 at about the same internal RAM (WireGuard handshake
+  state and the peer job queue moved to PSRAM); faster ownership checks with
+  many peers (sorted index); reconnects skip the registration request after
+  a successful one in the same start.
+
+3.0.25-beta.16 fixes two Tailnet defects present since the first MicroLink
+releases, reported by a user on official Tailscale (3.0.24):
+
+- **Single-use auth keys no longer take the gateway offline.** The default
+  auth key in the Tailscale admin console is single-use. The gateway sent
+  it again at every control reconnect and restart; the control server
+  refuses a used key even for a registered device, so the device appeared
+  in the console and then stayed offline with "invalid key". The key is
+  now presented only to log in, as the official client does: once the
+  device is registered with it, reconnects and restarts register the known
+  identity without it. A record of the registered identity (node key and a
+  hash of the auth key, never the key) is kept in flash. If the key is
+  refused, the device retries once without it (it may already be
+  registered); if the device was deleted in the console, it stops with
+  "enter a new auth key" instead of retrying forever. A device that needs
+  approval or an authorization link is no longer treated as connected.
+- **No 16-peer limit.** A tailnet with more than 16 other devices (or a
+  device with more than 16 routes) was refused as a whole
+  ("Authorization/peer update needs a full refresh ... reason=peer-update")
+  and every tunnel was blocked; stale devices count. The map, the policy
+  and the peer table are now sized by the tailnet (PSRAM); 300 and 2000
+  peer maps are tested. Tunnel slots (in internal RAM) stay limited to 16
+  at a time: when they are full, a peer that comes online or needs one
+  takes the slot of an offline peer, then of the one quiet longest (2
+  minutes at least); a peer in use or the priority peer never loses its
+  slot.
+- **Clearer reasons and safer identity storage.** A refused map now names
+  the check (peer-key, peer-prefixes, duplicate-peer, too-large ...).
+  Saving new identity keys checks for errors instead of logging success,
+  and public keys are derived from the stored private keys.
+
+3.0.25-beta.15 adds to beta.13 (beta.14 was a local candidate), from the
+serial log of board A during the stable/beta comparison (the first two are
+present in 3.0.24 too):
+
+- **No microSD probe at boot while the SD recorder is off.** Boards without
+  a card logged three SD init errors and spent a moment on every boot. The
+  card is now looked for when the recorder is on, the first time its status
+  is shown (Diagnostics or the microSD card), or when the recorder is
+  enabled (a card inserted later is found then).
+- **MQTT waits for a network address** before its first broker attempt, which
+  always failed at boot ("Host is unreachable") and logged errors. An
+  address on the LAN side (Wi-Fi or Ethernet, for a broker on the local
+  network) or on the Internet uplink (also mobile) is enough.
+- **Refused web connections are closed silently.** With administration
+  limited to the tailnet and the access point, every LAN connection to the
+  web page made ESP-IDF log "session creation failed" as an error, so a LAN
+  device retrying filled the log. The connection is now closed at once
+  without reading a request or logging; System returns the count as
+  `admin_refused`.
+
+3.0.25-beta.13 adds the following to beta.8
+(beta.9 to beta.12 were local candidates on the way: beta.11 made DNS over TCP
+ask the resolver over UDP first, after board A showed that its home router
+refuses DNS over TCP and caps UDP answers at 512 bytes; beta.13 passes answers
+up to 16 KB over TCP, after microsoft.com answered with more than 4 KB).
+
+### Security
+
+- **Web sessions are bound to the client address that logged in.** The web
+  page uses plain HTTP; a session cookie copied off the local network or the
+  access point is refused from any other address (the owner's session stays
+  valid). A new login is needed when a device changes network.
+- **Administration can be limited to the tailnet and the access point**
+  (System → Access, off by default). Connections to the gateway's other
+  addresses (the LAN one) are closed. While the gateway is not connected to
+  the tailnet the local network keeps access, so the owner cannot be locked
+  out; the setting can only be turned on from a browser that keeps access.
+- **The SNMP community is write-only** like the other secrets: the API no
+  longer returns it (an empty field keeps the saved one), and the card warns
+  while it is still "public".
+
+### Changed
+
+- **Health & resources moved to Diagnostics → Hardware**, next to memory and
+  partitions, with its own Refresh button.
+- **Telegram and ntfy commands laid out the same way**: notifications first,
+  then a "Remote commands" section with a short explanation, the settings
+  side by side and the command reference at the end (it was scattered across
+  the grid in Telegram and placed oddly in ntfy). Command options look
+  inactive while commands are off; the same words are used for forgetting a
+  saved token; the ntfy status line counts alerts and commands instead of
+  listing part of the commands.
+- Settings search finds the new functions by name and by synonym (data
+  limit, traffic, administration access, resources, community, commands),
+  also in Italian, German, French, Spanish and Chinese.
+- The DNS relay cache is two-way set-associative: two busy names that hash
+  to the same place no longer evict each other.
+
+### Added
+
+- **Traffic per access-point device** (Network → Clients, off by default):
+  bytes each device sent and received through the gateway. While off the
+  packet path only checks a flag and nothing is stored.
+- **Event when mobile data starts or stops carrying the Internet traffic**
+  (a warning in failover mode, where it means Wi-Fi and Ethernet are down);
+  changes shorter than 30 s are not reported.
+- **Signal and operator for Huawei HiLink 4G sticks** in USB network mode,
+  read once a minute from the stick's own local web API (experimental, not
+  validated with a physical stick).
+
+### Fixed
+
+- **DNS answers larger than 1 KB reached access-point clients cut.** The DNS
+  relay received at most 1024 bytes, passed longer answers on cut (no
+  "truncated" flag) and cached them. It now asks resolvers for at most 1024
+  bytes (EDNS size of the forwarded query), turns a longer answer into a valid
+  "truncated" reply, never caches truncated answers, and answers DNS over TCP
+  on the same addresses (one connection at a time, bounded waits), so clients
+  can fetch large answers (long TXT/SPF records, HTTPS records, DNSSEC).
+  Present since the relay's first version.
+- **USB network sessions could free a send buffer still in use.** A frame
+  being sent while the session closed (unplug, error) could write into a
+  transfer already freed. The send slot is now claimed before the session
+  check and the close waits for every slot (bounded) before freeing.
+- **PPP over a USB modem could block the gateway's network core.** Each PPP
+  frame waited up to 50 ms for the previous USB transfer. Frames now go into a
+  send queue in PSRAM, drained transfer by transfer; a frame that does not fit
+  is dropped whole, never waited for.
+
+### Added
+
+- **Monthly mobile data limit** (Network → Cellular uplink). Counts mobile data
+  in both directions (PPP and USB network sticks), warns once at a chosen
+  percentage and once at the limit (event history and notifications), and can
+  stop using mobile data until the next month. The month can start on any day
+  from 1 to 28. Off by default: nothing is counted or written while off. The
+  counter is saved after at least 1 MB and 10 minutes, or at a warning, so up
+  to that much use can be missed after a power cut.
+- **Remote console warning.** When the plain-TCP remote console is enabled on
+  the local network or the access point, every start records a security
+  warning: the password typed there can be read on that network.
+- DNS relay diagnostics show queries over TCP and oversized answers.
+
+- **Cellular uplink over USB.** Besides a modem wired to UART pins, the
+  Cellular card (and the mobile-network choice of first-boot setup) can use
+  the board's native USB port: USB LTE modems with a
+  serial AT port (PPP, the same SIM PIN/APN/registration logic as UART) and
+  4G sticks with a USB network function (RNDIS, CDC-ECM or CDC-NCM, DHCP from
+  the stick). Sticks that start as a CD-ROM are switched to modem mode with
+  the usb_modeswitch reference messages. The AT port is found from known
+  layouts, standard CDC-ACM or an AT probe; a manual interface choice exists.
+- **Ethernet uplink over USB.** Besides the W5500 SPI module, the Ethernet
+  card (and the Ethernet choice of first-boot setup) can use a USB Ethernet
+  adapter or phone USB tethering (CDC-ECM, CDC-NCM
+  or RNDIS), with another USB configuration chosen automatically when the
+  first is vendor-only (Realtek RTL8152/RTL8153).
+- Both are off by default and cost no task, heap or USB host stack while off,
+  and since beta.7 no internal RAM either: the USB driver's transfer code runs
+  from flash and USB, cellular and Ethernet state is kept in PSRAM, so 3.0.25
+  leaves about 0.6 KB more internal RAM free than 3.0.24;
+  the USB port becomes a USB host only when one of them is enabled with its
+  USB connection. The USB connection always leaves 40 KB of internal RAM to
+  the rest of the gateway; if that is not possible, the card says how much is
+  needed and free. When internal RAM is short, a USB device runs with one
+  transfer per direction (slower) instead of being refused. Not yet tested
+  with real modems, sticks, adapters or phones.
+- The Cellular and Ethernet cards show their states and the firmware's
+  messages in the chosen language, and a "Waiting" badge between attempts.
+- The simple-mode note ("N advanced sections are hidden") and the remaining
+  notification titles (ntfy test, save and errors, restart and reload) are
+  translated.
+- Only while a USB connection is enabled, the Wi-Fi keeps 16 static receive
+  buffers instead of 24, giving about 12.8 KB of internal RAM to the USB
+  device (Wi-Fi traffic peaks a little slower). Without USB nothing changes.
+- When USB is chosen for Ethernet or the mobile network, first-boot setup and
+  the Network page show a power warning: the board does not supply 5 V on its
+  USB port, how to power the device (powered OTG Y-cable, its own supply, the
+  USB-OTG pad for experts only), the 2 A peaks of LTE modems and what the
+  fewer Wi-Fi receive buffers mean, with a link to the USB guide. In setup, a
+  titled step separates the choice of uplink from the choice of pins or USB.
+- USB connection and power guide on the website (*USB modems, sticks and
+  Ethernet adapters*) and in the README, with suggested devices for a first
+  test.
+
+### Changed
+
+- A modem on UART pins and a W5500 are still saved in the 3.0.24 format, so
+  going back to an older firmware keeps them working. Settings that use the
+  USB port are saved in a new format that older firmware ignores (that uplink
+  stays off there).
+- Translations: every Web UI string, including the TCP checks and setup texts
+  of 3.0.21-3.0.24, in Italian, German, French, Spanish and Chinese.
+
 ## [3.0.24] - 2026-11-15
 
 ### Fixed
 
+- **Short Wi-Fi drops about twice a day** ("Wi-Fi station disconnected
+  (reason 200)", also with 3.0.24). The router paused its beacons every
+  ~12 h 06 min and the gateway gave up after 6 s, then repeated DHCP and the
+  Tailnet control connection. It now waits 15 s for beacons (`/api/status`
+  `sta.beacon_timeout_s`), so such pauses pass without a drop; a router that
+  is really gone is noticed 9 s later.
+- With notifications on *Problems*, a Wi-Fi station drop is no longer sent by
+  itself: an uplink that stays down is still reported after the grace period
+  ("Internet uplink lost"), and *All events* still sends every drop. The drop
+  stays in the local event history.
 - Validate gateway Wi-Fi names and passwords before saving. A 32-byte network
   name now keeps its final byte.
 - Restore encrypted Wi-Fi credentials with the matching access-point mode.

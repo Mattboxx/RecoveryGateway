@@ -369,9 +369,22 @@ CONFIG_LIBC_NEWLIB=y
 # 3.0 optional cellular uplink (main/cell_uplink.c): PPP over a UART modem,
 # PAP/CHAP for carriers that need a user name. Inactive until configured.
 CONFIG_LWIP_PPP_SUPPORT=y
+# Optional USB cellular modem (USB OTG host, installed only when selected):
+# composite LTE modems have configuration descriptors well above the 256-byte
+# default, which would make them fail enumeration. Heap is used only while a
+# device is attached.
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=1024
+# Lets the USB port pick another configuration of a multi-configuration
+# device (for example an Ethernet adapter whose first one is vendor-only).
+CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK=y
 CONFIG_LWIP_PPP_PAP_SUPPORT=y
 CONFIG_LWIP_PPP_CHAP_SUPPORT=y
 
 # 3.0.1 images: SNMP agent and dynamic DNS compiled in, both off until enabled
 CONFIG_TSR_SNMP=y
 CONFIG_TSR_DDNS=y
+# Tunnel slots (internal RAM; handshake state is in PSRAM). The map has no peer limit.
+CONFIG_ML_MAX_PEERS=20
+# One map response (PSRAM): about 1.5-3 KB per peer in an official map.
+CONFIG_ML_JSON_BUFFER_SIZE_KB=768
+CONFIG_ML_H2_BUFFER_SIZE_KB=768

@@ -26,6 +26,7 @@
 
 #include "acl.h"
 #include "netif_hooks.h"
+#include "ap_traffic.h"
 #include "tailnet_forward.h"
 
 /* MTU-management knobs published by tailscale_mtu.c. ap_mss_clamp is
@@ -57,6 +58,13 @@ static volatile uint64_t    s_ppp_bytes_in           = 0;
 static volatile uint64_t    s_ppp_bytes_out          = 0;
 static volatile uint64_t    s_eth_bytes_in           = 0;
 static volatile uint64_t    s_eth_bytes_out          = 0;
+/* Optional USB network stick of the cellular uplink (Ethernet framing). */
+static netif_input_fn       original_usbnet_input      = NULL;
+static netif_linkoutput_fn  original_usbnet_linkoutput = NULL;
+static struct netif        *s_usbnet                   = NULL;
+static volatile bool        s_physical_ready           = false;   /* add callback registered */
+static volatile uint64_t    s_usbnet_bytes_in          = 0;
+static volatile uint64_t    s_usbnet_bytes_out         = 0;
 
 /* Wire-byte counters. Updated on the LWIP TCPIP task, read from the
  * HTTP server task. Display-only — torn reads at the 32-bit boundary
@@ -366,6 +374,31 @@ static err_t eth_linkoutput_hook(struct netif *netif, struct pbuf *p)
 }
 
 bool netif_hooks_eth_ready(void) { return s_eth != NULL; }
+
+static err_t usbnet_input_hook(struct pbuf *p, struct netif *netif)
+{
+    if (p) s_usbnet_bytes_in += p->tot_len;
+    if (acl_drops(acl_check_and_tap(ACL_TO_ESP, p, false))) { pbuf_free(p); return ERR_OK; }
+    return original_usbnet_input ? original_usbnet_input(p, netif) : ERR_VAL;
+}
+
+static err_t usbnet_linkoutput_hook(struct netif *netif, struct pbuf *p)
+{
+    if (p) s_usbnet_bytes_out += p->tot_len;
+    if (acl_drops(acl_check_and_tap(ACL_FROM_ESP, p, false))) { return ERR_OK; }
+    return original_usbnet_linkoutput ? original_usbnet_linkoutput(netif, p) : ERR_VAL;
+}
+
+bool netif_hooks_register_usbnet(struct netif *nif)
+{
+    if (s_usbnet) return s_usbnet == nif;
+    if (!nif || !s_physical_ready) return false;   /* no add callback: fail closed */
+    s_usbnet = nif;
+    return true;
+}
+
+uint64_t netif_hooks_get_usbnet_bytes_in(void) { return s_usbnet_bytes_in; }
+uint64_t netif_hooks_get_usbnet_bytes_out(void) { return s_usbnet_bytes_out; }
 uint64_t netif_hooks_get_eth_bytes_in(void) { return s_eth_bytes_in; }
 uint64_t netif_hooks_get_eth_bytes_out(void) { return s_eth_bytes_out; }
 
@@ -405,6 +438,7 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *netif)
      * the uplink LAN tested by the wizard. Headers are in the first pbuf. */
     if (p && !first_boot_ap_frame_allowed((const uint8_t *)p->payload, p->len)) { pbuf_free(p); return ERR_OK; }
     if (acl_drops(acl_check_and_tap(ACL_TO_AP, p, true))) { pbuf_free(p); return ERR_OK; }
+    if (ap_traffic_on && p) ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, true);
     /* PMTU: tell the client to back off when it sends a DF packet
      * bigger than the tunnel can carry. Runs BEFORE we forward so the
      * client gets the signal even when we'd otherwise drop the frame. */
@@ -419,6 +453,7 @@ static err_t ap_linkoutput_hook(struct netif *netif, struct pbuf *p)
 {
     if (p) s_ap_bytes_out += p->tot_len;
     if (acl_drops(acl_check_and_tap(ACL_FROM_AP, p, true))) { return ERR_OK; }
+    if (ap_traffic_on && p) ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, false);
     /* And clamp again on outbound — SYN-ACK from upstream toward the
      * client also needs its MSS bounded. */
     clamp_tcp_mss(p, ap_mss_clamp);
@@ -448,6 +483,11 @@ static void physical_netif_added(struct netif *nif, netif_nsc_reason_t reason,
         original_eth_linkoutput = nif->linkoutput;
         nif->input = eth_input_hook;
         nif->linkoutput = eth_linkoutput_hook;
+    } else if (nif == s_usbnet) {
+        original_usbnet_input = nif->input;
+        original_usbnet_linkoutput = nif->linkoutput;
+        nif->input = usbnet_input_hook;
+        nif->linkoutput = usbnet_linkoutput_hook;
     } else {
         return;
     }
@@ -458,6 +498,7 @@ static void register_physical_hooks(void *arg)
 {
     (void)arg;
     netif_add_ext_callback(&s_physical_callback, physical_netif_added);
+    s_physical_ready = true;
 }
 
 void netif_hooks_refresh(void)

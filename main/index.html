@@ -1836,6 +1836,18 @@
     .tf-sum .badge { white-space: normal; margin-top: 4px; }
     .tf-editor { border-top: 1px solid var(--border); padding: 12px 14px; }
     .tf-evidence { padding: 0 14px 12px; }
+    .tf-howto { margin: 0 0 0.75rem 1.1rem; padding: 0; color: var(--fg-secondary); font-size: 0.875rem; line-height: 1.6; }
+    .tf-access { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 0 14px 12px; }
+    .tf-access-text { flex: 1 1 220px; font-size: 0.875rem; color: var(--fg-secondary); }
+    .tf-access-text.tf-access-warn { color: var(--warning, #b45309); font-weight: var(--weight-semibold); }
+    .tf-access .tf-time { flex: 0 1 260px; max-width: 100%; }
+    .tf-access label { display: inline-flex; align-items: center; gap: 6px; font-size: 0.875rem; }
+    .tf-add-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin-top: 0.75rem; }
+    .tf-add-row .form-group { flex: 1 1 260px; margin: 0; }
+    .tf-more { margin-top: 1rem; }
+    .tf-more > summary { cursor: pointer; font-weight: var(--weight-semibold); }
+    .tf-more-section { border-top: 1px solid var(--border); padding-top: 0.75rem; margin-top: 0.75rem; }
+    .tf-more-title { margin: 0 0 0.5rem 0; font-size: 0.9375rem; }
     .tf-del { color: var(--danger); }
 
     @media (max-width: 1023px), (pointer: coarse) {
@@ -1932,6 +1944,8 @@
     /* First boot: language picker, connection choice and wiring fields. */
     .fb-lang { margin-left: auto; width: auto; min-height: 40px; font-size: var(--text-sm); align-self: flex-start; }
     .fb-uplinks { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-3) 0; }
+    .fb-conn-title { margin: var(--sp-5) 0 0; padding-top: var(--sp-4); border-top: 1px solid var(--border); }
+    .fb-conn-title + .auth-hint { display: block; margin: var(--sp-1) 0 0; }
     .fb-pins { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0 var(--sp-3); margin-top: var(--sp-2); }
     /* Focused fields and opened links stop below the sticky bars, not under them. */
     html { scroll-padding-top: 116px; }
@@ -1981,6 +1995,9 @@
     .trend-main { margin-top: var(--sp-4); }
     .trend-main-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
     .trend-main-title { font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+    .cmd-section { margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+    .cmd-section-title { font-size: var(--text-sm); margin: 0 0 0.35rem 0; }
+    .cmd-reference { margin-top: var(--sp-2); }
     .trend-legend { display: flex; flex-wrap: wrap; gap: var(--sp-3); font-size: var(--text-xs); color: var(--fg-muted); }
     .trend-sw { display: inline-block; width: 12px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
     .trend-plot { position: relative; margin-top: var(--sp-2); min-height: 230px; }
@@ -2191,20 +2208,34 @@
         <p><b>Connect to the Internet.</b> How will the gateway reach the Internet? The choice sets up the rest for you.</p>
         <div class="fb-uplinks" role="radiogroup" aria-label="Internet connection">
           <label class="fb-opt"><input type="radio" name="fb-up" value="wifi" checked><span><b>Wi-Fi</b><small>Your home or office Wi-Fi (2.4 GHz).</small></span></label>
-          <label class="fb-opt" id="fb-up-eth" hidden><input type="radio" name="fb-up" value="ethernet"><span><b>Ethernet cable</b><small>A W5500 Ethernet module wired to the board. The steadiest link, and the board's Wi-Fi stays free for its own network.</small></span></label>
-          <label class="fb-opt" id="fb-up-cell" hidden><input type="radio" name="fb-up" value="cellular"><span><b>Mobile network (SIM)</b><small>A 4G/LTE modem with a SIM card, for places without a fixed line. Experimental.</small></span></label>
+          <label class="fb-opt" id="fb-up-eth" hidden><input type="radio" name="fb-up" value="ethernet"><span><b>Ethernet cable</b><small>A W5500 module wired to the board, or a USB Ethernet adapter. The steadiest link, and the board's Wi-Fi stays free for its own network.</small></span></label>
+          <label class="fb-opt" id="fb-up-cell" hidden><input type="radio" name="fb-up" value="cellular"><span><b>Mobile network (SIM)</b><small>A 4G/LTE modem wired to the board or a USB modem or stick, with a SIM card, for places without a fixed line. Experimental.</small></span></label>
         </div>
         <div id="fb-eth-box" hidden>
+          <p class="fb-conn-title"><b>How is Ethernet connected?</b></p>
+          <span class="auth-hint">Choose the technology you have: a W5500 module wired to the pins, or an adapter or phone on the USB port.</span>
+          <div class="fb-uplinks" role="radiogroup" aria-label="How Ethernet is connected">
+            <label class="fb-opt"><input type="radio" name="fb-eth-conn" value="spi" checked><span><b>W5500 module wired to the pins</b><small>An SPI Ethernet module connected to the board's pins.</small></span></label>
+            <label class="fb-opt"><input type="radio" name="fb-eth-conn" value="usb"><span><b>USB Ethernet adapter or phone</b><small>Plugged into the board's USB port (not the COM port), with 5 V for the device. About 10 Mbit/s at most.</small></span></label>
+          </div>
+          <div class="alert alert-warning fb-usb-power" id="fb-eth-usb-power" hidden style="display:block;margin:var(--sp-2) 0;"><b style="display:block;">Power the USB device correctly</b><ul style="margin:var(--sp-1) 0;padding-left:1.25rem;"><li>The board does not supply 5 V on its USB port: without its own power the device stays off.</li><li>Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).</li><li>Or the device's own 5 V supply, with its ground connected to the board's ground.</li><li>Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.</li><li>While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.</li></ul><a class="usb-guide-link" href="https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/" target="_blank" rel="noopener">USB connection and power guide</a></div>
           <p class="auth-hint">The cable is used first and the address comes from your router (DHCP). Ethernet starts after the restart that ends this setup.</p>
-          <details class="fb-details"><summary>Module wiring (change only if yours differs)</summary>
+          <details class="fb-details" id="fb-eth-wiring"><summary>Module wiring (change only if yours differs)</summary>
             <div class="fb-pins"><div class="form-group"><label class="form-label" for="fb-eth-sclk">SCLK</label><input class="input mono" type="number" id="fb-eth-sclk" min="-1" max="48" value="12"></div><div class="form-group"><label class="form-label" for="fb-eth-mosi">MOSI</label><input class="input mono" type="number" id="fb-eth-mosi" min="-1" max="48" value="11"></div><div class="form-group"><label class="form-label" for="fb-eth-miso">MISO</label><input class="input mono" type="number" id="fb-eth-miso" min="-1" max="48" value="13"></div><div class="form-group"><label class="form-label" for="fb-eth-cs">CS</label><input class="input mono" type="number" id="fb-eth-cs" min="-1" max="48" value="10"></div><div class="form-group"><label class="form-label" for="fb-eth-intr">INT (-1 = none)</label><input class="input mono" type="number" id="fb-eth-intr" min="-1" max="48" value="14"></div><div class="form-group"><label class="form-label" for="fb-eth-rst">RST (-1 = none)</label><input class="input mono" type="number" id="fb-eth-rst" min="-1" max="48" value="9"></div></div>
           </details>
         </div>
         <div id="fb-cell-box" hidden>
+          <p class="fb-conn-title"><b>How is the modem connected?</b></p>
+          <span class="auth-hint">Choose the technology you have: a modem board wired to the pins, or a USB modem or 4G stick on the USB port.</span>
+          <div class="fb-uplinks" role="radiogroup" aria-label="How the modem is connected">
+            <label class="fb-opt"><input type="radio" name="fb-cell-conn" value="uart" checked><span><b>Modem wired to the pins</b><small>A modem board connected to the board's pins (UART).</small></span></label>
+            <label class="fb-opt"><input type="radio" name="fb-cell-conn" value="usb"><span><b>USB modem or 4G stick</b><small>Plugged into the board's USB port (not the COM port). The modem needs its own 5 V supply for 2 A peaks.</small></span></label>
+          </div>
+          <div class="alert alert-warning fb-usb-power" id="fb-cell-usb-power" hidden style="display:block;margin:var(--sp-2) 0;"><b style="display:block;">Power the USB device correctly</b><ul style="margin:var(--sp-1) 0;padding-left:1.25rem;"><li>The board does not supply 5 V on its USB port: without its own power the device stays off.</li><li>Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).</li><li>Or the device's own 5 V supply, with its ground connected to the board's ground.</li><li>Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.</li><li>LTE modems draw up to 2 A in bursts: a computer's USB port or a weak charger makes the modem reset or the gateway restart (reset reason BROWNOUT).</li><li>While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.</li></ul><a class="usb-guide-link" href="https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/" target="_blank" rel="noopener">USB connection and power guide</a></div>
           <div class="form-group"><label class="form-label" for="fb-apn">APN</label><input class="input mono" id="fb-apn" maxlength="63" autocomplete="off" spellcheck="false" placeholder="internet">
-            <span class="auth-hint">From your mobile operator, for example internet or web.omnitel.it.</span></div>
+            <span class="auth-hint" id="fb-apn-hint">From your mobile operator, for example internet or web.omnitel.it.</span><span class="auth-hint" id="fb-apn-usb-hint" hidden>Optional over USB: leave it empty to keep the modem's own. A stick with its own web page connects by itself.</span></div>
           <div class="form-group"><label class="form-label" for="fb-simpin">SIM PIN</label><input class="input mono" type="password" id="fb-simpin" maxlength="8" inputmode="numeric" autocomplete="off" placeholder="Empty if the SIM has no PIN"></div>
-          <details class="fb-details"><summary>Modem wiring (change only if yours differs)</summary>
+          <details class="fb-details" id="fb-cell-wiring"><summary>Modem wiring (change only if yours differs)</summary>
             <div class="fb-pins"><div class="form-group"><label class="form-label" for="fb-cell-tx">TX (to modem RX)</label><input class="input mono" type="number" id="fb-cell-tx" min="-1" max="48" value="17"></div><div class="form-group"><label class="form-label" for="fb-cell-rx">RX (from modem TX)</label><input class="input mono" type="number" id="fb-cell-rx" min="-1" max="48" value="18"></div><div class="form-group"><label class="form-label" for="fb-cell-pwrkey">PWRKEY (-1 = none)</label><input class="input mono" type="number" id="fb-cell-pwrkey" min="-1" max="48" value="-1"></div></div>
           </details>
           <label class="fb-opt"><input type="checkbox" id="fb-roam"><span><b>Allow roaming</b><small>Off: the modem connects only on your home network.</small></span></label>
@@ -2809,17 +2840,21 @@
 
       <!-- ===== Optional SPI Ethernet uplink (W5500) ===== -->
       <div class="card mt-4" id="eth-card" data-capability="ethernet">
-        <div class="card-header"><div data-advanced class="card-header-left"><span class="card-title">Ethernet uplink (optional W5500 SPI module)</span></div><span class="badge badge-neutral" id="eth-badge">—</span></div>
+        <div class="card-header"><div data-advanced class="card-header-left"><span class="card-title">Ethernet uplink (W5500 SPI module or USB adapter)</span></div><span class="badge badge-neutral" id="eth-badge">—</span></div>
         <div class="card-body">
-          <p class="form-hint">Requires a wired W5500 SPI module. Changes apply after a restart.</p>
+          <p class="form-hint">Choose how Ethernet is connected: a W5500 module wired to the board's pins, or a USB Ethernet adapter or phone tethering on the board's USB port. Changes apply after a restart.</p>
           <p id="eth-status" role="status">Not loaded</p>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label" for="eth-transport">How Ethernet is connected</label><select class="input" id="eth-transport"><option value="spi">W5500 module wired to the board's pins (SPI)</option><option value="usb">USB port (Ethernet adapter or phone tethering)</option></select></div>
+          </div>
+          <div class="form-hint eth-usb" hidden><div class="alert alert-warning usb-power" style="display:block;margin:var(--sp-2) 0;"><b style="display:block;">Power the USB device correctly</b><ul style="margin:var(--sp-1) 0;padding-left:1.25rem;"><li>The board does not supply 5 V on its USB port: without its own power the device stays off.</li><li>Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).</li><li>Or the device's own 5 V supply, with its ground connected to the board's ground.</li><li>Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.</li><li>While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.</li></ul><a class="usb-guide-link" href="https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/" target="_blank" rel="noopener">USB connection and power guide</a></div><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Plug the adapter or phone into the board's USB port, not the COM port. After the restart that port works as a USB host; flashing and logs stay on the COM port.</li><li>The port runs at USB full speed: about 10 Mbit/s at most.</li><li>One device at a time, without USB hubs.</li></ul><details><summary style="cursor:pointer;">Compatible devices (not yet tested with real hardware)</summary><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Expected: Realtek RTL8152, RTL8153 and RTL8156 adapters (their standard configuration is chosen automatically) and adapters or docks with CDC-ECM or CDC-NCM.</li><li>Likely: Android USB tethering (RNDIS or NCM).</li><li>Not supported: ASIX AX88179 and AX88772, Microchip LAN78xx and iPhone tethering.</li></ul></details></div>
           <label class="feature-switch"><input type="checkbox" id="eth-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Enable Ethernet at next boot</span></label>
           <div class="form-row">
             <div class="form-group"><label class="form-label" for="eth-pref">Uplink preference</label><select class="input" id="eth-pref"><option value="wifi_first">WiFi first, Ethernet as fallback</option><option value="ethernet_first">Ethernet first, WiFi as fallback</option></select></div>
-            <div class="form-group"><label class="form-label" for="eth-host">SPI host</label><select class="input" id="eth-host"><option value="2">SPI2</option><option value="3">SPI3</option></select></div>
-            <div class="form-group"><label class="form-label" for="eth-mhz">SPI clock (MHz)</label><input class="input mono" id="eth-mhz" type="number" min="1" max="40"></div>
+            <div class="form-group eth-pins"><label class="form-label" for="eth-host">SPI host</label><select class="input" id="eth-host"><option value="2">SPI2</option><option value="3">SPI3</option></select></div>
+            <div class="form-group eth-pins"><label class="form-label" for="eth-mhz">SPI clock (MHz)</label><input class="input mono" id="eth-mhz" type="number" min="1" max="40"></div>
           </div>
-          <div class="form-row">
+          <div class="form-row eth-pins">
             <div class="form-group"><label class="form-label" for="eth-sclk">SCLK GPIO</label><input class="input mono eth-pin" id="eth-sclk" type="number" min="0" max="48"></div>
             <div class="form-group"><label class="form-label" for="eth-mosi">MOSI GPIO</label><input class="input mono eth-pin" id="eth-mosi" type="number" min="0" max="48"></div>
             <div class="form-group"><label class="form-label" for="eth-miso">MISO GPIO</label><input class="input mono eth-pin" id="eth-miso" type="number" min="0" max="48"></div>
@@ -2842,7 +2877,7 @@
       <div class="card mt-4" id="cell-card">
         <div class="card-header"><div class="card-header-left"><span class="card-title">Cellular uplink (GSM/LTE modem with SIM)</span></div><span class="badge badge-neutral" id="cell-badge">—</span></div>
         <div class="card-body">
-          <p class="form-hint">Requires an external UART modem and a data SIM. Use it as the primary Internet uplink or as a fallback. Connect to the gateway locally over WiFi or Ethernet, including its access point when using a SIM alone. Changes apply after a restart.</p>
+          <p class="form-hint">Requires a data SIM in an external modem, either wired to the board's pins or plugged into its USB port. Use it as the primary Internet uplink or as a fallback. Connect to the gateway locally over WiFi or Ethernet, including its access point when using a SIM alone. Changes apply after a restart.</p>
           <p id="cell-status" role="status">Not loaded</p>
           <label class="feature-switch"><input type="checkbox" id="cell-ack"><span class="feature-switch-track" aria-hidden="true"></span><span>I understand that mobile data may cost money, and that Tailscale, updates and integrations will use it</span></label>
           <label class="feature-switch"><input type="checkbox" id="cell-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Enable the cellular uplink at next boot</span></label>
@@ -2855,16 +2890,32 @@
             <div class="form-group"><label class="form-label" for="cell-pin">SIM PIN (optional)</label><input class="input mono" id="cell-pin" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="Optional"><span class="form-hint">Sent once per start: a wrong PIN stops the modem instead of risking a PUK lock.</span><label class="form-hint" style="display:flex; gap:0.35rem; align-items:center;"><input type="checkbox" id="cell-clear-pin"> Clear saved PIN</label></div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label class="form-label" for="cell-uart">UART</label><select class="input" id="cell-uart"><option value="1">UART1</option><option value="2">UART2</option></select></div>
-            <div class="form-group"><label class="form-label" for="cell-baud">Baud rate</label><select class="input" id="cell-baud"><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option><option>230400</option><option>460800</option><option>921600</option></select></div>
-            <div class="form-group"><label class="form-label" for="cell-tx">TX GPIO (to modem RX)</label><input class="input mono cell-pin" id="cell-tx" type="number" min="0" max="48" placeholder="e.g. 17"></div>
-            <div class="form-group"><label class="form-label" for="cell-rx">RX GPIO (from modem TX)</label><input class="input mono cell-pin" id="cell-rx" type="number" min="0" max="48" placeholder="e.g. 18"></div>
-            <div class="form-group" data-advanced><label class="form-label" for="cell-rts">RTS GPIO (-1 = none)</label><input class="input mono cell-pin" id="cell-rts" type="number" min="-1" max="48"></div>
-            <div class="form-group" data-advanced><label class="form-label" for="cell-cts">CTS GPIO (-1 = none)</label><input class="input mono cell-pin" id="cell-cts" type="number" min="-1" max="48"></div>
+            <div class="form-group"><label class="form-label" for="cell-transport">How the modem is connected</label><select class="input" id="cell-transport"><option value="uart">Wired to the board's pins (UART)</option><option value="usb">USB port (USB modem or 4G stick)</option></select></div>
+            <div class="form-group cell-usb" hidden><label class="form-label" for="cell-usb-mode">USB mode</label><select class="input" id="cell-usb-mode"><option value="auto">Automatic (recommended)</option><option value="serial">Modem with AT commands (PPP)</option><option value="network">Stick with its own web page (RNDIS, ECM or NCM)</option></select></div>
+            <div class="form-group cell-usb" data-advanced hidden><label class="form-label" for="cell-usb-iface">USB interface</label><select class="input" id="cell-usb-iface"><option value="-1">Automatic</option></select><span class="form-hint">Only for a modem with AT commands whose port is not found automatically.</span></div>
+          </div>
+          <div class="form-hint cell-usb" hidden><div class="alert alert-warning usb-power" style="display:block;margin:var(--sp-2) 0;"><b style="display:block;">Power the USB device correctly</b><ul style="margin:var(--sp-1) 0;padding-left:1.25rem;"><li>The board does not supply 5 V on its USB port: without its own power the device stays off.</li><li>Simplest: a powered USB-C OTG Y-cable with a 5 V charger (at least 2.5 A for a modem or 4G stick, 1 A for an Ethernet adapter or phone).</li><li>Or the device's own 5 V supply, with its ground connected to the board's ground.</li><li>Bridging the board's USB-OTG pad is for experts only: never connect that port to a computer or a charger while it is bridged.</li><li>LTE modems draw up to 2 A in bursts: a computer's USB port or a weak charger makes the modem reset or the gateway restart (reset reason BROWNOUT).</li><li>While a USB connection is on, the gateway's Wi-Fi keeps 16 receive buffers instead of 24 to leave internal RAM for the device: bursts of Wi-Fi traffic, such as a speed test through the gateway's access point, can be slower or lose more packets. With the pins nothing changes.</li></ul><a class="usb-guide-link" href="https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/" target="_blank" rel="noopener">USB connection and power guide</a></div><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Plug the modem or stick into the board's USB port, not the COM port. After the restart that port works as a USB host; flashing and logs stay on the COM port.</li><li>USB modems with AT commands use the SIM PIN and APN above. Over USB the APN can stay empty to keep the modem's own.</li><li>4G sticks with their own web page (RNDIS, ECM or NCM) connect by themselves: set their APN and PIN in the stick.</li><li>Sticks that first appear as a CD-ROM are switched to modem mode automatically.</li><li>One device at a time, without USB hubs.</li></ul><details><summary style="cursor:pointer;">Compatible devices (not yet tested with real hardware)</summary><ul style="margin:0 0 var(--sp-2);padding-left:1.25rem;"><li>Expected: SIMCom SIM7600; Quectel EC25, EG25-G, EC21, EG91, EG95 and BG96; modems with a standard CDC-ACM port.</li><li>Likely: SIMCom A7670, A7600, SIM7070 and SIM7080; Quectel EC200 and EG800; Fibocom, Neoway and MeiG modules (their AT port is found by a probe).</li><li>Likely: Huawei E3372h and E8372h HiLink, ZTE MF79U and MF833, Alcatel Link Key and other RNDIS, ECM or NCM sticks.</li><li>Not supported: modems with only MBIM or QMI and no AT port.</li></ul></details></div>
+          <div class="form-row">
+            <div class="form-group cell-pins"><label class="form-label" for="cell-uart">UART</label><select class="input" id="cell-uart"><option value="1">UART1</option><option value="2">UART2</option></select></div>
+            <div class="form-group cell-pins"><label class="form-label" for="cell-baud">Baud rate</label><select class="input" id="cell-baud"><option>9600</option><option>19200</option><option>38400</option><option>57600</option><option>115200</option><option>230400</option><option>460800</option><option>921600</option></select></div>
+            <div class="form-group cell-pins"><label class="form-label" for="cell-tx">TX GPIO (to modem RX)</label><input class="input mono cell-pin" id="cell-tx" type="number" min="0" max="48" placeholder="e.g. 17"></div>
+            <div class="form-group cell-pins"><label class="form-label" for="cell-rx">RX GPIO (from modem TX)</label><input class="input mono cell-pin" id="cell-rx" type="number" min="0" max="48" placeholder="e.g. 18"></div>
+            <div class="form-group cell-pins" data-advanced><label class="form-label" for="cell-rts">RTS GPIO (-1 = none)</label><input class="input mono cell-pin" id="cell-rts" type="number" min="-1" max="48"></div>
+            <div class="form-group cell-pins" data-advanced><label class="form-label" for="cell-cts">CTS GPIO (-1 = none)</label><input class="input mono cell-pin" id="cell-cts" type="number" min="-1" max="48"></div>
             <div class="form-group"><label class="form-label" for="cell-pwrkey">PWRKEY GPIO (-1 = none)</label><input class="input mono cell-pin" id="cell-pwrkey" type="number" min="-1" max="48"><span class="form-hint">Pulsed at start and when the modem stops answering.</span></div>
           </div>
           <label class="feature-switch" data-advanced><input type="checkbox" id="cell-pwrkey-high"><span class="feature-switch-track" aria-hidden="true"></span><span>PWRKEY is active high (boards with a transistor driver)</span></label>
           <div class="page-header-actions"><button class="btn btn-secondary" id="cell-reload" type="button">Reload</button><button class="btn btn-primary" id="cell-save" type="button" disabled>Save (applies after restart)</button></div>
+          <h3 class="form-label mt-4" id="cell-limit-title">Monthly data limit</h3>
+          <p class="form-hint">Counts mobile data in both directions, as most carriers do. Approximate: up to 1 MB or 10 minutes of use can be missed after a power cut. Off (0) by default: nothing is counted or stored.</p>
+          <p id="cell-limit-status" role="status"></p>
+          <div class="form-row">
+            <div class="form-group"><label class="form-label" for="cell-limit-mb">Monthly limit (MB, 0 = off)</label><input class="input mono" id="cell-limit-mb" type="number" min="0" max="1000000" step="1" value="0"></div>
+            <div class="form-group"><label class="form-label" for="cell-limit-warn">Warn at (% of the limit, 0 = only at the limit)</label><input class="input mono" id="cell-limit-warn" type="number" min="0" max="99" step="1" value="80"></div>
+            <div class="form-group"><label class="form-label" for="cell-limit-day">The month starts on day</label><input class="input mono" id="cell-limit-day" type="number" min="1" max="28" step="1" value="1"></div>
+          </div>
+          <label class="feature-switch"><input type="checkbox" id="cell-limit-pause"><span class="feature-switch-track" aria-hidden="true"></span><span>Stop using mobile data when the limit is reached (until the next month)</span></label>
+          <div class="page-header-actions"><button class="btn btn-secondary" id="cell-limit-reset" type="button">Reset the counter</button><button class="btn btn-primary" id="cell-limit-save" type="button" disabled>Save limit (applies now)</button></div>
         </div>
       </div>
 
@@ -3067,6 +3118,10 @@
           </div>
           <button class="btn btn-secondary btn-sm" id="dhcp-clients-refresh">Refresh</button>
         </div>
+        <div class="card-body" style="padding-bottom:0;">
+          <label class="feature-switch"><input type="checkbox" id="dhcp-traffic-on"><span class="feature-switch-track" aria-hidden="true"></span><span>Count the traffic of each device</span></label>
+          <span class="form-hint">Shows what each device sent and received through the gateway since it was first seen. Off by default: while on, every packet on the access point is counted (a small CPU cost); turning it off forgets the counts.</span>
+        </div>
         <div class="card-body-flush" id="dhcp-clients-body">
           <div style="padding:1rem; color:var(--text-muted);">— loading —</div>
         </div>
@@ -3089,37 +3144,50 @@
       <div class="subpage" data-sub="services" role="tabpanel" aria-label="Services">
       <!-- ===== LAN -> Tailnet forwarding (independent of AP-side NAPT) ===== -->
       <div class="card mt-4" data-capability="lan-tailnet-forwarding">
-        <div class="card-header"><div class="card-header-left"><span class="card-title">LAN → Tailnet service gateway</span></div><span class="badge badge-neutral" id="tf-badge">—</span></div>
+        <div class="card-header"><div class="card-header-left"><span class="card-title">LAN → Tailnet services</span></div><span class="badge badge-neutral" id="tf-badge">—</span></div>
         <div class="card-body">
-          <p class="form-hint" style="margin:0 0 0.75rem 0;">Expose selected Tailnet services on the ESP32 uplink-LAN address. LAN clients do not need Tailscale and do not need to join the ESP32 access point. This table is fully separate from AP-side port forwarding.</p>
-          <p class="form-hint">Source CIDRs filter addresses, not client identity. Use the narrowest subnet and keep authentication on the remote service. A mapping being installed does not prove the service is reachable.</p>
+          <p class="form-hint" style="margin:0 0 0.5rem 0;">Let devices on your LAN use a service that lives on your tailnet, without installing Tailscale on them.</p>
+          <ol class="tf-howto">
+            <li>Add a rule: the tailnet service (address and port) and a port on this gateway.</li>
+            <li>LAN devices connect to this gateway's address on that port.</li>
+            <li>Choose which LAN devices may use it and, if you want, for how long.</li>
+          </ol>
           <p class="form-hint" id="tf-context" role="status">Loading saved rules and passive diagnostics…</p>
-          <details id="sw-box" data-capability="service-watch"><summary style="cursor:pointer;">Service watch (optional periodic destination tests)</summary>
-            <p class="form-hint">Off by default. Tests one enabled TCP rule per interval through this gateway, using the same bounded handshake as Test destination. Two misses in a row send one ntfy/MQTT notice; the next answer sends a recovery notice. It never changes rules.</p>
-            <label class="feature-switch"><input type="checkbox" id="sw-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Watch enabled TCP rules</span></label>
-            <label class="feature-switch"><input type="checkbox" id="sw-notify"><span class="feature-switch-track" aria-hidden="true"></span><span>Notify via ntfy when a service stops or resumes answering</span></label>
-            <div class="form-row"><div class="form-group"><label class="form-label" for="sw-interval">Interval between tests (60–86400 s)</label><input class="input mono" id="sw-interval" type="number" min="60" max="86400"></div></div>
-            <button class="btn btn-secondary" id="sw-save" type="button" disabled>Save service watch</button> <span class="form-hint" id="sw-status" role="status"></span>
-          </details>
           <div id="tf-list"></div>
-          <div class="form-row" style="margin-top:0.75rem;"><div class="form-group"><label class="form-label" for="tf-template">Service template</label><select class="input" id="tf-template"><option value="custom">Custom service</option><option value="mqtt-tls">MQTT over TLS</option><option value="mqtt">MQTT (unencrypted)</option><option value="https">HTTPS web UI</option><option value="nas-https">NAS web UI (HTTPS 5001)</option><option value="home-assistant">Home Assistant</option><option value="grafana">Grafana</option><option value="ssh">SSH</option><option value="syslog">Syslog (UDP)</option><option value="rdp">Remote Desktop</option></select><span class="form-hint" id="tf-template-hint"></span></div><button class="btn btn-secondary btn-md" id="tf-add" type="button" disabled>+ Add disabled draft</button></div>
-          <p class="form-hint">Templates never enable a listener or save automatically. Enter the actual destination and a narrow source CIDR; verify service authentication and resolve any port conflict before enabling.</p>
-          <details style="margin-top:1rem"><summary>Back up or import saved service rules</summary>
-            <p class="form-hint">Exports contain destination addresses/hostnames and source subnets, not credentials. Keep the file private. Import replaces this LAN → Tailnet table only, never the separate AP-side mappings. All imported rules start OFF; review before confirming.</p>
-            <a class="btn btn-secondary" href="/api/tailnet-forward/export" download>Export saved rules</a>
-            <label class="btn btn-secondary" for="tf-import-file">Choose import file</label><input type="file" id="tf-import-file" accept="application/json,.json" style="max-width:100%;margin-top:0.5rem;">
-            <pre class="mono" id="tf-import-preview" style="white-space:pre-wrap" role="status">No import preview.</pre>
-            <label><input type="checkbox" id="tf-import-confirm" disabled> Replace the saved LAN → Tailnet rules with this disabled configuration</label>
-            <button class="btn btn-primary" id="tf-import-apply" type="button" disabled>Apply reviewed import</button>
-          </details>
-          <details id="temporary-access" style="margin-top:1rem"><summary>Temporary exposure and expiry</summary><p class="form-hint">Save the rules first. Timers require a synchronized clock, survive restart and do not enable a disabled rule. Reordering keeps the timer with its rule. After first timer use, new or edited bindings need explicit timer/permanent confirmation. Expired rules stay closed; optional deletion also releases their configured ports.</p><button class="btn btn-secondary" id="leases-refresh">Refresh timers</button><div id="service-leases" role="status">Not loaded</div>
-            <label class="feature-switch"><input type="checkbox" id="ops-lease-notify"><span class="feature-switch-track" aria-hidden="true"></span><span>Notify via ntfy when temporary service access closes</span></label>
-            <p class="form-hint">OFF by default. Notifications are best-effort; local access closes even when ntfy is unavailable. No rule addresses or names are sent.</p>
-            <button class="btn btn-secondary" id="ops-lease-save" type="button" disabled>Save expiry notifications</button>
-            <span class="form-hint" id="ops-lease-save-status" role="status"></span>
+          <div class="tf-add-row">
+            <div class="form-group"><label class="form-label" for="tf-template">New rule for</label><select class="input" id="tf-template"><option value="custom">Any service (fill in yourself)</option><option value="mqtt-tls">MQTT over TLS</option><option value="mqtt">MQTT (unencrypted)</option><option value="https">HTTPS web UI</option><option value="nas-https">NAS web UI (HTTPS 5001)</option><option value="home-assistant">Home Assistant</option><option value="grafana">Grafana</option><option value="ssh">SSH</option><option value="syslog">Syslog (UDP)</option><option value="rdp">Remote Desktop</option></select><span class="form-hint" id="tf-template-hint"></span></div>
+            <button class="btn btn-secondary btn-md" id="tf-add" type="button" disabled>+ Add rule</button>
+          </div>
+          <p class="form-hint">New rules start switched off. Nothing changes on the gateway until you press Save.</p>
+          <details class="tf-more"><summary>More options</summary>
+            <div class="tf-more-section" id="sw-box" data-capability="service-watch">
+              <h4 class="tf-more-title">Service watch</h4>
+              <p class="form-hint">Off by default. Tests one switched-on TCP rule per interval through this gateway, using the same bounded handshake as Test destination. Two misses in a row send one ntfy/MQTT notice; the next answer sends a recovery notice. It never changes rules.</p>
+              <label class="feature-switch"><input type="checkbox" id="sw-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Watch enabled TCP rules</span></label>
+              <label class="feature-switch"><input type="checkbox" id="sw-notify"><span class="feature-switch-track" aria-hidden="true"></span><span>Notify via ntfy when a service stops or resumes answering</span></label>
+              <div class="form-row"><div class="form-group"><label class="form-label" for="sw-interval">Interval between tests (60–86400 s)</label><input class="input mono" id="sw-interval" type="number" min="60" max="86400"></div></div>
+              <button class="btn btn-secondary" id="sw-save" type="button" disabled>Save service watch</button> <span class="form-hint" id="sw-status" role="status"></span>
+            </div>
+            <div class="tf-more-section" id="temporary-access">
+              <h4 class="tf-more-title">Time limit notices</h4>
+              <label class="feature-switch"><input type="checkbox" id="ops-lease-notify"><span class="feature-switch-track" aria-hidden="true"></span><span>Notify via ntfy when a rule's time is up</span></label>
+              <p class="form-hint">Off by default. The rule closes on time even when ntfy is unreachable. No addresses or rule names are sent.</p>
+              <button class="btn btn-secondary" id="ops-lease-save" type="button" disabled>Save notices</button>
+              <span class="form-hint" id="ops-lease-save-status" role="status"></span>
+            </div>
+            <div class="tf-more-section">
+              <h4 class="tf-more-title">Back up or import rules</h4>
+              <p class="form-hint">Exports contain destination addresses/hostnames and source subnets, not credentials. Keep the file private. Import replaces this LAN → Tailnet table only, never the separate AP-side mappings. All imported rules start OFF; review before confirming.</p>
+              <a class="btn btn-secondary" href="/api/tailnet-forward/export" download>Export saved rules</a>
+              <label class="btn btn-secondary" for="tf-import-file">Choose import file</label><input type="file" id="tf-import-file" accept="application/json,.json" style="max-width:100%;margin-top:0.5rem;">
+              <pre class="mono" id="tf-import-preview" style="white-space:pre-wrap" role="status">No import preview.</pre>
+              <label><input type="checkbox" id="tf-import-confirm" disabled> Replace the saved LAN → Tailnet rules with this disabled configuration</label>
+              <button class="btn btn-primary" id="tf-import-apply" type="button" disabled>Apply reviewed import</button>
+            </div>
+            <p class="form-hint">Security: the allowed devices are checked by IP address only, which is not proof of identity. Keep the remote service's own login. A rule that is switched on does not prove the service answers: use Test destination.</p>
           </details>
         </div>
-        <div class="form-footer"><span class="form-footer-hint">A source CIDR is mandatory. Up to 8 TCP/UDP rules; listen ports must be unique per protocol.</span><div class="form-footer-actions"><button class="btn btn-secondary btn-md" id="tf-reload">Reload</button><button class="btn btn-primary btn-md" id="tf-save" disabled>Save</button></div></div>
+        <div class="form-footer"><span class="form-footer-hint">Up to 8 rules. Each port on this gateway can be used by one rule per protocol.</span><div class="form-footer-actions"><button class="btn btn-secondary btn-md" id="tf-reload">Reload</button><button class="btn btn-primary btn-md" id="tf-save" disabled>Save</button></div></div>
       </div>
 
       <!-- ===== Port forwarding (uplink-side NAPT) ===== -->
@@ -3193,7 +3261,34 @@
             <span class="stat-label">Node identity</span>
             <span class="stat-value mono" id="ts-identity-full">—</span>
           </div>
-          <div style="display:flex; justify-content:flex-end; margin:0 0 0.5rem 0;">
+          <div class="alert alert-warning" id="ts-reg-notice" style="display:none; margin:0 0 0.5rem 0;">
+            <span id="ts-reg-notice-text"></span>
+            <a href="#" id="ts-reg-notice-key" style="display:none;">Enter a new auth key</a>
+          </div>
+          <div class="stat-row" id="ts-key-expiry-row" style="display:none;">
+            <span class="stat-label">Node key expires</span>
+            <span class="stat-value mono" id="ts-key-expiry">—</span>
+          </div>
+          <div class="form-hint" id="ts-key-expiry-hint" style="display:none; margin-bottom:0.5rem;">The node key expires within 14 days. To keep this gateway connected, disable key expiry for it in the Tailscale admin console, or enter a new auth key after it expires.</div>
+          <div class="stat-row" id="ts-tunnels-row" style="display:none;">
+            <span class="stat-label">Peers in the tailnet map</span>
+            <span class="stat-value mono" id="ts-map-peers">—</span>
+          </div>
+          <div class="stat-row" id="ts-tunnels-row2" style="display:none;">
+            <span class="stat-label">Tunnels in use</span>
+            <span class="stat-value mono" id="ts-tunnels">—</span>
+          </div>
+          <div id="ts-display-messages" data-no-i18n style="display:none; margin:0 0 0.5rem 0;"></div>
+          <div class="alert alert-warning" id="ts-lock-notice" style="display:none; margin:0 0 0.5rem 0;">
+            <div>Tailnet Lock is on. Sign this gateway from a signing device:</div>
+            <code class="mono" id="ts-lock-cmd" data-no-i18n style="word-break:break-all;"></code>
+            <div>This gateway does not verify node signatures itself: it relies on the control server for peer keys.</div>
+          </div>
+          <div style="display:flex; justify-content:flex-end; flex-wrap:wrap; gap:0.5rem; margin:0 0 0.5rem 0;">
+            <button class="btn btn-ghost btn-sm text-danger" id="ts-leave" type="button"
+                    title="Log this gateway out of the tailnet, delete the saved auth key and turn Tailscale off.">
+              Leave tailnet…
+            </button>
             <button class="btn btn-ghost btn-sm text-danger" id="ts-reset-identity" type="button"
                     title="Erase the device's stored node-key and reboot. Use when the control plane no longer recognises the current node-key.">
               Regenerate identity…
@@ -3298,10 +3393,6 @@
                 <option value="">None</option>
               </select>
               <span class="form-hint">Picks from peers advertising 0.0.0.0/0.</span>
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="ts-max-peers">Max peers</label>
-              <input class="input" type="number" id="ts-max-peers" min="1" max="64" value="16">
             </div>
           </div>
 
@@ -3701,6 +3792,28 @@
       </div>
 
       <div class="subpage" data-sub="hardware" role="tabpanel" aria-label="Hardware">
+      <!-- ===== Health & resources (moved from Operations, 3.0.25) ===== -->
+      <div class="card mt-4" id="ops-health-card">
+        <div class="card-header">
+          <div class="card-header-left"><span class="card-title">Health &amp; resources</span></div>
+          <button class="btn btn-secondary btn-sm" id="ops-health-refresh" type="button">Refresh</button>
+        </div>
+        <div class="card-body">
+        <p id="ops-summary" role="status">Not loaded</p>
+        <p class="form-hint ops-guard-warning" id="ops-guard-warning" role="status" hidden>The resource admission guard is pausing optional work now: MQTT, ntfy, device checks and recovery wait until free internal RAM, its largest block and free sockets are above the thresholds. Lower the thresholds (advanced settings) or turn the guard off.</p><p class="form-hint">Control connected does not prove the tunnel or a remote service works. No public Internet probe runs automatically.</p>
+        <details><summary>Actual firmware capabilities</summary><p id="ops-capability-status" role="status">Not loaded</p><ul id="ops-capabilities"></ul></details>
+        <details data-advanced>
+          <summary>Resource guard settings</summary>
+          <label class="feature-switch"><input type="checkbox" id="ops-guard"><span class="feature-switch-track" aria-hidden="true"></span><span>Resource admission guard</span></label>
+          <p class="form-hint">Guard thresholds are engineering defaults, not calibrated device limits.</p>
+          <div class="form-row"><div class="form-group"><label class="form-label" for="ops-min">Minimum internal free bytes</label><input class="input" id="ops-min" type="number" min="0" max="262144" placeholder="e.g. 16384"><span class="form-hint">Below this free internal RAM new checks wait (resource guard).</span></div>
+          <div class="form-group"><label class="form-label" for="ops-largest">Minimum largest block</label><input class="input" id="ops-largest" type="number" min="0" max="131072" placeholder="e.g. 8192"></div>
+          <div class="form-group"><label class="form-label" for="ops-sockets">Reserved socket slots</label><input class="input" id="ops-sockets" type="number" min="0" max="31" placeholder="e.g. 4"><span class="form-hint">Sockets kept free for the VPN and this web page.</span></div>
+          </div>
+          <button class="btn btn-secondary" id="ops-guard-save" type="button" disabled>Save resource guard</button>
+          <span class="form-hint" id="ops-guard-save-status" role="status"></span>
+        </details>
+      </div></div>
       <!-- ===== Hardware diagnostics ===== -->
       <div class="card mt-4">
         <div class="card-header">
@@ -3783,22 +3896,6 @@
         </div>
       </div>
 
-      <div class="card mb-4"><div class="card-header"><span class="card-title">Health &amp; resources</span></div><div class="card-body">
-        <p id="ops-summary" role="status">Not loaded</p>
-        <p class="form-hint ops-guard-warning" id="ops-guard-warning" role="status" hidden>The resource admission guard is pausing optional work now: MQTT, ntfy, device checks and recovery wait until free internal RAM, its largest block and free sockets are above the thresholds. Lower the thresholds (advanced settings) or turn the guard off.</p><p class="form-hint">Control connected does not prove the tunnel or a remote service works. No public Internet probe runs automatically.</p>
-        <details><summary>Actual firmware capabilities</summary><p id="ops-capability-status" role="status">Not loaded</p><ul id="ops-capabilities"></ul></details>
-        <details data-advanced>
-          <summary>Resource guard settings</summary>
-          <label class="feature-switch"><input type="checkbox" id="ops-guard"><span class="feature-switch-track" aria-hidden="true"></span><span>Resource admission guard</span></label>
-          <p class="form-hint">Guard thresholds are engineering defaults, not calibrated device limits.</p>
-          <div class="form-row"><div class="form-group"><label class="form-label" for="ops-min">Minimum internal free bytes</label><input class="input" id="ops-min" type="number" min="0" max="262144" placeholder="e.g. 16384"><span class="form-hint">Below this free internal RAM new checks wait (resource guard).</span></div>
-          <div class="form-group"><label class="form-label" for="ops-largest">Minimum largest block</label><input class="input" id="ops-largest" type="number" min="0" max="131072" placeholder="e.g. 8192"></div>
-          <div class="form-group"><label class="form-label" for="ops-sockets">Reserved socket slots</label><input class="input" id="ops-sockets" type="number" min="0" max="31" placeholder="e.g. 4"><span class="form-hint">Sockets kept free for the VPN and this web page.</span></div>
-          </div>
-          <button class="btn btn-secondary" id="ops-guard-save" type="button" disabled>Save resource guard</button>
-          <span class="form-hint" id="ops-guard-save-status" role="status"></span>
-        </details>
-      </div></div>
       <div class="card mb-4" data-capability="health"><div class="card-header"><span class="card-title">Layered connectivity checks</span></div><div class="card-body">
         <p class="form-hint">Optional, OFF by default. No built-in cloud target. One check every configured interval, sharing the recovery worker. A closed gateway port does not prove the router is down; a TCP connection does not verify application health. DNS answers may be cached.</p>
         <label class="feature-switch"><input type="checkbox" id="health-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Enable configured connectivity checks</span></label>
@@ -3935,13 +4032,23 @@
             <div class="form-group"><label class="form-label" for="ntfy-topic">Topic</label><input class="input mono" id="ntfy-topic" placeholder="private-random-topic"></div>
           </div>
           <div class="alert alert-warning" id="ntfy-transport-warning" style="display:none; margin-bottom:var(--sp-4);">Plain HTTP exposes the ntfy token, notifications and remote commands in transit. Prefer <code class="mono">https://</code>.</div>
-          <div class="form-group"><label class="form-label" for="ntfy-token">Access token</label><input class="input" type="password" id="ntfy-token" autocomplete="new-password" placeholder="Optional — leave empty to keep"><label class="form-hint" style="display:flex;gap:0.35rem;align-items:center;"><input type="checkbox" id="ntfy-token-clear"> Clear saved token</label></div>
+          <div class="form-group"><label class="form-label" for="ntfy-token">Access token</label><input class="input" type="password" id="ntfy-token" autocomplete="new-password" placeholder="Optional — leave empty to keep"><label class="form-hint" style="display:flex;gap:0.35rem;align-items:center;"><input type="checkbox" id="ntfy-token-clear"> Forget the saved token</label></div>
           <div class="grid grid-cols-2">
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-system-events"><span class="feature-switch-track" aria-hidden="true"></span><span>Other restarts, Tailscale restored after an alert, update available</span></label><span class="form-hint">Off by default. Separate from power-on alerts below. Updates are announced, never installed by this option.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-poweron-events"><span class="feature-switch-track" aria-hidden="true"></span><span>Blackout: notify when power returns</span></label><span class="form-hint">Reports a power-on reset, not a crash or software restart. First power-up and reconnecting the cable can look the same. Sent when the uplink is available; outage duration is unknown.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-alerts"><span class="feature-switch-track" aria-hidden="true"></span><span>Alert when internet works but Tailscale stays down</span></label><div class="feature-inline-dependent" id="ntfy-alert-settings"><label class="form-label" for="ntfy-delay" style="margin-top:0.5rem;">Failure delay (seconds)</label><input class="input mono" type="number" id="ntfy-delay" min="15" max="3600" value="120"></div></div>
-            <div class="form-group"><label class="form-label" for="ntfy-commands">Remote commands</label><select class="input" id="ntfy-commands"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="ntfy-command-settings"><label class="form-label" for="ntfy-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="ntfy-poll" min="5" max="300" value="15"></div></div>
-            <details class="form-hint"><summary>Command reference</summary>
+          </div>
+          <div class="cmd-section">
+            <h4 class="cmd-section-title">Remote commands</h4>
+            <p class="form-hint">Publish a command as a message to the topic above, for example from the ntfy app. Only messages sent while the gateway listens are read.</p>
+          <div class="grid grid-cols-2">
+            <div class="form-group"><label class="form-label" for="ntfy-commands">Allowed commands</label><select class="input" id="ntfy-commands"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="ntfy-command-settings"><label class="form-label" for="ntfy-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="ntfy-poll" min="5" max="300" value="15"></div></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="ntfy-down-only"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="ntfy-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
+            <div class="form-group feature-inline-dependent" id="ntfy-info-details-setting"><label class="feature-switch"><input type="checkbox" id="ntfy-info-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in ntfy messages.</span></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="ntfy-direct-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
+          </div>
+            <details class="form-hint cmd-reference"><summary>Command reference</summary>
               <ul>
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
@@ -3954,11 +4061,7 @@
               <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
             </details>
           </div>
-          <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-down-only"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
-          <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
-          <div class="form-group feature-inline-dependent" id="ntfy-info-details-setting"><label class="feature-switch"><input type="checkbox" id="ntfy-info-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in ntfy messages.</span></div>
-          <div class="form-group"><label class="feature-switch"><input type="checkbox" id="ntfy-direct-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
-          <div class="form-hint mono" id="ntfy-status">Commands: info · wol DEVICE_NAME · wol aa:bb:cc:dd:ee:ff</div>
+          <div class="form-hint mono" id="ntfy-status">—</div>
         </div>
         <div class="form-footer">
           <span class="form-footer-hint">Alerts report connectivity only; local logs are never included. ntfy and its server can see message contents when enabled.</span>
@@ -3983,15 +4086,24 @@
           <div class="form-group feature-master-control"><label class="feature-switch"><input type="checkbox" id="nt-tg-enabled"><span class="feature-switch-track" aria-hidden="true"></span><span>Send to Telegram</span></label>
             <span class="form-hint">Create a bot with @BotFather, send it any message, then use your chat id (for example from @userinfobot).</span></div>
           <div class="grid grid-cols-2">
-            <div class="form-group"><label class="form-label" for="nt-tg-token">Bot token</label><input class="input mono" type="password" id="nt-tg-token" autocomplete="new-password" placeholder="123456789:AA… — leave empty to keep"><label class="form-hint" style="display:flex;gap:6px;align-items:center;"><input type="checkbox" id="nt-tg-clear"> Forget the saved token</label></div>
+            <div class="form-group"><label class="form-label" for="nt-tg-token">Bot token</label><input class="input mono" type="password" id="nt-tg-token" autocomplete="new-password" placeholder="123456789:AA… — leave empty to keep"><label class="form-hint" style="display:flex;gap:0.35rem;align-items:center;"><input type="checkbox" id="nt-tg-clear"> Forget the saved token</label></div>
             <div class="form-group"><label class="form-label" for="nt-tg-chat">Destination user id</label><input class="input mono" id="nt-tg-chat" placeholder="Your numeric Telegram user id">
               <details class="form-hint"><summary>How do I find my Telegram user id?</summary><ol><li>Open <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">@userinfobot</a> in Telegram, press Start and copy your numeric Id. This is a third-party helper; never share your bot token with it.</li><li>Open your own notification bot and send /start so it can message you.</li><li>Paste your user id here, save and use Send test. Use your personal id, not the bot's id or @username.</li></ol><p>Groups and channels remain supported with their chat id or @channel. Advanced: obtain message.chat.id using your own bot's <a href="https://core.telegram.org/bots/api#getupdates" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Telegram getUpdates API</a>.</p></details></div>
             <div class="form-group"><label class="form-label" for="nt-tg-events">Send</label><select class="input" id="nt-tg-events"><option value="problems">Warnings and errors (recommended)</option><option value="all">All events</option></select></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-startup"><span class="feature-switch-track" aria-hidden="true"></span><span>Other restarts</span></label><span class="form-hint">Software, update and other normal starts. Crash, watchdog and brownout errors keep their separate warning/error path.</span></div>
             <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-poweron"><span class="feature-switch-track" aria-hidden="true"></span><span>Blackout: notify when power returns</span></label><span class="form-hint">Reports a power-on reset, separate from a crash. First power-up or reconnecting the cable can look the same. Sent after power returns and the network is available; outage duration is unknown.</span></div>
-            <h4 style="font-size:var(--text-sm); margin:1rem 0 0.35rem 0;">Remote commands</h4>
+          </div>
+          <div class="cmd-section">
+            <h4 class="cmd-section-title">Remote commands</h4>
             <p class="form-hint">Send commands to your configured bot, with or without a leading slash. Commands older than 10 minutes are ignored.</p>
-            <details class="form-hint"><summary>Command reference</summary>
+          <div class="grid grid-cols-2">
+            <div class="form-group"><label class="form-label" for="nt-tg-cmd">Allowed commands</label><select class="input" id="nt-tg-cmd"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="nt-tg-cmd-settings"><label class="form-label" for="nt-tg-cmd-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="nt-tg-cmd-poll" min="5" max="300" value="15"></div></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-down"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
+            <div class="form-group feature-inline-dependent" id="nt-tg-cmd-details-setting"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in Telegram messages.</span></div>
+            <div class="form-group cmd-option"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
+          </div>
+            <details class="form-hint cmd-reference"><summary>Command reference</summary>
               <ul>
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
@@ -4003,11 +4115,6 @@
               <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
               <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
             </details>
-            <div class="form-group"><label class="form-label" for="nt-tg-cmd">Remote commands</label><select class="input" id="nt-tg-cmd"><option value="off">Disabled</option><option value="basic">Info and Wake-on-LAN</option><option value="recovery">Info, Wake-on-LAN and verified recovery</option></select><div class="feature-inline-dependent" id="nt-tg-cmd-settings"><label class="form-label" for="nt-tg-cmd-poll" style="margin-top:0.5rem;">Poll interval (seconds)</label><input class="input mono" type="number" id="nt-tg-cmd-poll" min="5" max="300" value="15"></div></div>
-            <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-down"><span class="feature-switch-track" aria-hidden="true"></span><span>Poll commands only while Tailscale is down</span></label></div>
-            <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-info"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">info</code> command</span></label><span class="form-hint">Replies with operational state and counts. Credentials and tokens are always excluded.</span></div>
-            <div class="form-group feature-inline-dependent" id="nt-tg-cmd-details-setting"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-details"><span class="feature-switch-track" aria-hidden="true"></span><span>Include private network details in <code class="mono">info</code></span></label><span class="form-hint">Off by default. Enabling this includes SSID, IPs, routes, peer names, AP-client MACs and saved WOL targets in Telegram messages.</span></div>
-            <div class="form-group"><label class="feature-switch"><input type="checkbox" id="nt-tg-cmd-mac"><span class="feature-switch-track" aria-hidden="true"></span><span>Allow <code class="mono">wol aa:bb:cc:dd:ee:ff</code> for unsaved MAC addresses</span></label><span class="form-hint">When off, <code class="mono">wol DEVICE_NAME</code> and saved MAC addresses still work.</span></div>
           </div>
           <p class="form-hint mono" id="nt-tg-status">—</p>
           <p class="form-hint" id="nt-tg-note" role="status">Loading…</p>
@@ -4244,6 +4351,17 @@
           </div>
           <div style="text-align:right; margin-bottom:1rem;">
             <button class="btn btn-primary btn-md" id="sys-web-auth-save" disabled>Save password gate</button>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="sys-admin-scope">Administration reachable from</label>
+            <select class="input" id="sys-admin-scope" style="max-width:28rem;">
+              <option value="anywhere">Every network that reaches the gateway</option>
+              <option value="tailnet_ap">Only the tailnet and the gateway's access point</option>
+            </select>
+            <span class="form-hint">The web page has no encryption on the local network: limiting it keeps the login off that network. While the gateway is not connected to the tailnet, the local network keeps access, so you cannot lock yourself out. Open this page through the tailnet or the access point to turn it on.</span>
+          </div>
+          <div style="text-align:right; margin-bottom:1rem;">
+            <button class="btn btn-primary btn-md" id="sys-admin-scope-save" disabled>Save access</button>
           </div>
           <p class="form-hint" style="margin:0 0 0.75rem 0;">After this much idle time the web UI logs you out and asks for the password again. Every click or tab refresh resets the countdown.</p>
           <div class="form-group">
@@ -4482,7 +4600,7 @@
           <p class="form-hint" id="sys-snmp-load-status" role="status">Settings have not loaded yet.</p>
           <label class="feature-switch"><input type="checkbox" id="sys-snmp-en" disabled><span class="feature-switch-track" aria-hidden="true"></span><span>Enable read-only SNMP agent</span></label>
           <div class="grid grid-cols-2 mt-4">
-            <div class="form-group"><label class="form-label" for="sys-snmp-community">Community</label><input class="input" type="password" id="sys-snmp-community" maxlength="255" autocomplete="off" spellcheck="false" disabled></div>
+            <div class="form-group"><label class="form-label" for="sys-snmp-community">Community</label><input class="input" type="password" id="sys-snmp-community" maxlength="255" autocomplete="off" spellcheck="false" disabled><span class="form-hint" id="sys-snmp-community-hint" hidden>The community is still "public", which every SNMP tool tries first: choose a private one.</span></div>
             <div class="form-group"><label class="form-label" for="sys-snmp-sysname">System name</label><input class="input" id="sys-snmp-sysname" maxlength="255" disabled></div>
             <div class="form-group"><label class="form-label" for="sys-snmp-contact">Contact</label><input class="input" id="sys-snmp-contact" maxlength="255" disabled></div>
             <div class="form-group"><label class="form-label" for="sys-snmp-location">Location</label><input class="input" id="sys-snmp-location" maxlength="255" disabled></div>
@@ -5273,9 +5391,15 @@
         tsBadge.className = 'badge ' + (ts.startup_retrying ? 'badge-warning' : 'badge-danger');
         tsBadge.textContent = ts.startup_retrying ? 'Retrying startup' : 'Startup failed';
         tsBadge.title = ts.startup_error;
-      } else if (ts.register_user_id === 0) {
+      } else if (ts.reg_state === 'need_new_key' || ts.reg_state === 'need_key' || ts.reg_state === 'refused') {
         tsBadge.className = 'badge badge-danger';
-        tsBadge.innerHTML = '<span class="badge-dot"></span> Auth key invalid';
+        tsBadge.textContent = 'Auth key needed';
+      } else if (ts.reg_state === 'key_expired') {
+        tsBadge.className = 'badge badge-danger';
+        tsBadge.textContent = 'Node key expired';
+      } else if (ts.reg_state === 'approval') {
+        tsBadge.className = 'badge badge-warning';
+        tsBadge.textContent = 'Waiting for approval';
       } else if (ts.connected && ts.authority_ready === false) {
         tsBadge.className = 'badge badge-warning';
         tsBadge.textContent = 'Policy pending';
@@ -6194,7 +6318,7 @@
       if (page === 'automation') { loadWol(); loadMqtt(); loadNtfy(); ntUi.load(); }
       if (page === 'operations') { loadWol(); loadOperations(); }
       if (page === 'system') { loadSystem(); loadProfiles(); loadMigration(); histUi.loadSnapshots(); }
-      if (page === 'tools') { loadDiag(); loadPrecrashLog(); histUi.loadEvents(); }
+      if (page === 'tools') { loadDiag(); loadPrecrashLog(); histUi.loadEvents(); loadOperations(); }
     }
 
     /* Post-login crash check. If the most recent reset_history entry is a
@@ -6869,26 +6993,8 @@
     // =====================================================================
     // WAKE-ON-LAN ADDRESS BOOK
     // =====================================================================
-    async function loadServiceLeases() {
-      var list=document.getElementById('service-leases');
-      try {
-        var response=await fetch('/api/service-leases',{cache:'no-store'});if(!response.ok)throw new Error('Timer status unavailable');
-        var leases=await response.json();if(!Array.isArray(leases)||!leases.every(function(l){return l&&Number.isInteger(l.index)&&Number.isInteger(l.rule_token)&&Number.isFinite(l.remaining_s)&&typeof l.effective_enabled==='boolean'&&typeof l.status==='string';}))throw new Error('Invalid timer response');list.replaceChildren();
-        leases.forEach(function(lease){
-          var row=document.createElement('div');row.style.marginTop='0.75rem';
-          var title=document.createElement('p');title.textContent='Rule '+(lease.index+1)+': '+lease.status+' · effective forwarding '+(lease.effective_enabled?'ON':'OFF')+' · '+lease.remaining_s+' s remaining';row.appendChild(title);
-          var duration=document.createElement('input');duration.className='input';duration.type='number';duration.min=60;duration.max=604800;duration.value=3600;duration.setAttribute('aria-label','Duration in seconds for rule '+(lease.index+1));row.appendChild(duration);
-          var deleteLabel=document.createElement('label'),remove=document.createElement('input');remove.type='checkbox';remove.checked=lease.delete_on_expiry===true;deleteLabel.append(remove,document.createTextNode('Delete rule after expiry (otherwise retain closed)'));row.appendChild(deleteLabel);
-          if(lease.status==='binding-unconfirmed'){var warning=document.createElement('p');warning.className='form-hint';warning.textContent='New or edited binding is closed. Explicitly arm a timer or confirm permanent access; list reordering never removes a time limit.';row.appendChild(warning);}
-          [['Arm / renew timer',false],['Make permanent',true]].forEach(function(pair){var button=document.createElement('button');button.type='button';button.className='btn btn-secondary';button.textContent=pair[0];
-            button.onclick=async function(){if(!pair[1]&&!duration.checkValidity())return;if(pair[1]&&!confirm('Remove the time limit from this saved rule?'))return;
-              button.disabled=true;try{var r=await fetch('/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'lease',index:lease.index,rule_token:lease.rule_token,seconds:pair[1]?0:Number(duration.value),permanent:pair[1],delete_on_expiry:!pair[1]&&remove.checked})});var result=await r.json();if(!r.ok||!result.ok)throw new Error(result.error||'Timer rejected');await loadServiceLeases();}
-              catch(e){title.textContent=e.message;}finally{button.disabled=false;}
-            };row.appendChild(button);});list.appendChild(row);
-        });
-      }catch(e){list.textContent=e.message;}
-    }
-    document.getElementById('leases-refresh').onclick=loadServiceLeases;
+    /* Time limits are shown and set on each LAN → Tailnet rule (renderTf). */
+    function loadServiceLeases() { if (s_tf_loaded && !s_tf_dirty && !s_tf_mutating) loadTailnetForward(); }
     var s_ops_state = null;
     var s_ops_busy = false;
     var s_ops_loading = false;
@@ -7218,7 +7324,8 @@
           note.appendChild(wzEl('span'));var b=wzEl('button','Show advanced settings');b.type='button';b.className='btn btn-secondary btn-sm';
           b.addEventListener('click',function(){setUiAdvanced(true);});note.appendChild(b);
           var head=sec.querySelector('.page-header');if(head&&head.nextSibling)sec.insertBefore(note,head.nextSibling);else sec.appendChild(note);}
-        note.firstChild.textContent=n+(n===1?' advanced section is':' advanced sections are')+' hidden in simple mode. Settings keep working.';
+        var hiddenText=n===1?'{} advanced section is hidden in simple mode. Settings keep working.':'{} advanced sections are hidden in simple mode. Settings keep working.';
+        note.firstChild.textContent=(window.I18N?I18N.t(hiddenText):hiddenText).replace('{}',n);
         note.hidden=adv;
       });
       if(typeof subnav!=='undefined')subnav.refresh();
@@ -7251,36 +7358,58 @@
     }
     document.getElementById('sg-home-guide').addEventListener('click',function(){wzOpen('lan-tailnet');});
     document.getElementById('sg-home-open').addEventListener('click',function(e){var tab=document.querySelector('.nav-tab[data-page="network"]');if(tab){e.preventDefault();tab.click();}});
-    var ETH_FIELDS=['eth-enabled','eth-pref','eth-host','eth-mhz','eth-sclk','eth-mosi','eth-miso','eth-cs','eth-int','eth-rst','eth-static','eth-ip','eth-mask','eth-gw','eth-dns'];
+    var ETH_FIELDS=['eth-enabled','eth-transport','eth-pref','eth-host','eth-mhz','eth-sclk','eth-mosi','eth-miso','eth-cs','eth-int','eth-rst','eth-static','eth-ip','eth-mask','eth-gw','eth-dns'];
     var s_eth_loaded=false;
     function ethStatusText(st){
-      if(!st.compiled)return 'Not available in this firmware build (WiFi-only image).';
-      if(!st.enabled_at_boot)return 'Off'+(st.restart_required?' · saved settings apply after restart':'')+'.';
-      var t=st.driver_started?(st.link_up?'Link up':'Link down'):'Driver not started'+(st.error?': '+st.error:'');
-      if(st.has_ip)t+=' · '+st.ip+' via '+(st.gateway||'no gateway');
-      t+=st.selected_uplink?' · current uplink':' · not the current uplink';
-      return t+(st.restart_required?' · saved changes apply after restart':'')+'. Link changes this boot: '+st.link_changes+'.';
+      if(!st.compiled)return UT('Not available in this firmware build (WiFi-only image).');
+      if(!st.enabled_at_boot)return UT('Off')+(st.restart_required?' · '+UT('saved settings apply after restart'):'')+'.';
+      var t=st.driver_started?UT(st.link_up?'Link up':'Link down'):UT('Driver not started')+(st.error?': '+usbMsg(st.error):'');
+      if(st.transport==='usb'&&st.usb){
+        t+=' · '+(st.usb.present?UT('USB device')+' '+st.usb.id:UT('No USB device'));
+        if(st.usb.network&&st.usb.network!=='none')t+=' ('+(USB_NET_NAMES[st.usb.network]||st.usb.network)+')';
+        if(st.driver_started&&st.error)t+=' — '+usbMsg(st.error);
+      }
+      if(st.has_ip)t+=' · '+st.ip+' '+UT('via')+' '+(st.gateway||UT('no gateway'));
+      t+=' · '+UT(st.selected_uplink?'current uplink':'not the current uplink');
+      return t+(st.restart_required?' · '+UT('saved changes apply after restart'):'')+'. '+UT('Link changes this boot:')+' '+st.link_changes+'.';
     }
+    function UT(s){return window.I18N?I18N.t(s):s;}
+    /* Firmware status messages are English; translate the known ones, keeping
+     * the numbers of the internal RAM message. */
+    function usbMsg(s){
+      if(!s)return s;
+      var pre=/^(USB not started|not started): /.exec(s);
+      if(pre)return UT(pre[1]+':')+' '+usbMsg(s.slice(pre[0].length));
+      var m=/^not enough internal RAM for this USB device: about (\d+) KB needed, (\d+) KB free, 40 KB kept for the rest of the gateway; turn off unused features$/.exec(s);
+      if(m)return UT('not enough internal RAM for this USB device: about {} KB needed, {} KB free, 40 KB kept for the rest of the gateway; turn off unused features').replace('{}',m[1]).replace('{}',m[2]);
+      return UT(s);
+    }
+    var USB_NET_NAMES={ecm:'CDC-ECM',ncm:'CDC-NCM',rndis:'RNDIS',unsupported:'unsupported'};
+    /* Shows the USB or the wired-pin fields of a card. */
+    function usbView(p){var usb=document.getElementById(p+'-transport').value==='usb';
+      document.querySelectorAll('.'+p+'-pins,.'+p+'-usb').forEach(function(el){el.hidden=el.classList.contains(p+'-usb')!==usb;});}
+    function ethTransportView(){usbView('eth');}
+    document.getElementById('eth-transport').addEventListener('change',ethTransportView);
     function loadEthernet(){
       s_eth_loaded=false;document.getElementById('eth-save').disabled=true;
       return apiFetch('/api/ethernet',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(d){
         if(!d||!d.config||!d.status||typeof d.config.enabled!=='boolean')throw new Error('Invalid Ethernet response');
         var c=d.config,st=d.status,set=function(id,v){var el=document.getElementById(id);if(el.type==='checkbox')el.checked=!!v;else el.value=v;};
-        set('eth-enabled',c.enabled);set('eth-pref',c.preference);set('eth-host',String(c.spi_host));set('eth-mhz',c.spi_mhz);
+        set('eth-enabled',c.enabled);set('eth-transport',c.transport==='usb'?'usb':'spi');ethTransportView();set('eth-pref',c.preference);set('eth-host',String(c.spi_host));set('eth-mhz',c.spi_mhz);
         set('eth-sclk',c.sclk);set('eth-mosi',c.mosi);set('eth-miso',c.miso);set('eth-cs',c.cs);set('eth-int',c.int);set('eth-rst',c.rst);
         set('eth-static',c.static_ip);set('eth-ip',c.ip);set('eth-mask',c.netmask);set('eth-gw',c.gateway);set('eth-dns',c.dns);
         document.getElementById('eth-status').textContent=ethStatusText(st);
         var badge=document.getElementById('eth-badge');
-        badge.textContent=!st.compiled?'Not compiled':!st.enabled_at_boot?'Off':st.has_ip?'Connected':st.driver_started?'No link':'Error';
+        badge.textContent=UT(!st.compiled?'Not compiled':!st.enabled_at_boot?'Off':st.has_ip?'Connected':st.driver_started?'No link':'Error');
         badge.className='badge '+(st.has_ip?'badge-success':st.enabled_at_boot&&st.compiled?'badge-warning':'badge-neutral');
         s_eth_loaded=st.compiled;
       }).catch(function(e){document.getElementById('eth-status').textContent='Ethernet settings unavailable: '+e.message;});
     }
-    ETH_FIELDS.forEach(function(id){document.getElementById(id).addEventListener(id==='eth-enabled'||id==='eth-static'||id==='eth-pref'||id==='eth-host'?'change':'input',function(){document.getElementById('eth-save').disabled=!s_eth_loaded;});});
+    ETH_FIELDS.forEach(function(id){document.getElementById(id).addEventListener(id==='eth-enabled'||id==='eth-static'||id==='eth-pref'||id==='eth-host'||id==='eth-transport'?'change':'input',function(){document.getElementById('eth-save').disabled=!s_eth_loaded;});});
     document.getElementById('eth-reload').addEventListener('click',loadEthernet);
     document.getElementById('eth-save').addEventListener('click',async function(){
       var num=function(id){return Number(document.getElementById(id).value);},val=function(id){return document.getElementById(id).value.trim();};
-      var body={enabled:document.getElementById('eth-enabled').checked,chip:'w5500',preference:val('eth-pref'),spi_host:num('eth-host'),spi_mhz:num('eth-mhz'),
+      var body={enabled:document.getElementById('eth-enabled').checked,transport:val('eth-transport'),chip:'w5500',preference:val('eth-pref'),spi_host:num('eth-host'),spi_mhz:num('eth-mhz'),
         sclk:num('eth-sclk'),mosi:num('eth-mosi'),miso:num('eth-miso'),cs:num('eth-cs'),int:num('eth-int'),rst:num('eth-rst'),
         static_ip:document.getElementById('eth-static').checked,ip:val('eth-ip'),netmask:val('eth-mask'),gateway:val('eth-gw'),dns:val('eth-dns')};
       var btn=this;btn.disabled=true;
@@ -7292,20 +7421,31 @@
     /* Optional cellular uplink. The SIM PIN and APN password are write-only:
      * an empty field keeps the saved value, "Clear" removes it. */
     var CELL_FIELDS=['cell-ack','cell-enabled','cell-roaming','cell-mode','cell-apn','cell-user','cell-password','cell-clear-password','cell-pin','cell-clear-pin',
-      'cell-uart','cell-baud','cell-tx','cell-rx','cell-rts','cell-cts','cell-pwrkey','cell-pwrkey-high'];
+      'cell-uart','cell-baud','cell-tx','cell-rx','cell-rts','cell-cts','cell-pwrkey','cell-pwrkey-high','cell-transport','cell-usb-mode','cell-usb-iface'];
     var CELL_STATES={off:'Off',powering:'Starting the modem',sync:'Talking to the modem',sim:'Checking the SIM',registering:'Looking for the mobile network',
       dialing:'Starting the data call',connected:'Connected',backoff:'Waiting before the next attempt',stopped:'Stopped'};
     var s_cell_loaded=false;
+    var CELL_USB_HOW={known:'known modem',acm:'CDC-ACM',probe:'found by AT probe',manual:'chosen manually'};
+    function cellTransportView(){usbView('cell');}
+    document.getElementById('cell-transport').addEventListener('change',cellTransportView);
+    for(var ui=0;ui<16;ui++){var uo=document.createElement('option');uo.textContent=String(ui);document.getElementById('cell-usb-iface').appendChild(uo);}
     function cellStatusText(st,c){
-      if(!st.enabled_at_boot)return c.enabled?'Enabled: starts after a restart.':'Off.';
-      var parts=[CELL_STATES[st.state]||st.state];
+      if(!st.enabled_at_boot)return UT(c.enabled?'Enabled: starts after a restart.':'Off.');
+      var parts=[CELL_STATES[st.state]?UT(CELL_STATES[st.state]):st.state];
       if(st.operator)parts.push(st.operator);
       if(typeof st.rssi_dbm==='number')parts.push(st.rssi_dbm+' dBm');
       if(st.ip)parts.push('IP '+st.ip);
-      if(st.selected_uplink)parts.push('carrying Internet traffic');
+      if(st.selected_uplink)parts.push(UT('carrying Internet traffic'));
       if(st.bytes_in||st.bytes_out)parts.push('data '+formatTraffic(st.bytes_in,st.bytes_out));
       if(st.model)parts.push(st.model);
-      return parts.join(' · ')+(st.error?' — '+st.error:'')+(st.restart_required?' · restart to apply the saved settings':'');
+      if(st.transport==='usb'&&st.usb){
+        var u=st.usb;
+        parts.push(u.present?UT('USB device')+' '+u.id:UT('No USB device'));
+        if(u.mode==='serial'&&u.interface>=0)parts.push(UT('serial interface')+' '+u.interface+' ('+(CELL_USB_HOW[u.chosen_by]?UT(CELL_USB_HOW[u.chosen_by]):u.chosen_by)+')');
+        else if(u.mode==='network')parts.push(UT('USB network')+' '+(USB_NET_NAMES[u.network]||u.network));
+        else if(u.mode==='switching')parts.push(UT('switching the stick to modem mode'));
+      }
+      return parts.join(' · ')+(st.error?' — '+usbMsg(st.error):'')+(st.restart_required?' · '+UT('restart to apply the saved settings'):'');
     }
     function loadCellular(){
       s_cell_loaded=false;document.getElementById('cell-save').disabled=true;
@@ -7318,9 +7458,13 @@
         document.getElementById('cell-pin').placeholder=c.has_pin?'Saved — leave empty to keep':'Optional';
         set('cell-uart',String(c.uart));set('cell-baud',String(c.baud));set('cell-tx',c.tx);set('cell-rx',c.rx);set('cell-rts',c.rts);set('cell-cts',c.cts);
         set('cell-pwrkey',c.pwrkey);set('cell-pwrkey-high',c.pwrkey_active_high);
+        set('cell-transport',c.transport==='usb'?'usb':'uart');set('cell-usb-mode',c.usb_mode||'auto');
+        set('cell-usb-iface',String(typeof c.usb_interface==='number'?c.usb_interface:-1));cellTransportView();
         document.getElementById('cell-status').textContent=cellStatusText(st,c);
+        cellLimitView(d.data_limit);
         var badge=document.getElementById('cell-badge');
-        badge.textContent=st.compiled===false?'Not compiled':!st.enabled_at_boot?'Off':st.state==='connected'?'Connected':st.state==='stopped'?'Stopped':'Connecting…';
+        /* Waiting: between attempts, for example while no USB device is plugged in. */
+        badge.textContent=UT(st.compiled===false?'Not compiled':!st.enabled_at_boot?'Off':st.state==='connected'?'Connected':st.state==='stopped'?'Stopped':st.state==='backoff'?'Waiting':'Connecting…');
         badge.className='badge '+(st.state==='connected'?'badge-success':st.state==='stopped'?'badge-danger':st.enabled_at_boot?'badge-warning':'badge-neutral');
         s_cell_loaded=true;
       }).catch(function(e){document.getElementById('cell-status').textContent='Cellular settings unavailable: '+e.message;});
@@ -7332,7 +7476,7 @@
       var on=function(id){return document.getElementById(id).checked;};
       var body={enabled:on('cell-enabled'),data_ack:on('cell-ack'),roaming:on('cell-roaming'),mode:val('cell-mode'),apn:val('cell-apn'),user:val('cell-user'),
         uart:num('cell-uart'),baud:num('cell-baud'),tx:num('cell-tx'),rx:num('cell-rx'),rts:num('cell-rts'),cts:num('cell-cts'),pwrkey:num('cell-pwrkey'),
-        pwrkey_active_high:on('cell-pwrkey-high')};
+        pwrkey_active_high:on('cell-pwrkey-high'),transport:val('cell-transport'),usb_mode:val('cell-usb-mode'),usb_interface:num('cell-usb-iface')};
       if(val('cell-password'))body.password=document.getElementById('cell-password').value;
       if(val('cell-pin'))body.pin=val('cell-pin');
       if(on('cell-clear-password'))body.clear_password=true;
@@ -7344,6 +7488,36 @@
         showToast('success','Cellular settings saved','Restart the device to apply them.',5000);await loadCellular();}
       catch(e){document.getElementById('cell-status').textContent='Not saved: '+e.message;btn.disabled=false;}
     });
+    /* Monthly mobile data limit: applies at once, separate from the modem settings. */
+    function mbText(bytes){var mb=bytes/1048576;return (mb<10?mb.toFixed(1):String(Math.round(mb)))+' MB';}
+    function cellLimitView(q){
+      var st=document.getElementById('cell-limit-status');
+      if(!q){st.textContent=UT('Not available in this firmware.');return;}
+      document.getElementById('cell-limit-mb').value=q.limit_mb;document.getElementById('cell-limit-warn').value=q.warn_percent;
+      document.getElementById('cell-limit-day').value=q.reset_day;document.getElementById('cell-limit-pause').checked=!!q.pause;
+      document.getElementById('cell-limit-save').disabled=true;
+      document.getElementById('cell-limit-reset').hidden=!q.limit_mb;
+      if(!q.limit_mb){st.textContent=UT('Off: mobile data is not counted.');return;}
+      var pct=Math.min(100,Math.round(q.used_bytes*100/(q.limit_mb*1048576)));
+      var parts=[UT('Used this month:')+' '+mbText(q.used_bytes)+' / '+q.limit_mb+' MB ('+pct+'%)'];
+      if(q.period_start)parts.push(UT('since')+' '+q.period_start);
+      if(!q.clock)parts.push(UT('the clock is not set yet: the month is counted from the last known date'));
+      if(q.paused)parts.push(UT('limit reached: mobile data paused until the next month'));
+      st.textContent=parts.join(' · ');
+    }
+    ['cell-limit-mb','cell-limit-warn','cell-limit-day','cell-limit-pause'].forEach(function(id){var el=document.getElementById(id);
+      el.addEventListener(el.type==='checkbox'?'change':'input',function(){document.getElementById('cell-limit-save').disabled=false;});});
+    async function cellLimitPost(reset){
+      var num=function(id){return Number(document.getElementById(id).value);};
+      var body={data_limit:{limit_mb:num('cell-limit-mb'),warn_percent:num('cell-limit-warn'),reset_day:num('cell-limit-day'),pause:document.getElementById('cell-limit-pause').checked}};
+      if(reset)body.data_limit.reset_usage=true;
+      try{var r=await apiFetch('/api/cellular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var d=await r.json();
+        if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
+        showToast('success',reset?'Mobile data counter reset':'Data limit saved','',4000);await loadCellular();}
+      catch(e){document.getElementById('cell-limit-status').textContent='Not saved: '+e.message;}
+    }
+    document.getElementById('cell-limit-save').addEventListener('click',function(){cellLimitPost(false);});
+    document.getElementById('cell-limit-reset').addEventListener('click',function(){if(confirm(UT('Reset the mobile data counter of this month to zero?')))cellLimitPost(true);});
     /* 2.x -> 3.x layout migration: shown only while the 2.x table is in use. */
     var MIG_STATES={idle:'Ready',copying_self:'Preparing (copying this firmware into the first slot; the gateway restarts once)',checking:'Looking for the 3.0 release',
       downloading:'Downloading and checking 3.0',verifying:'Verifying the written 3.0 image',writing_boot:'Writing the boot loader and partition table: keep the power on',
@@ -7754,8 +7928,11 @@
       });
       /* Dependent fields follow their switches, like the ntfy card. */
       function tgCommandStates() {
-        setFeatureDependentState('nt-tg-cmd-settings', el('nt-tg-cmd').value !== 'off');
-        setFeatureDependentState('nt-tg-cmd-details-setting', el('nt-tg-cmd-info').checked);
+        var on = el('nt-tg-cmd').value !== 'off';
+        setFeatureDependentState('nt-tg-cmd-settings', on);
+        el('nt-tg-cmd').closest('.cmd-section').querySelectorAll('.cmd-option').forEach(function (o) {
+          o.classList.add('feature-inline-dependent'); o.classList.toggle('feature-disabled', !on); });
+        setFeatureDependentState('nt-tg-cmd-details-setting', on && el('nt-tg-cmd-info').checked);
       }
       ['nt-tg-cmd', 'nt-tg-cmd-info'].forEach(function (id) { el(id).addEventListener('change', tgCommandStates); });
       el('nt-tg-save').addEventListener('click', function () {
@@ -8301,6 +8478,7 @@
       finally{if(sequence===s_ops_sequence){s_ops_loading=false;opsControls();}}
     }
     document.getElementById('ops-refresh').onclick=loadOperations;
+    document.getElementById('ops-health-refresh').onclick=loadOperations;
     document.getElementById('ops-cancel').onclick=function(){opsAction({action:'cancel'});};
     async function readOpsSettings() {
       var response=await fetch('/api/operations',{cache:'no-store'});
@@ -8365,11 +8543,8 @@
         finally {s_ops_busy=false;opsControls();}
       };
     });
-    document.getElementById('temporary-access').addEventListener('toggle',function(){
-      if(this.open&&!s_ops_lease_loaded) loadExpiryNotifications();
-    });
-    document.getElementById('leases-refresh').addEventListener('click',function(){
-      if(!s_ops_busy) loadExpiryNotifications();
+    document.querySelector('#temporary-access').closest('details').addEventListener('toggle',function(){
+      if(this.open&&!s_ops_lease_loaded&&!s_ops_busy) loadExpiryNotifications();
     });
     var savedTcpDirty=false, savedTcpReady=false, savedTcpSaving=false;
     function savedTcpControls() {
@@ -8699,6 +8874,8 @@
       apiFetch('/api/dhcp/leases')
         .then(function (r) { return r.json(); })
         .then(function (d) {
+          s_dhcp_traffic = !!d.traffic_counted;
+          document.getElementById('dhcp-traffic-on').checked = s_dhcp_traffic;
           renderDhcpClients (d.clients || []);
           renderDhcpLeases  (d.leases  || []);
         }).catch(function () {
@@ -8709,6 +8886,14 @@
         });
     }
 
+    var s_dhcp_traffic = false;
+    document.getElementById('dhcp-traffic-on').addEventListener('change', function () {
+      var el = this, on = el.checked;
+      apiFetch('/api/system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ap_client_traffic: on})})
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function () { loadDhcpLeases(); })
+        .catch(function (e) { el.checked = !on; showToast('error', 'Not saved', e.message, 5000); });
+    });
     function renderDhcpClients(clients) {
       var body = document.getElementById('dhcp-clients-body');
       if (!clients.length) {
@@ -8716,7 +8901,7 @@
         return;
       }
       var html = '<div class="table-wrap"><table class="table"><thead><tr>'
-               + '<th>MAC</th><th>IP</th><th>Name</th><th>Hostname</th><th>RSSI</th><th></th>'
+               + '<th>MAC</th><th>IP</th><th>Name</th><th>Hostname</th><th>RSSI</th>' + (s_dhcp_traffic ? '<th>' + escapeHtml(window.I18N ? I18N.t('Traffic') : 'Traffic') + '</th>' : '') + '<th></th>'
                + '</tr></thead><tbody>';
       clients.forEach(function (c) {
         var name = c.name || '';
@@ -8729,6 +8914,7 @@
               + '<td>' + escapeHtml(name) + resBadge + '</td>'
               + '<td>' + escapeHtml(c.hostname || '') + '</td>'
               + '<td class="mono">' + rssi + '</td>'
+              + (s_dhcp_traffic ? '<td class="mono">' + (typeof c.sent_bytes === 'number' ? '↑' + formatBytes(c.sent_bytes) + ' ↓' + formatBytes(c.received_bytes) : '—') + '</td>' : '')
               + '<td style="text-align:right; white-space:nowrap;">'
               + (canReserve
                   ? '<button class="btn btn-secondary btn-sm dhcp-reserve-from" data-mac="' + escapeHtml(c.mac) + '" data-ip="' + escapeHtml(c.ip) + '" data-name="' + escapeHtml(c.hostname || '') + '" type="button">Reserve</button> '
@@ -9171,13 +9357,68 @@
       var data=s_tf_import;resetTfImport();s_tf_loaded=false;++s_tf_epoch;document.getElementById('tf-save').disabled=true;tfMutation(true);tfEditingDisabled(true);var message=document.getElementById('tf-import-preview');
       try{var response=await apiFetch('/api/tailnet-forward/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({format:data.format,rules:data.rules,action:'apply',expected_guard:data.expected_guard,confirm_replace:true})});var result=await response.json();
         if(!response.ok||!validTfTransfer(result)||result.applied!==true)throw new Error(result.error||'Import result unavailable; reload before retrying');
-        tfMutation(false);await loadTailnetForward();message.textContent='Imported saved rules are disabled. Review individual rules and timer bindings before enabling.';
+        tfMutation(false);await loadTailnetForward();message.textContent=UT('Imported rules are switched off. Review each rule before switching it on.');
       }catch(e){message.textContent=e.message+' — reload and preview again; no automatic retry.';}
       finally{tfMutation(false);tfEditingDisabled(false);}
     };
     function tfConfigRules(rules){return rules.map(function(r){return {name:r.name,enabled:r.enabled,protocol:r.protocol,listen_port:r.listen_port,tailnet_destination:r.tailnet_destination,destination_port:r.destination_port,allowed_source_subnet:r.allowed_source_subnet};});}
     function tfEditingDisabled(on){document.querySelectorAll('#tf-list input,#tf-list select,#tf-list .tf-del').forEach(function(el){el.disabled=on;});}
-    function snapshotTf(){document.querySelectorAll('.tf-row').forEach(function(row){var r=s_tf_list[+row.dataset.idx];if(!r)return;r.name=row.querySelector('.tf-name').value.trim();r.enabled=row.querySelector('.tf-enabled').checked;r.protocol=row.querySelector('.tf-proto').value;r.listen_port=Number(row.querySelector('.tf-listen').value);r.tailnet_destination=row.querySelector('.tf-dest').value.trim();r.destination_port=Number(row.querySelector('.tf-dport').value);r.allowed_source_subnet=row.querySelector('.tf-cidr').value.trim();});}
+    /* "192.168.1.50" means that one device. */
+    function tfSource(v){v=(v||'').trim();return /^\d+\.\d+\.\d+\.\d+$/.test(v)?v+'/32':v;}
+    function snapshotTf(){document.querySelectorAll('.tf-row').forEach(function(row){var r=s_tf_list[+row.dataset.idx];if(!r)return;r.name=row.querySelector('.tf-name').value.trim();r.enabled=row.querySelector('.tf-enabled').checked;r.protocol=row.querySelector('.tf-proto').value;r.listen_port=Number(row.querySelector('.tf-listen').value);r.tailnet_destination=row.querySelector('.tf-dest').value.trim();r.destination_port=Number(row.querySelector('.tf-dport').value);r.allowed_source_subnet=tfSource(row.querySelector('.tf-cidr').value);
+      var t=row.querySelector('.tf-time');if(t)r._time=t.value;var d=row.querySelector('.tf-del-exp');r._delete=!!(d&&d.checked);});}
+    /* Time limits. A rule without one forwards while it is switched on. With
+     * one, it forwards until the time is up, then it stays closed (or is
+     * deleted, if chosen). The choice is confirmed for every rule on Save:
+     * the gateway keeps an edited rule closed until its limit is confirmed,
+     * so a changed rule never silently loses or gains a limit. */
+    var s_tf_leases=null;
+    var TF_TIMES=[['0','No time limit'],['900','15 minutes'],['3600','1 hour'],['28800','8 hours'],['86400','1 day'],['604800','7 days']];
+    function tfLease(r){var l=s_tf_leases&&Number.isInteger(r.index)?s_tf_leases[r.index]:null;return l&&l.rule_token===r.rule_token?l:null;}
+    function tfLeft(sec){return sec>=86400?Math.round(sec/8640)/10+' d':sec>=3600?Math.round(sec/360)/10+' h':Math.max(1,Math.ceil(sec/60))+' min';}
+    function tfAccess(r){
+      if(r._new)return {kind:'new',text:UT('Choose how long this rule stays open.')};
+      if(!s_tf_leases)return {kind:'unknown',text:UT('Time limit status unavailable.')};
+      var l=tfLease(r);
+      if(!l||l.status==='permanent')return {kind:'always',text:UT('No time limit: forwards while switched on.')};
+      if(l.status==='active')return {kind:'timed',text:UT('Time limit')+': '+UT('closes in')+' '+tfLeft(l.remaining_s)+(l.delete_on_expiry?' · '+UT('then the rule is deleted'):'')+'.'};
+      if(l.status==='expired')return {kind:'closed',text:UT('Time is up: not forwarding. Choose a new time limit and Save to open it again.')};
+      if(l.status==='binding-unconfirmed')return {kind:'closed',text:UT('Not forwarding: choose how long it stays open, then Save.')};
+      if(l.status==='clock-unavailable')return {kind:'closed',text:UT('Waiting for the clock: the time limit starts once the time is known.')};
+      return {kind:'unknown',text:UT('Time limit status unavailable.')};
+    }
+    function tfAccessHtml(r,i){
+      var a=tfAccess(r),cur=r._time!=null?r._time:(a.kind==='timed'?'keep':a.kind==='closed'?'':'0');
+      var opts=(a.kind==='timed'?[['keep','Keep the current time limit']]:[]).concat(a.kind==='closed'?[['','Choose…']]:[]).concat(TF_TIMES);
+      var timed=cur!==''&&cur!=='0'&&cur!=='keep';
+      return '<div class="tf-access"><span class="tf-access-text'+(a.kind==='closed'&&r.enabled?' tf-access-warn':'')+'">'+escapeHtml(a.text)+'</span>'
+        +'<label for="tf-time-'+i+'">'+escapeHtml(UT('Stays open'))+'</label><select class="select tf-time" id="tf-time-'+i+'">'
+        +opts.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+escapeHtml(UT(o[1]))+'</option>';}).join('')+'</select>'
+        +'<label class="tf-del-exp-label"'+(timed?'':' hidden')+'><input type="checkbox" class="tf-del-exp"'+(r._delete?' checked':'')+'> '+escapeHtml(UT('Delete the rule when the time is up'))+'</label></div>';
+    }
+    /* After Save: confirm each rule's time limit (index/token of the saved
+     * rule, choice from the draft in the same position). */
+    function tfSetLease(r,seconds,remove){
+      return apiFetch('/api/operations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'lease',index:r.index,rule_token:r.rule_token,seconds:seconds,permanent:seconds===0,delete_on_expiry:seconds>0&&!!remove})})
+        .then(function(resp){return resp.json().catch(function(){return {};}).then(function(j){if(!resp.ok||!j.ok)throw new Error(j.error||('HTTP '+resp.status));});});
+    }
+    async function tfApplyAccess(drafts){
+      var problems=[];
+      for(var i=0;i<s_tf_list.length&&i<drafts.length;i++){
+        var r=s_tf_list[i],d=drafts[i],l=tfLease(r);if(!l)continue;
+        var want=d._time,pending=l.status==='binding-unconfirmed',seconds;
+        if(want==null||want==='keep'||want===''){
+          if(!pending)continue;
+          var prev=d._lease;   /* an edited rule keeps what it had */
+          if(prev&&prev.status==='active'&&prev.remaining_s>=60)seconds=Math.min(604800,prev.remaining_s);
+          else if(prev&&prev.status==='expired')continue;
+          else seconds=0;
+        }else seconds=Number(want);
+        if(seconds===0&&l.status==='permanent')continue;
+        try{await tfSetLease(r,seconds,d._delete);}catch(e){problems.push((r.name||('#'+(i+1)))+': '+e.message);}
+      }
+      return problems;
+    }
     function tfDirty(){
       s_tf_dirty=true;
       document.getElementById('tf-save').disabled=!s_tf_loaded;
@@ -9248,25 +9489,28 @@
       badge.className='badge '+(s_tf_list.length?'badge-neutral':'badge-neutral');
       if(!s_tf_list.length){box.innerHTML='<div style="padding:1rem;color:var(--text-muted);border:1px dashed var(--border);border-radius:var(--radius-md);">No LAN → Tailnet rules. New rules start disabled.</div>';return;}
       box.innerHTML=s_tf_list.map(function(r,i){
-        var state=!r.enabled?'Disabled':(r.diagnostic?r.diagnostic.summary:(r.installed?'Mapping installed; service not tested':'Waiting for runtime status'));
-        var tone=!r.enabled?'badge-neutral':r.error?'badge-danger':r.installed?'badge-success':'badge-warning';
+        var closed=r.enabled&&tfAccess(r).kind==='closed';
+        var state=!r.enabled?'Switched off':closed?UT('Not forwarding: time limit'):(r.diagnostic?r.diagnostic.summary:(r.installed?'Mapping installed; service not tested':'Waiting for runtime status'));
+        var tone=!r.enabled?'badge-neutral':closed?'badge-warning':r.error?'badge-danger':r.installed?'badge-success':'badge-warning';
         var open=s_tf_open[i]||r._new===true;
         return '<div class="tf-row" data-idx="'+i+'">'
           +'<div class="tf-sum"><div><div class="tf-sum-name">'+escapeHtml(r.name||'Unnamed rule')+'</div><span class="badge '+tone+' tf-runtime-badge">'+escapeHtml(state)+'</span></div>'
           +'<div class="tf-sum-route">'+tfRouteHtml(r)+'</div>'
-          +'<div class="tf-sum-actions"><label class="feature-switch"><input type="checkbox" class="tf-enabled" '+(r.enabled?'checked':'')+'><span class="feature-switch-track" aria-hidden="true"></span><span>Enabled after Save</span></label>'
+          +'<div class="tf-sum-actions"><label class="feature-switch"><input type="checkbox" class="tf-enabled" '+(r.enabled?'checked':'')+'><span class="feature-switch-track" aria-hidden="true"></span><span>On</span></label>'
           +'<button class="btn btn-secondary btn-sm tf-edit" type="button" aria-expanded="'+open+'" aria-controls="tf-editor-'+i+'">'+(open?'Close editor':'Edit')+'</button></div></div>'
+          +tfAccessHtml(r,i)
           +'<div class="tf-editor" id="tf-editor-'+i+'"'+(open?'':' hidden')+'>'
           +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-name-'+i+'">Name</label><input class="input tf-name" id="tf-name-'+i+'" maxlength="31" value="'+escapeHtml(r.name||'')+'" placeholder="Remote MQTT"></div><div class="form-group"><label class="form-label" for="tf-proto-'+i+'">Protocol</label><select class="select tf-proto" id="tf-proto-'+i+'"><option value="tcp" '+(r.protocol!=='udp'?'selected':'')+'>TCP</option><option value="udp" '+(r.protocol==='udp'?'selected':'')+'>UDP</option></select></div></div>'
-          +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-dest-'+i+'">Tailnet destination</label><input class="input mono tf-dest" id="tf-dest-'+i+'" maxlength="95" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.tailnet_destination||'')+'" placeholder="100.64.0.2 or broker.tailnet.ts.net"><span class="form-hint">Must resolve to 100.64.0.0/10.</span></div><div class="form-group"><label class="form-label" for="tf-dport-'+i+'">Destination port</label><input class="input mono tf-dport" id="tf-dport-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.destination_port||'')+'" placeholder="1883"></div></div>'
-          +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-listen-'+i+'">Listen port on this gateway</label><input class="input mono tf-listen" id="tf-listen-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.listen_port||'')+'" placeholder="18830"></div>'
-          +'<div class="form-group"><label class="form-label" for="tf-cidr-'+i+'">Allowed source subnet</label><input class="input mono tf-cidr" id="tf-cidr-'+i+'" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.allowed_source_subnet||'')+'" placeholder="192.168.50.42/32"><span class="form-hint">Prefer a single client (/32). This is an address filter, not client identity.</span></div></div>'
+          +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-dest-'+i+'">Tailnet service address</label><input class="input mono tf-dest" id="tf-dest-'+i+'" maxlength="95" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.tailnet_destination||'')+'" placeholder="100.64.0.2 or broker.tailnet.ts.net"><span class="form-hint">A tailnet IP (100.x.y.z) or a MagicDNS name.</span></div><div class="form-group"><label class="form-label" for="tf-dport-'+i+'">Service port</label><input class="input mono tf-dport" id="tf-dport-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.destination_port||'')+'" placeholder="1883"></div></div>'
+          +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-listen-'+i+'">Port on this gateway</label><input class="input mono tf-listen" id="tf-listen-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.listen_port||'')+'" placeholder="18830"></div>'
+          +'<div class="form-group"><label class="form-label" for="tf-cidr-'+i+'">Allowed LAN devices</label><input class="input mono tf-cidr" id="tf-cidr-'+i+'" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.allowed_source_subnet||'')+'" placeholder="192.168.1.50"><span class="form-hint">One device (192.168.1.50) or a whole subnet (192.168.1.0/24). Prefer one device.</span></div></div>'
           +'<div class="btn-row"><button class="btn btn-ghost btn-sm tf-del" type="button">Delete rule</button><span class="form-hint">Changes apply when you press Save below.</span></div></div>'
           +'<div class="tf-evidence">'+tfCheckHtml(r)+tfActivityHtml(r)+tfDiagnosticHtml(r)+'</div></div>';
       }).join('');
       document.querySelectorAll('.tf-row').forEach(function(row){
         var idx=+row.dataset.idx;
         row.querySelectorAll('input,select').forEach(function(el){el.addEventListener(el.type==='checkbox'||el.tagName==='SELECT'?'change':'input',function(){tfDirty();tfSummary(row);});});
+        var time=row.querySelector('.tf-time');time.addEventListener('change',function(){var t=this.value;row.querySelector('.tf-del-exp-label').hidden=(t===''||t==='0'||t==='keep');});
         row.querySelector('.tf-del').addEventListener('click',function(){if(!window.confirm('Delete this rule? It is removed when you press Save.'))return;snapshotTf();s_tf_list.splice(idx,1);s_tf_open={};renderTf();tfDirty();});
         row.querySelector('.tf-edit').addEventListener('click',function(){var ed=row.querySelector('.tf-editor'),show=ed.hidden;ed.hidden=!show;s_tf_open[idx]=show;this.setAttribute('aria-expanded',String(show));this.textContent=show?'Close editor':'Edit';if(show)ed.querySelector('.tf-name').focus();});
         var test=row.querySelector('.tf-test');if(test)test.addEventListener('click',function(){tfTestDestination(idx);});
@@ -9280,15 +9524,20 @@
       s_tf_loaded=false;document.getElementById('tf-add').disabled=true;document.getElementById('tf-save').disabled=true;
       tfEditingDisabled(true);
       document.getElementById('tf-context').textContent='Loading saved configuration; no service probe is running…';
-      return apiFetch('/api/tailnet-forward').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(d){
+      var leases=apiFetch('/api/service-leases',{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+      return apiFetch('/api/tailnet-forward').then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(d){return leases.then(function(l){return [d,l];});}).then(function(both){
+        var d=both[0],l=both[1];
         if(epoch!==s_tf_epoch)return;
+        s_tf_leases=null;
+        if(Array.isArray(l)&&l.every(function(x){return x&&Number.isInteger(x.index)&&Number.isInteger(x.rule_token)&&typeof x.status==='string';})){
+          s_tf_leases={};l.forEach(function(x){s_tf_leases[x.index]=x;});}
         if(!d||!Array.isArray(d.rules)||!Number.isInteger(d.max)||d.max<1||d.max>8||d.rules.length>d.max
           ||d.rules.some(function(r){return !r||typeof r.enabled!=='boolean'||typeof r.installed!=='boolean'||typeof r.tailnet_destination!=='string'
             ||typeof r.allowed_source_subnet!=='string'||!Number.isInteger(r.listen_port)||!Number.isInteger(r.destination_port)
             ||(r.diagnostic&&(typeof r.diagnostic.summary!=='string'||typeof r.diagnostic.next_step!=='string'));}))throw new Error('Invalid forwarding status');
-        s_tf_list=d.rules.slice();s_tf_max=d.max;s_tf_context=d;s_tf_dirty=false;s_tf_loaded=true;renderTf();
+        s_tf_list=d.rules.slice();s_tf_list.forEach(function(r){r._lease=tfLease(r);});s_tf_max=d.max;s_tf_context=d;s_tf_dirty=false;s_tf_loaded=true;renderTf();
         document.getElementById('tf-add').disabled=false;
-        document.getElementById('tf-context').textContent='Saved configuration · passive snapshot only. Expand a rule for evidence, exposure and the next step. Reload to refresh.';
+        document.getElementById('tf-context').textContent='Saved configuration. Open "Explain status" on a rule for details. Reload to refresh.';
       }).catch(function(){
         if(epoch!==s_tf_epoch)return;
         var badge=document.getElementById('tf-badge');badge.textContent='Unavailable';badge.className='badge badge-warning';
@@ -9316,9 +9565,9 @@
       return '';
     }
     function tfTemplateHint(){var t=TF_TEMPLATES[document.getElementById('tf-template').value];
-      document.getElementById('tf-template-hint').textContent=t?t[4]:'Fill every field yourself. New rules always start disabled.';}
+      document.getElementById('tf-template-hint').textContent=t?t[4]:'';}
     document.getElementById('tf-template').addEventListener('change',tfTemplateHint);tfTemplateHint();
-    document.getElementById('tf-add').addEventListener('click',function(){if(!s_tf_loaded||s_tf_mutating)return;if(s_tf_list.length>=s_tf_max){showToast('error','List full','Maximum '+s_tf_max+' rules.',4000);return;}snapshotTf();var t=TF_TEMPLATES[document.getElementById('tf-template').value];s_tf_list.push({name:t?t[0]:'',enabled:false,protocol:t?t[1]:'tcp',listen_port:t?tfFreeListenPort(t[1],t[2]):'',tailnet_destination:'',destination_port:t?t[3]:'',allowed_source_subnet:'',_new:true});resetTfImport();renderTf();tfDirty();});
+    document.getElementById('tf-add').addEventListener('click',function(){if(!s_tf_loaded||s_tf_mutating)return;if(s_tf_list.length>=s_tf_max){showToast('error','List full','Maximum '+s_tf_max+' rules.',4000);return;}snapshotTf();var t=TF_TEMPLATES[document.getElementById('tf-template').value];s_tf_list.push({name:t?t[0]:'',enabled:false,protocol:t?t[1]:'tcp',listen_port:t?tfFreeListenPort(t[1],t[2]):'',tailnet_destination:'',destination_port:t?t[3]:'',allowed_source_subnet:'',_new:true,_time:'0'});resetTfImport();renderTf();tfDirty();});
     document.getElementById('tf-save').addEventListener('click',function(){
       if(!s_tf_loaded||s_tf_mutating)return;
       snapshotTf();var seen={};
@@ -9326,17 +9575,23 @@
         var r=s_tf_list[i],lp=+r.listen_port,dp=+r.destination_port,key=r.protocol+':'+lp;
         if(!r.tailnet_destination||!/^\d+\.\d+\.\d+\.\d+\/([0-9]|[12][0-9]|3[0-2])$/.test((r.allowed_source_subnet||'').trim())
           ||!Number.isInteger(lp)||!Number.isInteger(dp)||lp<1||lp>65535||dp<1||dp>65535){
-          showToast('error','Invalid rule','Check destination, ports and source CIDR in row #'+(i+1)+'.',5000);return;
+          showToast('error','Invalid rule',UT('Check the service address, the ports and the allowed LAN devices in rule')+' '+(i+1)+'.',5000);return;
         }
         if(r.enabled&&seen[key]){showToast('error','Port conflict','Duplicate '+key+'.',5000);return;}
         if(r.enabled)seen[key]=1;
       }
-      var btn=this;btn.disabled=true;btn.textContent='Saving…';resetTfImport();s_tf_loaded=false;++s_tf_epoch;tfMutation(true);tfEditingDisabled(true);
+      var btn=this,drafts=s_tf_list.slice();btn.disabled=true;btn.textContent='Saving…';resetTfImport();s_tf_loaded=false;++s_tf_epoch;tfMutation(true);tfEditingDisabled(true);
       apiFetch('/api/tailnet-forward',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules:tfConfigRules(s_tf_list)})})
         .then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error(t||('HTTP '+r.status));});return r.json();})
         .then(function(result){
           if(!result||result.ok!==true)throw new Error('The device did not confirm saving the rules.');
-          btn.textContent='Save';showToast('success','Saved','LAN → Tailnet rules updated.',4000);tfMutation(false);return loadTailnetForward();
+          tfMutation(false);return loadTailnetForward().then(function(){
+            if(!s_tf_loaded)throw new Error(UT('Saved, but the time limits could not be confirmed: reload and Save again.'));
+            return tfApplyAccess(drafts);}).then(function(problems){
+            btn.textContent='Save';
+            if(problems.length){showToast('error',UT('Time limit not applied'),problems.join(' · ')+' '+UT('Those rules stay closed until a time limit is applied.'),8000);}
+            else showToast('success','Saved','LAN → Tailnet rules updated.',4000);
+            tfMutation(false);return loadTailnetForward();});
         }).catch(function(e){btn.textContent='Save';showToast('error','Save not confirmed',e.message+' Reload before another save; drafts remain visible.',6000);})
         .finally(function(){tfEditingDisabled(false);tfMutation(false);});
     });
@@ -9344,6 +9599,60 @@
     // =====================================================================
     // TAILSCALE PAGE
     // =====================================================================
+    /* Registration problems, own key expiry, Tailnet Lock and the tunnel
+     * slots, from /api/tailscale runtime. Whole sentences (translated). */
+    var TS_REG_TEXT = {
+      key_retry: 'The auth key was refused (used, expired or revoked). The gateway is trying its existing registration.',
+      need_new_key: 'This gateway is not authorized and its auth key was refused (a single-use key can be used only once). Generate a new auth key in the Tailscale admin console and enter it here.',
+      need_key: 'This gateway is not authorized. Enter an auth key from the Tailscale admin console.',
+      approval: 'Registered, waiting for approval: approve this device in the Tailscale admin console (Machines).',
+      key_expired: 'The node key of this gateway expired. Enter a valid auth key: the key is renewed at the next start, for the same device with its settings.',
+      refused: 'The control server refused the registration. Check the auth key and the control server address.'
+    };
+    function renderTsRegistration(r) {
+      var notice = document.getElementById('ts-reg-notice');
+      if (!notice) return;
+      var text = TS_REG_TEXT[r.reg_state];
+      notice.style.display = text ? '' : 'none';
+      document.getElementById('ts-reg-notice-text').textContent = text || '';
+      var keyLink = document.getElementById('ts-reg-notice-key');
+      keyLink.style.display = (r.reg_state && r.reg_state !== 'approval' && r.reg_state !== 'key_retry') ? '' : 'none';
+      keyLink.onclick = function (e) { e.preventDefault(); var k = document.getElementById('ts-auth-key'); if (k) { k.scrollIntoView({block: 'center'}); k.focus(); } };
+      var exp = typeof r.key_expiry === 'number' ? r.key_expiry : 0;
+      var expRow = document.getElementById('ts-key-expiry-row');
+      expRow.style.display = exp > 0 ? '' : 'none';
+      if (exp > 0) {
+        var d = new Date(exp * 1000);
+        document.getElementById('ts-key-expiry').textContent = d.toLocaleString('sv-SE', {year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
+      }
+      var soon = exp > 0 && exp * 1000 - Date.now() < 14 * 86400000;
+      document.getElementById('ts-key-expiry-hint').style.display = soon ? '' : 'none';
+      var hasCounts = typeof r.map_peers === 'number';
+      document.getElementById('ts-tunnels-row').style.display = hasCounts ? '' : 'none';
+      document.getElementById('ts-tunnels-row2').style.display = hasCounts ? '' : 'none';
+      if (hasCounts) {
+        document.getElementById('ts-map-peers').textContent = String(r.map_peers);
+        document.getElementById('ts-tunnels').textContent = r.tunnels_active + ' / ' + r.tunnel_slots;
+      }
+      /* Messages from the control server, as received (plain text). */
+      var box = document.getElementById('ts-display-messages');
+      var msgs = Array.isArray(r.display_messages) ? r.display_messages : [];
+      box.textContent = '';
+      msgs.forEach(function (m) {
+        var div = document.createElement('div');
+        div.className = 'alert ' + (m.severity === 'high' || m.impacts_connectivity ? 'alert-warning' : 'alert-info');
+        div.style.marginBottom = '.5rem';
+        var b = document.createElement('b');
+        b.textContent = m.title || '';
+        div.appendChild(b);
+        if (m.text) div.appendChild(document.createTextNode((m.title ? ' — ' : '') + m.text));
+        box.appendChild(div);
+      });
+      box.style.display = msgs.length ? '' : 'none';
+      var lock = document.getElementById('ts-lock-notice');
+      lock.style.display = r.tailnet_lock ? '' : 'none';
+      document.getElementById('ts-lock-cmd').textContent = r.tailnet_lock && r.node_key ? 'tailscale lock sign ' + r.node_key : '';
+    }
     function update4via6Preview() {
       var enabled = document.getElementById('ts-4via6-enabled').checked;
       var fields = document.getElementById('ts-4via6-fields');
@@ -9418,7 +9727,6 @@
             ? ('Exit-node server active · DNS ' + (s.exit_dns_running ? ('running on port ' + s.peerapi_port) : 'unavailable'))
             : 'Exit-node DNS inactive · starts only in exit-node server mode after restart.';
           document.getElementById('ts-routes').value        = s.advertise_routes || '';
-          document.getElementById('ts-max-peers').value     = s.max_peers   || 16;
           document.getElementById('ts-accept-routes').checked = !!s.accept_routes;
           document.getElementById('ts-lan-bypass').checked    = !!s.lan_bypass;
           document.getElementById('ts-snat').checked          = !!s.snat_subnet_routes;
@@ -9510,6 +9818,7 @@
               ident.textContent = '—';
             }
           })();
+          renderTsRegistration(r);
           var badge = document.getElementById('ts-page-badge');
           badge.title = '';
           /* register_user_id === 0 means the control plane took the
@@ -9521,9 +9830,15 @@
             badge.className = 'badge ' + (r.startup_retrying ? 'badge-warning' : 'badge-danger');
             badge.textContent = r.startup_retrying ? 'Retrying startup' : 'Startup failed';
             badge.title = r.startup_error;
-          } else if (r.register_user_id === 0) {
+          } else if (r.reg_state === 'need_new_key' || r.reg_state === 'need_key' || r.reg_state === 'refused') {
             badge.className = 'badge badge-danger';
-            badge.innerHTML = '<span class="badge-dot"></span> Auth key invalid';
+            badge.textContent = 'Auth key needed';
+          } else if (r.reg_state === 'key_expired') {
+            badge.className = 'badge badge-danger';
+            badge.textContent = 'Node key expired';
+          } else if (r.reg_state === 'approval') {
+            badge.className = 'badge badge-warning';
+            badge.textContent = 'Waiting for approval';
           } else if (r.connected && r.authority_ready === false) {
             badge.className = 'badge badge-warning';
             badge.textContent = 'Policy pending';
@@ -9614,7 +9929,7 @@
 
     /* Dirty-track and wiring. */
     ['ts_enabled_on', 'ts-auth-key', 'ts-hostname', 'ts-login', 'ts-ipn-version', 'ts-adv-ap',
-     'ts-routes', 'ts-max-peers', 'ts-accept-routes', 'ts-lan-bypass', 'ts-snat', 'ts-advertise-exit', 'ts-exit-node',
+     'ts-routes', 'ts-accept-routes', 'ts-lan-bypass', 'ts-snat', 'ts-advertise-exit', 'ts-exit-node',
      'ts-4via6-enabled', 'ts-4via6-lan', 'ts-4via6-site'
     ].forEach(function (id) {
       var el = document.getElementById(id);
@@ -9725,6 +10040,46 @@
      * machine/wg/disco keys + cached peers, then reboots. The next
      * register attempt gets a fresh node-key the control plane will
      * see as a brand-new node. */
+    /* Leave the tailnet: log out at the control server (as `tailscale
+     * logout`), delete the auth key and this identity, Tailscale off. */
+    var TS_LEAVE_SERVER = {
+      logged_out: 'The control server logged this gateway out.',
+      refused: 'The control server refused the logout: remove the device in its admin console.',
+      unreachable: 'The control server could not be reached: remove the device in its admin console.',
+      not_registered: 'This gateway was not registered in a tailnet.',
+      not_running: 'Tailscale was not running: remove the device in the admin console if it is listed.'
+    };
+    document.getElementById('ts-leave').addEventListener('click', function () {
+      var btn = this;
+      showConfirm(
+        'Leave the tailnet?',
+        '<p style="margin:0 0 0.75rem 0;">This gateway leaves your tailnet, as the official "tailscale logout" command does.</p>'
+        + '<ul style="margin:0 0 0.75rem 1.2rem; padding:0; color:var(--fg-secondary);">'
+        +   '<li>Logs out at the control server (its node key expires there)</li>'
+        +   '<li>Deletes the saved auth key and this device\'s tailnet identity</li>'
+        +   '<li>Turns Tailscale off and restarts the gateway</li>'
+        + '</ul>'
+        + '<p style="margin:0; color:var(--fg-muted); font-size:var(--text-xs);">Other settings stay. To join again, enter an auth key: the gateway appears as a new device in the admin console.</p>',
+        function () {
+          btn.disabled = true; btn.textContent = 'Leaving…';
+          apiFetch('/api/tailscale/leave', { method: 'POST' })
+            .then(function (r) { if (r.status === 403) return { ok: false, reason: LOCK_TEXT }; return r.json(); })
+            .then(function (d) {
+              if (d.ok) {
+                showToast('success', UT('Left the tailnet'), (TS_LEAVE_SERVER[d.server] ? UT(TS_LEAVE_SERVER[d.server]) + ' ' : '') + UT('The gateway is restarting.'), 10000);
+              } else {
+                showToast('error', UT('Leaving failed'), d.reason || 'unknown', 6000);
+                btn.disabled = false; btn.textContent = UT('Leave tailnet…');
+              }
+            })
+            .catch(function () {
+              showToast('error', UT('Leaving failed'), UT('Network error.'), 5000);
+              btn.disabled = false; btn.textContent = UT('Leave tailnet…');
+            });
+        },
+        { html: true, confirmText: UT('Leave tailnet'), danger: true }
+      );
+    });
     document.getElementById('ts-reset-identity').addEventListener('click', function () {
       var btn = this;
       showConfirm(
@@ -9771,7 +10126,6 @@
           ipn_version:       document.getElementById('ts-ipn-version').value.trim(),
           advertise_ap:      document.getElementById('ts-adv-ap').checked,
           advertise_routes:  document.getElementById('ts-routes').value,
-          max_peers:         parseInt(document.getElementById('ts-max-peers').value, 10) || 16,
           accept_routes:     document.getElementById('ts-accept-routes').checked,
           lan_bypass:        document.getElementById('ts-lan-bypass').checked,
           snat_subnet_routes: document.getElementById('ts-snat').checked,
@@ -9786,7 +10140,7 @@
           }
         }
       };
-      var authKey = document.getElementById('ts-auth-key').value;
+      var authKey = document.getElementById('ts-auth-key').value.trim();   /* a pasted space breaks the key */
       if (authKey) body.settings.auth_key = authKey;   /* omit-to-keep */
 
       var btn = this;
@@ -10283,7 +10637,9 @@
             '<div>Entries: <strong>' + (dq.entries | 0) + '</strong> / ' + (dq.capacity | 0) +
             ' · evictions ' + (dq.evictions | 0) +
             ' · SPIRAM ' + kb(dq.cache_bytes || 0) + '</div>' +
-            '<div>Stray upstream answers discarded: <strong>' + (dq.upstream_stray | 0) + '</strong></div>';
+            '<div>Stray upstream answers discarded: <strong>' + (dq.upstream_stray | 0) + '</strong></div>' +
+            '<div>Queries over TCP: <strong>' + (dq.tcp_queries | 0) + '</strong></div>' +
+            '<div>Oversized answers truncated: <strong>' + (dq.truncated | 0) + '</strong></div>';
         }
 
         /* Connection & security: assembly self-tests, TLS distrust, and the
@@ -10622,8 +10978,11 @@
       var enabled = document.getElementById('ntfy-enabled').checked;
       setFeatureCardState('ntfy-card', enabled);
       setFeatureDependentState('ntfy-alert-settings', enabled && document.getElementById('ntfy-alerts').checked);
-      setFeatureDependentState('ntfy-command-settings', enabled && document.getElementById('ntfy-commands').value !== 'off');
-      setFeatureDependentState('ntfy-info-details-setting', enabled && document.getElementById('ntfy-info').checked);
+      var commandsOn = enabled && document.getElementById('ntfy-commands').value !== 'off';
+      setFeatureDependentState('ntfy-command-settings', commandsOn);
+      document.getElementById('ntfy-commands').closest('.cmd-section').querySelectorAll('.cmd-option').forEach(function (o) {
+        o.classList.add('feature-inline-dependent'); o.classList.toggle('feature-disabled', !commandsOn); });
+      setFeatureDependentState('ntfy-info-details-setting', commandsOn && document.getElementById('ntfy-info').checked);
       var server = document.getElementById('ntfy-server').value.trim().toLowerCase();
       document.getElementById('ntfy-transport-warning').style.display =
         enabled && /^http:\/\//.test(server) ? 'flex' : 'none';
@@ -10652,8 +11011,8 @@
         var badge = document.getElementById('ntfy-badge');
         badge.textContent = d.enabled ? (d.last_publish_ok ? 'Enabled · reachable' : 'Enabled') : 'Disabled';
         badge.className = 'badge ' + (!d.enabled ? 'badge-neutral' : (d.last_publish_ok ? 'badge-success' : 'badge-warning'));
-        document.getElementById('ntfy-status').textContent = 'Commands: info · wol DEVICE_NAME · wol aa:bb:cc:dd:ee:ff · alerts: '
-          + (d.alerts_sent || 0) + ' · commands: ' + (d.commands_received || 0) + ' · errors: ' + (d.command_errors || 0);
+        document.getElementById('ntfy-status').textContent = UT('Alerts sent:') + ' ' + (d.alerts_sent || 0) + ' · ' + UT('commands received:') + ' '
+          + (d.commands_received || 0) + ' · ' + UT('command errors:') + ' ' + (d.command_errors || 0);
         document.getElementById('ntfy-save').disabled = true;
       });
     }
@@ -10755,6 +11114,7 @@
             : 'WiFi policy unavailable — refresh before changing it.';
           document.getElementById('sys-device-name-save').disabled = true;
           document.getElementById('sys-version').textContent = d.version || '—';
+          if (window.setUsbGuideLinks) window.setUsbGuideLinks(d.version);
           var fwBeta = /-(dev|alpha|beta|rc)/.test(d.version || ''), fwBadge = document.getElementById('fw-channel-badge');
           fwBadge.textContent = !d.version ? '—' : fwBeta ? 'Pre-release' : 'Stable';
           fwBadge.className = 'badge ' + (!d.version ? 'badge-neutral' : fwBeta ? 'badge-warning' : 'badge-success');
@@ -10788,6 +11148,8 @@
           var authToggle = document.getElementById('sys-web-auth-enabled');
           authToggle.checked = d.web_auth_enabled !== false;
           document.getElementById('sys-web-auth-save').disabled = true;
+          document.getElementById('sys-admin-scope').value = d.admin_scope === 'tailnet_ap' ? 'tailnet_ap' : 'anywhere';
+          document.getElementById('sys-admin-scope-save').disabled = true;
 
           /* Idle session timeout — snap the select to whichever option
            * matches the persisted value, falling back to 30 min if the
@@ -11704,7 +12066,12 @@
         if (!d || typeof d.enabled !== 'boolean' || typeof d.running !== 'boolean')
           throw new Error('Invalid settings response');
         document.getElementById('sys-snmp-en').checked = d.enabled;
-        document.getElementById('sys-snmp-community').value = d.community || '';
+        /* Write-only: the saved community is never sent back. */
+        var comm = document.getElementById('sys-snmp-community');
+        comm.value = '';
+        comm.placeholder = d.has_community ? (window.I18N ? I18N.t('Saved — leave empty to keep') : 'Saved — leave empty to keep') : '';
+        comm.dataset.saved = d.has_community ? '1' : '';
+        document.getElementById('sys-snmp-community-hint').hidden = !d.community_is_default;
         document.getElementById('sys-snmp-sysname').value = d.sys_name || '';
         document.getElementById('sys-snmp-contact').value = d.sys_contact || '';
         document.getElementById('sys-snmp-location').value = d.sys_location || '';
@@ -11740,7 +12107,7 @@
       btn.addEventListener('click', function () {
         if (!s_snmpLoaded) return;
         var community = document.getElementById('sys-snmp-community').value;
-        if (document.getElementById('sys-snmp-en').checked && !community) {
+        if (document.getElementById('sys-snmp-en').checked && !community && !document.getElementById('sys-snmp-community').dataset.saved) {
           showToast('error', 'Invalid community', 'Enter a nonempty SNMP community.', 4000);
           return;
         }
@@ -11812,6 +12179,23 @@
 
     document.getElementById('sys-web-auth-enabled').addEventListener('change', function () {
       document.getElementById('sys-web-auth-save').disabled = false;
+    });
+    document.getElementById('sys-admin-scope').addEventListener('change', function () {
+      document.getElementById('sys-admin-scope-save').disabled = false;
+    });
+    document.getElementById('sys-admin-scope-save').addEventListener('click', function () {
+      var btn = this, scope = document.getElementById('sys-admin-scope').value;
+      btn.disabled = true;
+      apiFetch('/api/system', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({admin_scope: scope})})
+        .then(function (r) {
+          if (r.ok) return r.json();
+          return r.text().then(function (t) { throw new Error(t || ('HTTP ' + r.status)); });
+        })
+        .then(function () {
+          showToast('success', 'Access saved', scope === 'tailnet_ap' ? 'Administration now answers only on the tailnet and the access point.' : 'Administration answers on every network.', 5000);
+          loadSystem();
+        })
+        .catch(function (e) { btn.disabled = false; showToast('error', 'Not saved', window.I18N ? I18N.t(e.message) : e.message, 8000); });
     });
     document.getElementById('sys-web-auth-save').addEventListener('click', function () {
       var enabled = document.getElementById('sys-web-auth-enabled').checked;
@@ -11966,6 +12350,29 @@
 
       function nearBottom() { return (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 40; }
 
+      /* Date and time of each line: the device sends when its log counter
+       * started (boot_ms, once its clock is set); "I (12345) TAG: ..." is
+       * shown as "I 2026-11-18 11:23:45 (12345) TAG: ..." in this browser's
+       * time zone. Lines that arrived before the clock was known get their
+       * date as soon as it is. */
+      var bootMs = 0;
+      function pad2(n) { return (n < 10 ? '0' : '') + n; }
+      function logStamp(ms) {
+        var d = new Date(bootMs + ms);
+        return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+          + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+      }
+      function stampSpan(sp) {
+        var m = /^([EWIDV]) \((\d+)\) /.exec(sp.dataset.raw);
+        if (!m || !bootMs) return;
+        sp.textContent = m[1] + ' ' + logStamp(Number(m[2])) + sp.dataset.raw.substring(1) + sp.dataset.trail;
+        delete sp.dataset.raw;
+      }
+      function setBootMs(v) {
+        if (typeof v !== 'number' || v <= 0 || Math.abs(v - bootMs) < 2000) return;
+        bootMs = v;
+        pre.querySelectorAll('span[data-raw]').forEach(stampSpan);
+      }
       function emitLine(line, trail) {
         var c = 'I';
         if (line.length >= 2 && line[1] === ' ') {
@@ -11975,6 +12382,7 @@
         var sp = document.createElement('span');
         sp.className = 'lvl-' + c;
         sp.textContent = line + trail;
+        if (/^[EWIDV] \(\d+\) /.test(line)) { sp.dataset.raw = line; sp.dataset.trail = trail; stampSpan(sp); }
         pre.appendChild(sp);
       }
 
@@ -12001,6 +12409,7 @@
               pre.textContent = ''; carry = '';
               firstTick = false;
             }
+            setBootMs(j.boot_ms);
             if (j.lost) {
               /* The device ring wrapped past our cursor — some lines
                * happened on the device that we missed. The OLD viewer
@@ -12452,6 +12861,11 @@
         if (pw !== pw2) return 'The two passwords do not match.';
         return '';
       }
+      /* USB guide: a pre-release links to the guide of its own tag (the website follows the stable release). */
+      window.setUsbGuideLinks = function (v) {
+        if (!/^\d+\.\d+\.\d+-(dev|alpha|beta|rc)[0-9.]*$/.test(v || '')) return;
+        document.querySelectorAll('a.usb-guide-link').forEach(function (a) { a.href = 'https://github.com/Mattboxx/esp32-tailnet-gateway/blob/v' + v + '/docs/USB-DEVICES.md'; });
+      };
       function uplink() { var r = document.querySelector('input[name="fb-up"]:checked'); return r ? r.value : 'wifi'; }
       function wifiWanted() { return uplink() === 'wifi' || $('fb-wifi-backup').checked; }
       function pins(prefix, keys) {
@@ -12470,15 +12884,21 @@
       }
       function uplinkProblem() {
         var up = uplink();
-        if (up === 'ethernet') { var e = pinProblem(pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']), ['intr', 'rst']); if (e) return e; }
+        if (up === 'ethernet' && !connUsb('eth')) { var e = pinProblem(pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']), ['intr', 'rst']); if (e) return e; }
         if (up === 'cellular') {
-          if (!/^[A-Za-z0-9.-]{1,63}$/.test($('fb-apn').value.trim())) return 'Enter the APN of your mobile operator.';
+          if (!(connUsb('cell') ? /^[A-Za-z0-9.-]{0,63}$/ : /^[A-Za-z0-9.-]{1,63}$/).test($('fb-apn').value.trim())) return 'Enter the APN of your mobile operator.';
           if (!/^(\d{4,8})?$/.test($('fb-simpin').value)) return 'The SIM PIN has 4 to 8 digits, or leave it empty.';
-          var c = pinProblem(pins('fb-cell-', ['tx', 'rx', 'pwrkey']), ['pwrkey']); if (c) return c;
+          var c = connUsb('cell') ? '' : pinProblem(pins('fb-cell-', ['tx', 'rx', 'pwrkey']), ['pwrkey']); if (c) return c;
           if (!$('fb-data-ack').checked) return 'Confirm that the gateway may use mobile data.';
         }
         if (lanName() && !/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(lanName())) return 'The home network name may use a-z, 0-9 and - (not at the start or end), up to 32 characters.';
         return wifiWanted() ? wifiProblem() : '';
+      }
+      /* Ethernet / modem connection: pins or the USB port. */
+      function connUsb(kind) { var r = document.querySelector('input[name="fb-' + kind + '-conn"]:checked'); return !!r && r.value === 'usb'; }
+      function connView() {
+        $('fb-eth-wiring').hidden = connUsb('eth'); $('fb-cell-wiring').hidden = connUsb('cell'); $('fb-eth-usb-power').hidden = !connUsb('eth'); $('fb-cell-usb-power').hidden = !connUsb('cell');
+        $('fb-apn-hint').hidden = connUsb('cell'); $('fb-apn-usb-hint').hidden = !connUsb('cell');
       }
       /* <name>.local on the home network; none without one (SIM only). */
       function lanName() { return uplink() === 'cellular' && !wifiWanted() ? '' : $('fb-lan').value.trim(); }
@@ -12570,6 +12990,7 @@
       }
       function paired(s) {
         st.defaults = s || {};
+        if (window.setUsbGuideLinks) window.setUsbGuideLinks(st.defaults.version);
         if (!$('fb-apname').value) $('fb-apname').value = st.defaults.default_ap_ssid || 'ESP32-Tailnet';
         if (!$('fb-lan').value) $('fb-lan').value = st.defaults.lan_name || '';
         var ups = st.defaults.uplinks || ['wifi'];
@@ -12727,7 +13148,9 @@
         var up = uplink(), UP = {wifi: 'Wi-Fi', ethernet: 'Ethernet cable', cellular: 'Mobile network (SIM)'};
         row(dl, 'Internet connection', T(UP[up]) + (up !== 'wifi' && wifiWanted() ? ' + ' + T('Wi-Fi') : ''));
         if (wifiWanted()) row(dl, 'Home Wi-Fi', $('fb-ssid').value + (st.wifiOk ? ' (' + T('tested') + ')' : ' (' + T('not tested') + ')'));
-        if (up === 'cellular') row(dl, 'APN', $('fb-apn').value.trim() + (wifiWanted() ? ' · ' + T('backup when the Wi-Fi is out of range') : ''));
+        if (up === 'ethernet') row(dl, 'Ethernet connection', T(connUsb('eth') ? 'USB port' : 'Pins'));
+        if (up === 'cellular') row(dl, 'Modem connection', T(connUsb('cell') ? 'USB port' : 'Pins'));
+        if (up === 'cellular') row(dl, 'APN', ($('fb-apn').value.trim() || T('from the modem')) + (wifiWanted() ? ' · ' + T('backup when the Wi-Fi is out of range') : ''));
         var lan = lanName() || st.defaults.lan_name ? 'http://' + (lanName() || st.defaults.lan_name) + '.local/' : '';
         row(dl, 'Address after the restart', up === 'cellular' && !wifiWanted() ? (lan || T('Connect to the gateway access point'))
           : st.wifiIp && up === 'wifi' ? 'http://' + st.wifiIp + '/' + (lan ? '  ·  ' + lan : '') : (lan || T('Test the Wi-Fi to see it')));
@@ -12755,8 +13178,8 @@
         var cmd = { action: 'finish', admin_password: $('fb-pw').value,
           wifi: { ssid: wifiOn ? $('fb-ssid').value : '', password: wifiOn ? $('fb-wpw').value : '' },
           uplink: { type: up,
-            ethernet: up === 'ethernet' ? pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']) : undefined,
-            cellular: up === 'cellular' ? Object.assign(pins('fb-cell-', ['tx', 'rx', 'pwrkey']),
+            ethernet: up === 'ethernet' ? (connUsb('eth') ? {transport: 'usb'} : Object.assign(pins('fb-eth-', ['sclk', 'mosi', 'miso', 'cs', 'intr', 'rst']), {transport: 'pins'})) : undefined,
+            cellular: up === 'cellular' ? Object.assign(connUsb('cell') ? {transport: 'usb'} : Object.assign(pins('fb-cell-', ['tx', 'rx', 'pwrkey']), {transport: 'pins'}),
               { apn: $('fb-apn').value.trim(), pin: $('fb-simpin').value, roaming: $('fb-roam').checked, data_ack: $('fb-data-ack').checked }) : undefined },
           tz: browserTz().rule,
           ap_ssid: $('fb-apname').value, ap_password: $('fb-ap-open').checked ? '' : $('fb-appw').value, ap_open: $('fb-ap-open').checked, ap_recovery_only: !$('fb-ap-always').checked,
@@ -12882,6 +13305,7 @@
         $('fb-wifi-backup').addEventListener('change', shapeUplink);
         ['fb-apn', 'fb-simpin', 'fb-roam', 'fb-data-ack', 'fb-eth-sclk', 'fb-eth-mosi', 'fb-eth-miso', 'fb-eth-cs', 'fb-eth-intr', 'fb-eth-rst',
          'fb-cell-tx', 'fb-cell-rx', 'fb-cell-pwrkey'].forEach(function (id) { $(id).addEventListener('input', validate); $(id).addEventListener('change', validate); });
+        document.querySelectorAll('input[name="fb-eth-conn"],input[name="fb-cell-conn"]').forEach(function (el) { el.addEventListener('change', function () { connView(); validate(); }); });
         var lang = $('fb-lang');
         if (window.I18N && I18N.languages().length > 1) {
           I18N.languages().forEach(function (l) { var o = document.createElement('option'); o.value = l[0]; o.textContent = l[1]; lang.appendChild(o); });
@@ -12978,8 +13402,6 @@
         vURL(true),                      { saveBtn: btnTs });
       attachValidator(document.getElementById('ts-routes'),
         vCIDRList(true),                 { saveBtn: btnTs });
-      attachValidator(document.getElementById('ts-max-peers'),
-        vRange(1, 64, false),            { saveBtn: btnTs });
 
       // ── System tab → Device card ──────────────────────────────────────
       var btnSys = document.getElementById('sys-device-name-save');
@@ -13119,7 +13541,13 @@
       ['port', 'porta', 'porte', 'ports'],
       ['trend', 'trends', 'grafici', 'grafico', 'chart', 'andamento'],
       ['dhcp', 'lease', 'leases', 'dispositivi', 'devices'],
-      ['snmp', 'monitor', 'monitoraggio', 'health', 'salute']
+      ['snmp', 'monitor', 'monitoraggio', 'health', 'salute', 'community'],
+      ['data', 'dati', 'traffico', 'traffic', 'consumo', 'usage', 'quota', 'limite', 'limit', 'volume', 'datenvolumen', 'donnees', 'datos', '流量'],
+      ['cellular', 'cellulare', 'mobile', 'sim', 'lte', '4g', '5g', 'modem', 'chiavetta', 'stick', 'apn', 'mobilfunk', 'movil', '蜂窝', '移动'],
+      ['usb', 'otg', 'tethering', 'adapter', 'adattatore'],
+      ['resources', 'risorse', 'ram', 'memory', 'memoria', 'heap', 'sockets', 'ressourcen', 'ressources', 'recursos', '资源', '内存'],
+      ['administration', 'amministrazione', 'admin', 'accesso', 'access', 'sicurezza', 'security', 'verwaltung', 'zugriff', 'acces', 'acceso', '管理', '访问'],
+      ['commands', 'command', 'comandi', 'comando', 'bot', 'remote', 'remoti', 'befehle', 'commandes', 'comandos', '命令']
     ];
     var GENERIC = /^(save|cancel|close|reload|refresh|ok|apply|edit|remove|delete|add|back|next|show|hide|copy|done|yes|no|start|stop|clear|change|more|less|salva|annulla|chiudi|ricarica|aggiorna|applica|modifica|rimuovi|elimina|aggiungi|indietro|avanti|mostra|nascondi|copia|fatto|si|sì)$/i;
     var CJK = /[぀-ヿ㐀-鿿가-힯]/;

@@ -2,6 +2,95 @@
 
 Decisions are explicit, revisable with evidence and never remove approved scope.
 
+## ADR-037 — The uplink station waits 15 s for beacons (2026-11-16)
+
+Evidence (owner's board A, persisted event history 2026-11-13..16, 3.0.24 and
+3.0.25 betas): "Wi-Fi station disconnected (reason 200)" (beacon timeout) at
+18:41, 18:59, 07:05, 19:11 and 07:17, i.e. every ~12 h 06 min, independent of
+the ESP's boot time (2 h and 1 h after a restart), RSSI -50..-62 dBm, power
+save off, one BSSID for the SSID. The station had an address again ~3 s after
+the event, so the router was back almost at once: a periodic pause of its
+beacons, most likely its automatic channel scan. The driver's default gives up
+after 6 s; each drop then cost DHCP, a Tailnet control reconnect (code 5/113)
+and a Telegram warning. Decision: `esp_wifi_set_inactive_time(WIFI_IF_STA, 15)`
+after `esp_wifi_start()`, reported as `/api/status` `sta.beacon_timeout_s`.
+Cost: a router that is really gone is noticed 9 s later (a deauthentication
+still ends the association at once). Separately, with notifications on
+*Problems* a station drop is no longer sent by itself: the connectivity
+episode with its grace period reports an uplink that stays down. Validation:
+watch the next expected pause (~19:23 on 2026-11-16) on board A; if drops
+continue with longer pauses, raise the value only with evidence, or fix the
+router's channel.
+
+## ADR-036 — One USB port module, an in-house ECM/NCM/RNDIS path (2026-11-15)
+
+The owner asked for USB modems and sticks on the cellular uplink, then USB
+Ethernet adapters and phone tethering, with class-based detection, automatic
+mode switching and interface discovery instead of a fixed VID/PID.
+
+`main/usb_port.c` owns the native USB port as a host for one device: the USB
+host library, the gateway's own client (detection, mode switch, configuration
+choice through the enumeration filter) and one data session at a time: a
+serial AT/PPP port (CDC-ACM or vendor) or an Ethernet data path over CDC-ECM,
+CDC-NCM and RNDIS behind an esp_netif driver. The cellular uplink uses it
+through a UART/USB channel abstraction under the existing AT/PPP engine; the Ethernet uplink uses it
+with the standard `ETH_DEF` netif, so selection, hooks and listeners are
+unchanged. The two cannot share the port (validated on save).
+
+Espressif's `iot_usbh_rndis`/`iot_usbh_ecm` were not used: they bring a
+second CDC host driver and three internal-RAM task stacks, abort on runtime
+USB errors (`ESP_ERROR_CHECK`) and assert on a device-provided RNDIS length,
+so a faulty stick could reset the gateway; no NCM component exists. The
+in-house path parses every descriptor and frame with bounds (host-tested with
+malformed input and a fuzz), never blocks the TCP/IP thread (two transmit
+transfers, drop when busy) and refuses further sessions after a transfer that
+never completed, instead of leaking per retry. `esp_modem` was not used either:
+the existing AT/PPP logic already covers it and is kept identical for UART.
+Serial is preferred over USB networking in automatic mode because it keeps
+SIM, APN and signal under the gateway's control. The owner asked that
+everything else behave as before: UART and SPI settings are still written as
+the version 1 record that 3.0.24 reads (rollback unchanged); only settings
+that use USB are written as version 2, which older firmware refuses (that
+uplink off, fail closed). First-boot setup offers the same pins/USB choice.
+
+Cost while off: no task, heap, USB stack or PHY change. Up to beta.6 the image
+still took 2.6 KB more internal RAM than 3.0.24 (measured on board A and from the
+ELF): the USB driver's `IRAM_ATTR` buffer fill/execute code (1.5 KB), FreeRTOS
+stream-buffer functions pulled into IRAM, and plain USB/cellular/Ethernet state.
+Since beta.7, `main/usb_flash.lf` maps the driver's `hcd_dwc` IRAM sections to
+flash without changing its source (safe because the gateway installs the USB
+interrupt without `ESP_INTR_FLAG_IRAM`, and that interrupt already calls the
+driver's flash functions), the serial receive buffer uses the ESP-IDF byte ring
+buffer already linked by 3.0.24, and plain state (`s_saved`, `s_running`,
+`s_status`, device and memory records) is `EXT_RAM_BSS_ATTR`. Atomics and
+spinlocks stay internal (no atomics in PSRAM on the ESP32-S3), as does
+`xTimerGenericCommand` (106 B), which the driver's `usb_host.c` uses and
+FreeRTOS keeps in IRAM. Result: the beta.7 heap starts 416 B lower than 3.0.24,
+so it leaves more internal RAM than 3.0.24 (measured on board A with USB off:
+51443 B free against 50823 B); `tools/check_usb_ram_placement.py`
+checks the placement in every `validate_all.py --build`. When enabled: two
+tasks with PSRAM stacks and the USB transfers, which must be internal DMA RAM
+on the ESP32-S3 (serial session about 4 KB, network session 6-8 KB). Every
+start and session is refused when it would leave less than 40 KB of internal
+RAM, with a message that names the amounts; the measured use is reported in
+the API (`usb.internal_ram`).
+
+Beta.3 (owner's daily board, 46 KB free with its features on): Espressif's
+CDC-ACM host driver was dropped because its task needs a 4 KB internal stack;
+serial ports use the same session code as the network path. Measured there
+with beta.3: the USB host start costs 3344 B of internal RAM (48.7 KB free
+before, 44.3 KB after, minimum since boot 39.8 KB), Tailnet and the Web UI
+unaffected. Beta.4 adds a lean session (one transfer per direction, about
+2.7 KB for a serial port, 5 KB for a network function) used when the full one
+(about 4.4 KB / 8.6 KB with two transfers per direction) would cross the floor.
+Beta.5, on the owner's request ("with USB, speed can give way; otherwise
+unchanged"): only when a USB connection is enabled at boot, the Wi-Fi uses 16
+static receive buffers instead of 24 (`main/wifi_usb_budget.h`), about 12.8 KB
+of internal RAM for the USB device. 16 was the value before 2026-05-24; the
+known cost is less headroom for receive bursts such as a phone speed test's
+parallel upload start through the access point. `/api/status` reports it as
+`wifi_rx_lean_for_usb`.
+
 ## ADR-035 — Compromised CA keys are refused on every TLS connection (2026-11-04)
 
 In October 2026 the private keys of eight eMudhra intermediate CAs turned out

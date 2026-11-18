@@ -1,6 +1,8 @@
-/* Conditional SPI Ethernet uplink; see eth_uplink.h.
+/* Conditional Ethernet uplink (SPI W5500 or USB); see eth_uplink.h.
  * Original implementation, Mattboxx Edition. SPDX-License-Identifier: GPL-3.0-only */
 #include "eth_uplink.h"
+#include "cell_uplink.h"
+#include "usb_port.h"
 #include "uplink_services.h"
 #include "sdkconfig.h"
 #include "json_guard.h"
@@ -11,6 +13,7 @@
 #include "netif_hooks.h"
 #include "portmap.h"
 #include "esp_event.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -18,8 +21,10 @@
 #include "lwip/netif.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include <math.h>
 #include <stdatomic.h>
 #include <stddef.h>
@@ -63,10 +68,12 @@ bool eth_config_valid(const eth_config_t *c, char *why, size_t n)
     if (!c || c->enabled > 1 || c->ip_static > 1 || c->preference > ETH_PREF_ETHERNET_FIRST)
         return eth_fail(why, n, "invalid switch value");
     if (c->chip != ETH_CHIP_W5500) return eth_fail(why, n, "only the W5500 SPI module is supported");
+    if (c->transport > ETH_TRANSPORT_USB) return eth_fail(why, n, "connection must be SPI or USB");
+    bool usb = c->transport == ETH_TRANSPORT_USB;   /* SPI pins kept for a later switch back, not used */
     if (c->spi_host != 1 && c->spi_host != 2) return eth_fail(why, n, "SPI host must be SPI2 or SPI3");
     if (c->spi_mhz < 1 || c->spi_mhz > 40) return eth_fail(why, n, "SPI clock must be 1-40 MHz");
     int8_t pins[] = {c->sclk, c->mosi, c->miso, c->cs, c->intr, c->rst};
-    for (unsigned i = 0; i < sizeof pins; i++) {
+    for (unsigned i = 0; !usb && i < sizeof pins; i++) {
         if (pins[i] == -1 && i >= 4) continue;
         if (!eth_pin_allowed(pins[i])) return eth_fail(why, n, "pin not usable on this board (flash/PSRAM/USB/UART/strap/microSD)");
         for (unsigned j = 0; j < i; j++) if (pins[j] == pins[i]) return eth_fail(why, n, "pins must be distinct");
@@ -94,11 +101,22 @@ int eth_uplink_choose(eth_selector_t *s, bool enabled, uint8_t preference, bool 
 
 #define ETH_MAGIC 0x45544831u /* ETH1 */
 typedef struct {uint32_t magic, version; eth_config_t config; uint32_t checksum;} eth_record_t;
+/* Version 1 (SPI only, up to 3.0.24) is still written for the W5500, so an
+ * older firmware keeps working after a rollback. The USB connection is
+ * written as version 2, which an older firmware refuses (Ethernet off). */
+typedef struct {
+    uint8_t enabled, chip, spi_host, spi_mhz, ip_static, preference;
+    int8_t sclk, mosi, miso, cs, intr, rst;
+    uint32_t ip, mask, gw, dns;
+} eth_config_v1_t;
+typedef struct {uint32_t magic, version; eth_config_v1_t config; uint32_t checksum;} eth_record_v1_t;
 
 static SemaphoreHandle_t s_lock;
 static StaticSemaphore_t s_lock_storage;
-static eth_config_t s_saved, s_running;
-static eth_status_t s_status;
+/* Plain data under s_lock, read by tasks only: PSRAM keeps it out of
+ * internal RAM (the 40 KB floor) whether or not the uplink is used. */
+EXT_RAM_BSS_ATTR static eth_config_t s_saved, s_running;
+EXT_RAM_BSS_ATTR static eth_status_t s_status;
 static atomic_bool s_link, s_has_ip;
 static struct netif *s_lwip;           /* read in TCP/IP context only after start */
 static eth_selector_t s_selector;      /* TCP/IP context only */
@@ -110,29 +128,80 @@ static esp_eth_handle_t s_handle;
 
 static void defaults(eth_config_t *c)
 {
-    *c = (eth_config_t){.chip = ETH_CHIP_W5500, .spi_host = 1, .spi_mhz = 20,
-        .sclk = 12, .mosi = 11, .miso = 13, .cs = 10, .intr = 14, .rst = 9};
+    memset(c, 0, sizeof *c);
+    c->chip = ETH_CHIP_W5500; c->spi_host = 1; c->spi_mhz = 20;
+    c->sclk = 12; c->mosi = 11; c->miso = 13; c->cs = 10; c->intr = 14; c->rst = 9;
+    c->transport = ETH_TRANSPORT_SPI;
+}
+
+static uint32_t eth_fnv(const void *data, size_t n)
+{
+    uint32_t h = 2166136261u;
+    const uint8_t *p = data;
+    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
+    return h;
 }
 
 static uint32_t record_checksum(const eth_record_t *r)
 {
-    uint32_t h = 2166136261u;
-    const uint8_t *p = (const uint8_t *)r;
-    for (size_t i = 0; i < offsetof(eth_record_t, checksum); i++) h = (h ^ p[i]) * 16777619u;
-    return h;
+    return eth_fnv(r, offsetof(eth_record_t, checksum));
+}
+
+static void migrate_v1(const eth_config_v1_t *v1, eth_config_t *c)
+{
+    defaults(c);
+    c->enabled = v1->enabled; c->chip = v1->chip; c->spi_host = v1->spi_host; c->spi_mhz = v1->spi_mhz;
+    c->ip_static = v1->ip_static; c->preference = v1->preference;
+    c->sclk = v1->sclk; c->mosi = v1->mosi; c->miso = v1->miso; c->cs = v1->cs; c->intr = v1->intr; c->rst = v1->rst;
+    c->ip = v1->ip; c->mask = v1->mask; c->gw = v1->gw; c->dns = v1->dns;
+}
+
+/* The record bytes for `c`: version 1 for SPI, else version 2. */
+static size_t record_encode(const eth_config_t *c, void *out)
+{
+    if (c->transport == ETH_TRANSPORT_SPI) {
+        eth_record_v1_t r;
+        memset(&r, 0, sizeof r);
+        r.magic = ETH_MAGIC; r.version = 1;
+        r.config.enabled = c->enabled; r.config.chip = c->chip; r.config.spi_host = c->spi_host; r.config.spi_mhz = c->spi_mhz;
+        r.config.ip_static = c->ip_static; r.config.preference = c->preference;
+        r.config.sclk = c->sclk; r.config.mosi = c->mosi; r.config.miso = c->miso; r.config.cs = c->cs;
+        r.config.intr = c->intr; r.config.rst = c->rst;
+        r.config.ip = c->ip; r.config.mask = c->mask; r.config.gw = c->gw; r.config.dns = c->dns;
+        r.checksum = eth_fnv(&r, offsetof(eth_record_v1_t, checksum));
+        memcpy(out, &r, sizeof r);
+        return sizeof r;
+    }
+    eth_record_t r;
+    memset(&r, 0, sizeof r);
+    r.magic = ETH_MAGIC; r.version = 2;
+    memcpy(&r.config, c, sizeof r.config);
+    r.checksum = record_checksum(&r);
+    memcpy(out, &r, sizeof r);
+    return sizeof r;
 }
 
 static void load(eth_config_t *out)
 {
     defaults(out);
-    eth_record_t r;
+    union {eth_record_t v2; eth_record_v1_t v1;} r;
+    _Static_assert(sizeof(eth_record_t) != sizeof(eth_record_v1_t), "record versions must differ in size");
     size_t size = sizeof r;
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
     /* Invalid or foreign data means "Ethernet off", never a guessed pin map. */
-    if (nvs_get_blob(nvs, "eth_cfg", &r, &size) == ESP_OK && size == sizeof r && r.magic == ETH_MAGIC
-        && r.version == 1 && r.checksum == record_checksum(&r) && eth_config_valid(&r.config, NULL, 0))
-        *out = r.config;
+    eth_config_t c;
+    bool ok = false;
+    if (nvs_get_blob(nvs, "eth_cfg", &r, &size) == ESP_OK && r.v2.magic == ETH_MAGIC) {
+        if (size == sizeof r.v2 && r.v2.version == 2 && r.v2.checksum == record_checksum(&r.v2)) {
+            memcpy(&c, &r.v2.config, sizeof c);
+            ok = true;
+        } else if (size == sizeof r.v1 && r.v1.version == 1 && r.v1.checksum == eth_fnv(&r.v1, offsetof(eth_record_v1_t, checksum))) {
+            migrate_v1(&r.v1.config, &c);
+            ok = true;
+        }
+    }
+    if (ok && eth_config_valid(&c, NULL, 0)) memcpy(out, &c, sizeof c);
     nvs_close(nvs);
 }
 
@@ -165,6 +234,20 @@ static void apply_choice(void)
     if (atomic_exchange(&s_selected_eth, eth) != eth || eth) portmap_install_all();
 }
 
+static void link_changed(bool up)
+{
+    atomic_store(&s_link, up);
+    if (!up) atomic_store(&s_has_ip, false);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.link_changes++;
+    if (up && s_running.ip_static) {
+        s_status.ip = s_running.ip; s_status.mask = s_running.mask; s_status.gw = s_running.gw;
+        atomic_store(&s_has_ip, true);
+    } else if (!up) {s_status.ip = s_status.mask = s_status.gw = 0;}
+    xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG, "link %s", up ? "up" : "down");
+}
+
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -173,16 +256,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     if (base == ETH_EVENT && (id == ETHERNET_EVENT_CONNECTED || id == ETHERNET_EVENT_DISCONNECTED)) {
         bool up = id == ETHERNET_EVENT_CONNECTED;
         lost = !up;
-        atomic_store(&s_link, up);
-        if (!up) atomic_store(&s_has_ip, false);
-        xSemaphoreTake(s_lock, portMAX_DELAY);
-        s_status.link_changes++;
-        if (up && s_running.ip_static) {
-            s_status.ip = s_running.ip; s_status.mask = s_running.mask; s_status.gw = s_running.gw;
-            atomic_store(&s_has_ip, true);
-        } else if (!up) {s_status.ip = s_status.mask = s_status.gw = 0;}
-        xSemaphoreGive(s_lock);
-        ESP_LOGI(TAG, "link %s", up ? "up" : "down");
+        link_changed(up);
     } else
 #endif
     if (base == IP_EVENT && (id == IP_EVENT_ETH_GOT_IP || id == IP_EVENT_ETH_LOST_IP)) {
@@ -202,6 +276,8 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 }
 
 void eth_uplink_wifi_changed(void) { apply_choice(); }
+
+static esp_err_t apply_static(esp_netif_t *netif, const eth_config_t *c);
 
 #if CONFIG_ETH_SPI_ETHERNET_W5500
 static esp_err_t start_w5500(const eth_config_t *c)
@@ -237,15 +313,7 @@ static esp_err_t start_w5500(const eth_config_t *c)
     glue = esp_eth_new_netif_glue(handle);
     if (!glue) {err = ESP_ERR_NO_MEM; goto fail_netif;}
     if ((err = esp_netif_attach(s_netif, glue)) != ESP_OK) goto fail_netif;
-    if (c->ip_static) {
-        esp_netif_ip_info_t info = {.ip.addr = c->ip, .netmask.addr = c->mask, .gw.addr = c->gw};
-        (void)esp_netif_dhcpc_stop(s_netif);
-        if ((err = esp_netif_set_ip_info(s_netif, &info)) != ESP_OK) goto fail_netif;
-        if (c->dns) {
-            esp_netif_dns_info_t dns = {.ip.u_addr.ip4.addr = c->dns, .ip.type = ESP_IPADDR_TYPE_V4};
-            (void)esp_netif_set_dns_info(s_netif, ESP_NETIF_DNS_MAIN, &dns);
-        }
-    }
+    if ((err = apply_static(s_netif, c)) != ESP_OK) goto fail_netif;
     if ((err = esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, on_event, NULL)) != ESP_OK
         || (err = esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, on_event, NULL)) != ESP_OK) goto fail_netif;
     s_handle = handle;  /* started by eth_uplink_start() after the ACL hooks */
@@ -264,6 +332,110 @@ fail:
 }
 #endif
 
+static esp_err_t apply_static(esp_netif_t *netif, const eth_config_t *c)
+{
+    if (!c->ip_static) return ESP_OK;
+    esp_netif_ip_info_t info = {.ip.addr = c->ip, .netmask.addr = c->mask, .gw.addr = c->gw};
+    (void)esp_netif_dhcpc_stop(netif);
+    esp_err_t err = esp_netif_set_ip_info(netif, &info);
+    if (err == ESP_OK && c->dns) {
+        esp_netif_dns_info_t dns = {.ip.u_addr.ip4.addr = c->dns, .ip.type = ESP_IPADDR_TYPE_V4};
+        (void)esp_netif_set_dns_info(netif, ESP_NETIF_DNS_MAIN, &dns);
+    }
+    return err;
+}
+
+#if CONFIG_SOC_USB_OTG_SUPPORTED
+/* --- USB Ethernet adapter / phone tethering --- */
+static bool s_usb;
+
+/* The standard Ethernet netif ("ETH_DEF": the same ACL hooks, events and
+ * selection as the W5500) with the USB data path as its driver. */
+static esp_err_t prepare_usb(const eth_config_t *c)
+{
+    esp_netif_config_t netif_config = ESP_NETIF_DEFAULT_ETH();
+    s_netif = esp_netif_new(&netif_config);
+    if (!s_netif) return ESP_ERR_NO_MEM;
+    esp_err_t err = esp_netif_attach(s_netif, usb_port_net_glue());
+    if (err == ESP_OK) err = apply_static(s_netif, c);
+    if (err == ESP_OK) err = esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, on_event, NULL);
+    if (err != ESP_OK) {esp_netif_destroy(s_netif); s_netif = NULL; return err;}
+    s_usb = true;   /* started by eth_uplink_start() after the ACL hooks */
+    return ESP_OK;
+}
+
+/* usb_port client task context: the CDC NETWORK_CONNECTION state. */
+static void usb_link(bool up, void *ctx)
+{
+    (void)ctx;
+    link_changed(up);
+    apply_choice();
+    uplink_services_refresh(!up);
+}
+
+static void usb_note(uint8_t net, const char *text)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.usb_net = net;
+    snprintf(s_status.error, sizeof s_status.error, "%s", text);
+    xSemaphoreGive(s_lock);
+    if (text[0]) ESP_LOGW(TAG, "%s", text);
+}
+
+static void usb_task(void *arg)
+{
+    (void)arg;
+    uint8_t *cfg = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!cfg) {usb_note(USBP_NET_NONE, "not enough memory for the USB device"); vTaskDelete(NULL); return;}
+    uint32_t handled = 0;   /* attach already acted on */
+    for (;;) {
+        usbp_device_t d;
+        size_t len = 0;
+        if (!usb_port_device(&d, cfg, 1024, &len) || d.seq == handled) {
+            if (!d.present) usb_note(USBP_NET_NONE, "no USB device on the USB port");
+            usb_port_wait(d.seq, 30000);
+            continue;
+        }
+        handled = d.seq;
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_status.usb_vid = d.vid; s_status.usb_pid = d.pid;
+        xSemaphoreGive(s_lock);
+        usbp_net_t net;
+        usbp_storage_t storage;
+        if (usbp_scan(cfg, len, &net, &storage) < 0) {usb_note(USBP_NET_NONE, "USB device descriptor unreadable or larger than 1 KB"); continue;}
+        int action = usbp_action(false, USBP_MODE_NETWORK, 0, &net, &storage, d.num_configs, d.config_value);
+        if (action == USBP_ACT_NETWORK) {
+            const char *why = "";
+            if (usb_port_net_open(&d, &net, s_netif, usb_link, NULL, &why) != ESP_OK) {usb_note(USBP_NET_NONE, why); continue;}
+            usb_note(net.kind, "");
+            while (usb_port_net_alive()) vTaskDelay(pdMS_TO_TICKS(250));
+            usb_port_net_close();
+            usb_note(USBP_NET_NONE, "USB Ethernet device stopped or disconnected");
+            vTaskDelay(pdMS_TO_TICKS(30000));   /* still attached: retry, at most every 30 s */
+            handled = 0;
+        } else if (action == USBP_ACT_SWITCH) {
+            usb_note(USBP_NET_NONE, usb_port_switch(&d, &storage) == ESP_ERR_INVALID_STATE
+                     ? "the USB device stays in storage mode: it may need a switch this firmware does not know"
+                     : "switching the USB device out of storage mode");
+        } else if (action == USBP_ACT_NEXT_CONFIG) {
+            usb_note(USBP_NET_NONE, usb_port_next_config(&d) ? "trying another USB configuration of the device"
+                                                              : "no configuration of this USB device has a supported network interface");
+        } else {
+            usb_note(USBP_NET_NONE, net.kind == USBP_NET_UNSUPPORTED
+                ? "this USB network device is not supported (vendor-only chip such as ASIX AX88179, or MBIM): use an adapter or phone with CDC-ECM, CDC-NCM or RNDIS"
+                : "no USB network interface on this device (a modem with serial ports belongs to the cellular uplink)");
+        }
+    }
+}
+#endif
+
+bool eth_uplink_usb_configured(void)
+{
+    eth_config_t c;
+    load(&c);
+    return c.enabled && c.transport == ETH_TRANSPORT_USB;
+}
+
 void eth_uplink_init(void)
 {
     ensure_lock();
@@ -273,7 +445,22 @@ void eth_uplink_init(void)
     s_status.compiled = true;
 #endif
     s_status.enabled_at_boot = s_running.enabled;
-    if (!s_running.enabled) return;   /* WiFi-only path: no SPI/GPIO/netif touched */
+    s_status.transport = s_running.transport;
+    if (!s_running.enabled) return;   /* WiFi-only path: no SPI/GPIO/USB/netif touched */
+    if (s_running.transport == ETH_TRANSPORT_USB) {
+#if CONFIG_SOC_USB_OTG_SUPPORTED
+        s_status.compiled = true;
+        esp_err_t err = prepare_usb(&s_running);
+        if (err != ESP_OK) {
+            char text[64];
+            snprintf(text, sizeof text, "USB Ethernet not prepared: %s", esp_err_to_name(err));
+            set_error(text);
+        }
+#else
+        set_error("USB host not available on this chip");
+#endif
+        return;
+    }
 #if CONFIG_ETH_SPI_ETHERNET_W5500
     esp_err_t err = start_w5500(&s_running);
     if (err != ESP_OK) {
@@ -290,6 +477,27 @@ void eth_uplink_init(void)
 
 void eth_uplink_start(void)
 {
+#if CONFIG_SOC_USB_OTG_SUPPORTED
+    if (s_usb) {
+        /* Fail closed: without the ACL hooks the interface never carries traffic. */
+        if (!netif_hooks_eth_ready()) {set_error("not started: firewall hooks unavailable"); return;}
+        s_lwip = esp_netif_get_netif_impl(s_netif);
+        const char *why = "";
+        esp_err_t err = usb_port_start(&why);
+        if (err == ESP_OK && xTaskCreatePinnedToCoreWithCaps(usb_task, "eth_usb", 4096, NULL, 5, NULL, tskNO_AFFINITY,
+                                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) err = ESP_ERR_NO_MEM;
+        if (err != ESP_OK) {
+            char text[sizeof s_status.error];
+            snprintf(text, sizeof text, "USB not started: %s", why[0] ? why : esp_err_to_name(err));
+            set_error(text);
+            return;
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_status.driver_started = true;
+        xSemaphoreGive(s_lock);
+        return;
+    }
+#endif
 #if CONFIG_ETH_SPI_ETHERNET_W5500
     if (!s_handle) return;
     /* Fail closed: without the ACL hooks the interface never carries traffic. */
@@ -320,12 +528,21 @@ esp_err_t eth_uplink_set_config(const eth_config_t *c, char *why, size_t n)
 {
     ensure_lock();
     if (!eth_config_valid(c, why, n)) return ESP_ERR_INVALID_ARG;
-    eth_record_t r = {.magic = ETH_MAGIC, .version = 1, .config = *c};
-    r.checksum = record_checksum(&r);
+    if (c->enabled && c->transport == ETH_TRANSPORT_USB) {
+        /* One USB port: one device at a time (no hubs). */
+        cell_config_t cell;
+        cell_uplink_get_config(&cell);
+        if (cell.enabled && cell.transport == CELL_TRANSPORT_USB) {
+            snprintf(why, n, "the USB port is already used by the cellular uplink");
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    union {eth_record_t v2; eth_record_v1_t v1;} r;
+    size_t size = record_encode(c, &r);
     nvs_handle_t nvs;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
     if (err == ESP_OK) {
-        err = nvs_set_blob(nvs, "eth_cfg", &r, sizeof r);
+        err = nvs_set_blob(nvs, "eth_cfg", &r, size);
         if (err == ESP_OK) err = nvs_commit(nvs);
         nvs_close(nvs);
     }
@@ -346,6 +563,16 @@ void eth_uplink_get_status(eth_status_t *out)
     out->link_up = atomic_load(&s_link);
     out->has_ip = atomic_load(&s_has_ip);
     out->selected = s_netif && uplink_internet_netif() == s_netif;
+#if CONFIG_SOC_USB_OTG_SUPPORTED
+    if (s_usb) {
+        usbp_device_t d;
+        usbp_memory_t m;
+        out->usb_present = usb_port_device(&d, NULL, 0, NULL);
+        usb_port_memory(&m);
+        out->usb_ram_host = m.host_bytes; out->usb_ram_session = m.session_bytes;
+        out->usb_ram_free = m.free_now; out->usb_ram_min = m.min_free; out->usb_ram_lean = m.lean;
+    }
+#endif
 }
 
 struct netif *eth_uplink_lwip_select(struct netif *sta)
@@ -402,6 +629,7 @@ static cJSON *config_json(const eth_config_t *c)
     cJSON *o = cJSON_CreateObject();
     if (!o) return NULL;
     cJSON_AddBoolToObject(o, "enabled", c->enabled);
+    cJSON_AddStringToObject(o, "transport", c->transport == ETH_TRANSPORT_USB ? "usb" : "spi");
     cJSON_AddStringToObject(o, "chip", "w5500");
     cJSON_AddNumberToObject(o, "spi_host", c->spi_host == 1 ? 2 : 3);
     cJSON_AddNumberToObject(o, "spi_mhz", c->spi_mhz);
@@ -433,6 +661,27 @@ static esp_err_t get_ethernet(httpd_req_t *req)
     cJSON_AddNumberToObject(status, "link_changes", s.link_changes);
     add_ip(status, "ip", s.ip); add_ip(status, "netmask", s.mask); add_ip(status, "gateway", s.gw);
     cJSON_AddStringToObject(status, "error", s.error);
+    cJSON_AddStringToObject(status, "transport", s.transport == ETH_TRANSPORT_USB ? "usb" : "spi");
+    if (s.transport != ETH_TRANSPORT_USB || !s.enabled_at_boot) cJSON_AddNullToObject(status, "usb");
+    else {
+        static const char *const NET[] = {"none", "ecm", "ncm", "rndis", "unsupported"};
+        cJSON *usb = cJSON_AddObjectToObject(status, "usb");
+        char id[10] = "";
+        if (s.usb_present && (s.usb_vid || s.usb_pid)) snprintf(id, sizeof id, "%04x:%04x", s.usb_vid, s.usb_pid);
+        if (usb) {
+            cJSON_AddBoolToObject(usb, "present", s.usb_present);
+            cJSON_AddStringToObject(usb, "id", id);
+            cJSON_AddStringToObject(usb, "network", s.usb_net < 5 ? NET[s.usb_net] : "none");
+            cJSON *ram = cJSON_AddObjectToObject(usb, "internal_ram");
+            if (ram) {
+                cJSON_AddNumberToObject(ram, "usb_host_bytes", s.usb_ram_host);
+                cJSON_AddNumberToObject(ram, "usb_session_bytes", s.usb_ram_session);
+                cJSON_AddNumberToObject(ram, "free_bytes", s.usb_ram_free);
+                cJSON_AddNumberToObject(ram, "min_free_bytes", s.usb_ram_min);
+                cJSON_AddBoolToObject(ram, "lean_session", s.usb_ram_lean);
+            }
+        }
+    }
     cJSON_AddStringToObject(status, "qualification", "not physically validated on this candidate");
     return send_json(req, root);
 }
@@ -470,11 +719,19 @@ static esp_err_t post_ethernet(httpd_req_t *req)
     }
     body[received] = 0;
     cJSON *root = json_guard_parse(body);
-    eth_config_t c = {.chip = ETH_CHIP_W5500};
+    eth_config_t saved, c;
+    eth_uplink_get_config(&saved);
+    memset(&c, 0, sizeof c);
+    c.chip = ETH_CHIP_W5500;
+    /* transport is optional: older clients keep the saved choice. */
+    c.transport = saved.transport;
+    const cJSON *jt = cJSON_GetObjectItemCaseSensitive(root, "transport");
+    bool transport_ok = !jt || (cJSON_IsString(jt) && (!strcmp(jt->valuestring, "spi") || !strcmp(jt->valuestring, "usb")));
+    if (transport_ok && jt) c.transport = !strcmp(jt->valuestring, "usb") ? ETH_TRANSPORT_USB : ETH_TRANSPORT_SPI;
     int host = 0, mhz = 0, sclk, mosi, miso, cs, intr, rst;
     const cJSON *enabled = cJSON_GetObjectItemCaseSensitive(root, "enabled"), *st = cJSON_GetObjectItemCaseSensitive(root, "static_ip");
     const cJSON *pref = cJSON_GetObjectItemCaseSensitive(root, "preference"), *chip = cJSON_GetObjectItemCaseSensitive(root, "chip");
-    bool parsed = cJSON_IsObject(root) && cJSON_IsBool(enabled) && cJSON_IsBool(st) && cJSON_IsString(pref)
+    bool parsed = cJSON_IsObject(root) && transport_ok && cJSON_IsBool(enabled) && cJSON_IsBool(st) && cJSON_IsString(pref)
         && cJSON_IsString(chip) && !strcmp(chip->valuestring, "w5500")
         && (!strcmp(pref->valuestring, "wifi_first") || !strcmp(pref->valuestring, "ethernet_first"))
         && json_int(root, "spi_host", 2, 3, &host) && json_int(root, "spi_mhz", 1, 40, &mhz)

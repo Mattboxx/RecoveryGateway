@@ -1,15 +1,17 @@
 <div align="center">
 
-<img src="assets/brand/png/banner.png" alt="ESP32 Tailnet Gateway — Mattboxx Edition. One ESP32. Multiple Tailnet roles. Enable only what you need." width="100%">
+<img src="assets/brand/png/banner.png" alt="ESP32 Tailnet Gateway — Mattboxx Edition. One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need." width="100%">
 
 # ESP32 Tailnet Gateway 
 
-**Mattboxx Edition · One ESP32. Multiple Tailnet roles. Enable only what you need.**
+**Mattboxx Edition · One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need.**
 
-**Tailscale / Headscale gateway · Standalone Wake-on-LAN via Telegram or ntfy**
+**Tailscale / Headscale gateway · Wake-on-LAN from Telegram or ntfy, no VPN needed · Ethernet and 4G/LTE uplinks for IoT**
 
-Connect local devices to selected Tailnet services, advertise subnets, or
-wake a NAS or PC and verify that it responds. Each role is optional.
+Use it as a Tailnet gateway, as a stand-alone Wake-on-LAN node you command
+from Telegram or ntfy, or as an IoT gateway that stays online over Ethernet
+or a mobile SIM when Wi-Fi drops. Each role is optional: you do not need
+Tailscale to use Wake-on-LAN or the backup uplinks.
 
 **ESP32-S3 N8R8 / N16R8 · 8 MB octal PSRAM**
 
@@ -32,9 +34,10 @@ wake a NAS or PC and verify that it responds. Each role is optional.
 
 | Use case | What the ESP32 does |
 | --- | --- |
+| **Wake and check a NAS or PC — no VPN needed** | Send Wake-on-LAN and verify that the device answers, from a Telegram bot or an ntfy topic. Works with or without Tailscale. [Setup and command reference](https://mattboxx.github.io/esp32-tailnet-gateway/remote-recovery/#commands). |
+| **Keep IoT devices online** | Use a mobile SIM or wired Ethernet as the main or the backup uplink, with automatic failover and an optional monthly data limit. **SIM:** a 4G/LTE modem wired to the board's pins (UART, e.g. SIM7600 or A7670 modules), or plugged into its USB port (USB LTE modems and 4G sticks, beta). **Ethernet:** a W5500 module on the pins (SPI), or a USB Ethernet adapter or phone tethering on the USB port (beta). [Hardware](https://mattboxx.github.io/esp32-tailnet-gateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
 | **Connect devices that cannot run Tailscale** | Forward one TCP or UDP service from the local LAN to a Tailnet peer. Restrict the source by IP/CIDR. |
 | **Reach a remote LAN** | Advertise approved subnets to Tailnet clients. Configure the gateway's own Wi-Fi for IoT devices. |
-| **Wake and check a NAS or PC** | Send Wake-on-LAN and verify reachability from Telegram or ntfy, even without Tailscale. [Setup and command reference](https://mattboxx.github.io/esp32-tailnet-gateway/remote-recovery/#commands). |
 | **Monitor and automate** | Track events and resource trends locally. Optionally use MQTT and Home Assistant, ntfy, Telegram, email or SNMP. |
 
 ## Quick start
@@ -69,19 +72,17 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.24
+## What's new in Firmware 3.0.25
 
-- Gateway Wi-Fi validates the network name and password before saving.
-- Backup restore applies encrypted AP passwords with their security mode
-  and stops on a rejected write before issuing a reboot.
-
-### Also in 3.0.23
-
-- **Network → Gateway Wi-Fi** can make the gateway's own Wi-Fi an open network
-  and close it again with a password, as first boot can.
-- On phones and tablets the idle timer stays inside the top bar.
-- The clearer first boot of 3.0.22 is included: functions grouped by goal,
-  one Tailscale question and the `.local` name.
+- **Tailscale access fixes:** single-use auth keys no longer take the gateway
+  offline after it joined, there is no 16-device limit, and a gateway alone in
+  its tailnet, networks that block port 80 or NTP, DNS failures and ACL rules
+  with node capabilities no longer block the tailnet.
+- **Clear Tailscale status:** why the gateway is not connected, node key
+  expiry, Tailnet Lock, peers and tunnels in use; a **Leave tailnet** button.
+- **LAN → Tailnet** tab redesigned, with a simple time limit per rule.
+- **Logs with date and time.**
+- **USB modems, 4G sticks and Ethernet adapters** (experimental, see below).
 
 [Install the current firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
 · [Full changelog](CHANGELOG.md)
@@ -118,6 +119,33 @@ quad flash**:
 | **N8R8** — e.g. ESP32-S3-DevKitC-1 N8R8, WROOM-1/1U-N8R8, Freenove N8R8, Seeed XIAO ESP32S3 (same layout, not yet tested on 3.x) | R2 or no PSRAM, octal-flash modules (WROOM-2, N16R16V, N32R8V), other ESP32 chips |
 
 Details and community reports: [Hardware](docs/HARDWARE.md).
+
+### USB modems, 4G sticks and Ethernet adapters (experimental, from 3.0.25)
+
+Besides a W5500 module or a modem wired to the pins, the gateway can use one
+USB device on the board's **USB** port (not the COM port): a USB LTE modem or
+4G stick with a SIM, a USB Ethernet adapter (Realtek RTL8152/8153/8156,
+CDC-ECM/NCM) or Android USB tethering. Choose *USB* in first-boot setup or on
+the Network page, save, restart, then plug the device. Not yet tested with real
+devices.
+
+- **The board does not supply 5 V on its USB port.** Use a powered USB-C OTG
+  Y-cable with a 5 V charger (at least 2.5 A for a modem or stick), or the
+  device's own 5 V supply with grounds connected. LTE modems draw **up to 2 A**
+  in bursts: a computer's USB port is not enough (modem resets, reset reason
+  BROWNOUT).
+- Never connect two 5 V sources together: if you bridge the board's USB-OTG
+  pad, never plug that port into a computer or charger.
+- After the restart the USB port is a USB host: flash, logs and power go
+  through the COM port. One device, no hubs, about 10 Mbit/s at most.
+- **While a USB connection is on, the Wi-Fi keeps 16 receive buffers instead of
+  24** to leave internal RAM for the device. Bursts of Wi-Fi traffic, such as
+  a speed test from a phone on the gateway's access point, can be slower or
+  lose more packets; ordinary use was unchanged in measurements. With the pins
+  or with these uplinks off, nothing changes.
+
+Full guide: [USB devices](https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/)
+· [docs/USB-DEVICES.md](docs/USB-DEVICES.md).
 
 ## Documentation
 

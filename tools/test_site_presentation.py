@@ -13,7 +13,7 @@ if not site.exists():
 assert build_site.REPO_URL.endswith('/'+build_site.REPO_SLUG)
 assert build_site.SITE_URL.endswith('/'+build_site.REPO_SLUG+'/')
 assert build_site.STABLE_TAG == 'v0.1.38-Mattboxx-1.13'
-assert len(list((root/'website/pages').glob('*.html'))) == 25
+assert len(list((root/'website/pages').glob('*.html'))) == 26   # 25-usb-devices.html since 3.0.25
 for file in site.rglob('*.html'):
     text = file.read_text(encoding='utf-8')
     if (file.parent == site and re.fullmatch(r'google[0-9a-f]+\.html', file.name)
@@ -59,6 +59,7 @@ if build_site.NEXT_PUBLISHED:
     changes = (site/'changelog/index.html').read_text(encoding='utf-8')
     assert f'[{build_site.NEXT_VERSION}]' in changes and 'dev.8' not in changes
     assert re.search(r'<h3>(Added|Fixed|Improved|Changed)</h3>', changes), 'changelog sections missing'
+    assert 'Notes of the' not in changes and 'adds to beta' not in changes, 'beta notes belong to CHANGELOG.md only'
 workflow=(root/'.github/workflows/pages.yml').read_text(encoding='utf-8')
 assert '  workflow_dispatch:' in workflow and '  push:' not in workflow
 assert 'submodules:' not in workflow  # Site build cannot publish dependency work.
@@ -69,4 +70,4 @@ for unsafe in (root,root/'build',root/'website',root.parent):
         pass
     else:
         raise AssertionError('Unsafe output directory accepted')
-print('PASS: 25-page presentation matches release/rename state; manifest gated, correct assets/canonical paths, README links and manual workflow')
+print('PASS: 26-page presentation matches release/rename state; manifest gated, correct assets/canonical paths, README links and manual workflow')

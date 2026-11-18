@@ -95,7 +95,7 @@ run('actual current/previous/next key expiration and abandoned handshake cleanup
 #define REJECT_AFTER_MESSAGES (UINT64_MAX - 8192)
 struct wireguard_keypair {bool valid;uint32_t keypair_millis;uint64_t sending_counter;};
 struct handshake {bool valid;uint32_t created_millis;};
-struct wireguard_peer {struct handshake handshake;uint8_t handshake_mac1[16];bool handshake_mac1_valid;
+struct wireguard_peer {struct handshake *handshake;uint8_t handshake_mac1[16];bool handshake_mac1_valid;
  struct wireguard_keypair curr_keypair,prev_keypair,next_keypair;};
 static uint32_t now_ms=1000000;
 static bool wireguard_expired(uint32_t start,unsigned seconds){return now_ms-start>=seconds*1000;}
@@ -103,15 +103,15 @@ static void crypto_zero(void *p,size_t n){memset(p,0,n);}
 static void keypair_destroy(struct wireguard_keypair *p){memset(p,0,sizeof *p);}
 ''' + expiry + r'''
 int main(void){
- struct wireguard_peer p={0};
+ struct wireguard_peer p={0};static struct handshake hs;p.handshake=&hs;
  p.curr_keypair=(struct wireguard_keypair){true,now_ms-1000,0};
  p.prev_keypair=(struct wireguard_keypair){true,now_ms-181000,0};
  p.next_keypair=(struct wireguard_keypair){true,now_ms-1000,REJECT_AFTER_MESSAGES};
- p.handshake=(struct handshake){true,now_ms-541000};
+ hs=(struct handshake){true,now_ms-541000};
  memset(p.handshake_mac1,99,sizeof p.handshake_mac1);p.handshake_mac1_valid=true;
  wireguard_expire_keys(&p);
  assert(p.curr_keypair.valid&&!p.prev_keypair.valid&&!p.next_keypair.valid);
- assert(!p.handshake.valid&&!p.handshake_mac1_valid);
+ assert(!p.handshake->valid&&!p.handshake_mac1_valid);
  for(unsigned i=0;i<sizeof p.handshake_mac1;i++)assert(!p.handshake_mac1[i]);
 }
 ''')
@@ -196,12 +196,11 @@ run('actual DERP TLS policy: trusted verification default, CertName and CA-attac
 #define MBEDTLS_SSL_VERIFY_REQUIRED 2
 #define MBEDTLS_SSL_VERIFY_NONE 0
 typedef struct {char cert_name[80];} ml_derp_node_t;
-typedef struct {struct {int ssl_conf;} derp;} microlink_t;
 static int mode,attach_error,attaches;
 static void mbedtls_ssl_conf_authmode(int *conf,int value){(void)conf;mode=value;}
 static int ml_tls_bundle_attach(int *conf){(void)conf;attaches++;return attach_error;}
 static int configure(ml_derp_node_t *derp_node,const char *derp_host){
- microlink_t node={0};microlink_t *ml=&node;
+ struct {int ssl_conf;} conn={0},*c=&conn;
 ''' + tls + r'''
  assert(!strcmp(tls_name,derp_node&&derp_node->cert_name[0]?derp_node->cert_name:derp_host));
  return 0;fail_tls:return -1;
@@ -217,10 +216,11 @@ int main(void){
 ''')
 
 mgr = (ML / 'src/ml_wg_mgr.c').read_text(encoding='utf-8')
-sync = 'struct wg_tcpip_call {' + mgr.split('struct wg_tcpip_call {', 1)[1].split('static void wg_netif_bring_up_cb', 1)[0]
+sync = 'struct wg_tcpip_call {' + mgr.split('struct wg_tcpip_call {', 1)[1].split('/* udp_sendto on the raw WG output PCB from any task', 1)[0]
 run('actual blocking TCPIP executor completes callback before its stack context expires', r'''
 static unsigned completions;
 static int esp_netif_tcpip_exec(int(*fn)(void*),void *arg){return fn(arg);}
+typedef void *TaskHandle_t;static TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)1;}
 ''' + sync + r'''
 static void callback(void *p){(*(unsigned *)p)++;completions++;}
 int main(void){unsigned count=0;for(unsigned i=0;i<10000;i++){wg_tcpip_sync(callback,&count);assert(count==i+1&&completions==count);}}

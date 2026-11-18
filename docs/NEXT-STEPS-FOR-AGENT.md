@@ -1,5 +1,22 @@
 # Maintainer continuation
 
+## Tailnet access audit (2026-11-18)
+
+Fixed items and the open ones (map size/zstd, PingRequest types other than
+liveness, capability version claims, IPv6 in the tailnet, DNS fallback for
+the control host) are in [TAILNET-ACCESS-AUDIT.md](TAILNET-ACCESS-AUDIT.md).
+
+## Active — 3.0.25-beta.1 USB modems, sticks, adapters and tethering
+
+- 2026-11-17: beta.15 (`a217099`, pre-release `v3.0.25-beta.15`) is current and installed on board A (VALIDATION-STATUS): beta.13 plus quieter boot (SD, MQTT) and silent refusal of out-of-scope web connections. README/site/branding positioning (c602715, 3e6e094) goes live only with the next merge to Main.
+- Branch `feat/usb-cellular-20261115` (worktree `.codex/workspaces/tailnet-usb-cell-20261115`, pushed to the fork), published as the pre-release `v3.0.25-beta.2` from `6af276d` (v3.0.24 stays Latest); MicroLink unchanged (`763f5d4`). ADR-036, docs/CELLULAR.md, docs/ETHERNET.md, docs/USB-DEVICES.md.
+- Board B runs the exact beta image with the USB connection off. Not merged to Main.
+- Beta.6 (`43f82f8`, pre-release `v3.0.25-beta.6`) matched 3.0.24 on board A with USB off (alternating A/B, VALIDATION-STATUS). Beta.7 (`8c51bbf`, pre-release `v3.0.25-beta.7`) is current: no internal RAM for the USB code while off (`main/usb_flash.lf`, PSRAM state, ring buffer); board A with USB off has 620 B more internal RAM free than 3.0.24 with equal speed and ping. Board B smoke pending until it is connected again. Beta.8 (`79d2782`, pre-release `v3.0.25-beta.8`, installed on board A): 15 s beacon timeout against the router's ~12 h beacon pauses (ADR-037; check board A `/api/events` for "reason 200" after 19:23 2026-11-16 and the next days), USB power warnings in setup and on the Network page, a titled pins/USB step in setup, the website/README USB guide (`website/pages/25-usb-devices.html`, README section) with suggested test devices. The owner keeps 3.0.25 a beta until a real USB modem/stick and an RTL8153 adapter are tested on board B; then the stable flow.
+- Beta.5 (`0602175`, pre-release `v3.0.25-beta.5`) is current: lean Wi-Fi RX buffers only while USB is enabled, measured on board A (VALIDATION-STATUS). Still pending: a real USB modem, stick, adapter or phone. The 1248-byte ping truncation seen from the test PC also happens with the router and other LAN hosts (PC network path, not the gateway). Beta.6 translates the remaining toast titles.
+- Beta.3 (`a93ffdd`, pre-release `v3.0.25-beta.3`) replaces beta.2: serial without the CDC-ACM driver, 40 KB internal RAM guard measured at run time. Next on board A (owner's daily board, beta channel on): after the owner installs beta.3, enable Cellular → USB with no device, restart, read `/api/cellular` → `status.usb.internal_ram` (USB host cost, free and minimum free), check Tailnet and the Web UI, then set the connection back to pins/off and restart. Next: a hardware test with a real device, owner-guided: power board B from its COM (UART) port or a 5 V supply instead of the native USB port, plug the device (with its own 5 V) into the native port, enable Cellular → USB or Ethernet → USB, restart, read the card status (device id, interface or network kind, reason). Record descriptors of untested devices (the status shows vendor:product) and extend the known tables only from evidence.
+- Then: unplug/replug, a stick in CD-ROM mode, an RTL8153 adapter (configuration change), Android tethering, internal heap and task stacks while enabled, throughput.
+- Before stable (owner, 2026-11-15/16): connection and power guide on the website and in the README, linked from the USB hints: done in beta.8 (photos of the Y-cable and the USB-OTG pad once tested). Stable only after real-device tests (owner, 2026-11-16).
+
 ## Released — 3.0.22 first-boot choices by goal
 
 - 2026-11-14: PR #31 merged to Main as `9ec3231`; GitHub release `v3.0.22` (Latest) with 10 assets, every digest re-downloaded and matched `SHA256SUMS.txt`; Pages deployed and the live `firmware/3.0.22/firmware.bin` matches 6cea151c915f6e9f04981980c31be647440ea5ad9eb89ce77efb60d544860119. Board A was not updated; hardware evidence is the owner's first boot of the equivalent beta.2 on board B.
@@ -275,3 +292,20 @@ Public release preparation and future changes follow [Quality policy](QUALITY-GA
 [Migration](MIGRATION-RENAME.md), [Release availability](PRESENTATION-STATUS.md)
 and the [development roadmap](DEVELOPMENT-ROADMAP.md). Detailed test execution
 and remaining-case lists are internal maintainer records, not release content.
+
+## 3.0.25-beta.9 candidate (2026-11-17)
+
+- Source `70198e8` on `feat/usb-cellular-20261115`, hashes in ignored `build/development-3.0.25-beta.9/70198e8/`. Not published.
+- Owner authorized installing it on board A over Tailscale once validation passes (recorded 2026-11-17). The lab runner (pid 18364) is not running: install needs the owner to restart `run_lab.ps1` or to upload `firmware.bin` via System -> Firmware.
+- After install: check `/api/status` version, DNS relay over TCP (`dig +tcp` through the AP/LAN listener), a large TXT answer over UDP (TC, then TCP), the DNS diagnostics counters, and the Cellular data-limit section (no modem needed). Real USB modem tests stay pending.
+- Review backlog from the 2026-11-17 audit is listed in the owner report (security hardening and feature ideas); none implemented yet.
+
+## 3.0.25-beta.15 (2026-11-17)
+
+- Published 2026-11-17 as the GitHub pre-release v3.0.25-beta.15 (tag at a217099, 4 assets re-downloaded and verified with `SHA256SUMS.txt`); v3.0.24 stays Latest. Beta.14 was not published (superseded).
+
+## 3.0.25-beta.13 (2026-11-17)
+
+- Published 2026-11-17 as the GitHub pre-release v3.0.25-beta.13 (tag at c26187e, assets verified by SHA-256; full validation 153/153 on ab7f28b, no firmware change from c26187e); v3.0.24 stays Latest.
+- The lab runner's Tailscale adapter index on the owner PC changed from 26 to 28 (WinError 10022 until updated in job scripts).
+- Pending: real USB modem/stick/adapter tests (owner's device needed), HiLink signal, session binding observed from two clients.

@@ -41,6 +41,8 @@ async function fixture(browser, options = {}) {
     } else if (url.pathname === '/api/operations') {
       if(route.request().method()==='POST') {
         state.savedOperation=route.request().postDataJSON();body={ok:true};
+        if(state.savedOperation.action==='lease'){(state.leaseOps=state.leaseOps||[]).push(state.savedOperation);
+          if(state.leaseFail){body={ok:false,error:'clock not synchronized'};status=409;}}
         if(state.savedOperation.action==='tcp-save')state.savedTcp=state.savedOperation.targets.map(target=>({...target,state:'not checked',observed_ms:0}));
         if(state.savedOperation.action==='tcp-check')state.savedTcp=state.savedTcp.map(target=>target.name===state.savedOperation.name?{...target,state:'reachable',observed_ms:1000}:target);
         if(state.savedOperation.action==='settings'){
@@ -59,19 +61,22 @@ async function fixture(browser, options = {}) {
       if(state.healthFailures){state.healthFailures--;status=503;}
       body=state.healthBody || {enabled:false,notify:false,interval_s:60,failure_threshold:3,gateway_port:0,dns_name:'',internet_ip:'',internet_port:0,tailnet_target:'',tailnet_port:0,checks:[],saved_tcp:state.savedTcp||[]};
     } else if (url.pathname === '/api/service-leases') {
-      body=state.leasesBody || [];
+      body=state.serviceLeases || (Array.isArray(state.leasesBody)?state.leasesBody:[]);
     } else if (url.pathname === '/api/mqtt') {
       if (state.mqttDelay) await new Promise(resolve => setTimeout(resolve, state.mqttDelay));
       if (state.mqttFailures) { state.mqttFailures--; status = 503; }
       if (route.request().method() === 'POST') { state.savedMqtt = route.request().postDataJSON(); state.mqttBody = {...(state.mqttBody || mqtt), ...state.savedMqtt}; body = {ok:true}; }
       else body = state.mqttBody || mqtt;
+    } else if (url.pathname === '/api/ntfy/test') {
+      state.ntfyTests = (state.ntfyTests || 0) + 1;
+      body = state.ntfyTestBody || {ok: true};
     } else if (url.pathname === '/api/ntfy') {
       if (state.ntfyFailures) { state.ntfyFailures--; status = 503; }
       if (route.request().method() === 'POST') { state.savedNtfy = route.request().postDataJSON(); state.ntfyBody = {...(state.ntfyBody || ntfy), ...state.savedNtfy}; body = {ok: true}; }
       else body = state.ntfyBody || ntfy;
     } else if (url.pathname === '/api/snmp') {
       if (state.snmpFailures) { state.snmpFailures--; status = 503; }
-      body = state.snmpBody || { enabled: false, running: false, community: 'fixture' };
+      body = state.snmpBody || { enabled: false, running: false, has_community: true, community_is_default: false };
     } else if (url.pathname === '/api/system') {
       if (route.request().method() === 'POST') {
         state.savedSystem = route.request().postDataJSON();
@@ -152,10 +157,19 @@ async function fixture(browser, options = {}) {
       else {status=202;body={ok:true,state:'pending'};
         const rule=(state.forwardBody.rules||[]).find(r=>r.index===input.index&&r.rule_token===input.rule_token);
         if(rule)rule.destination_check={state:'reachable',summary:'This gateway completed a TCP handshake with the Tailnet destination',next_step:'Enable the rule, then connect from an allowed LAN client',checked_ip:'100.64.0.9',latency_ms:42,age_s:0};}
+    } else if (url.pathname === '/api/log/raw') {
+      const since = Number(url.searchParams.get('since') || 0);
+      const data = state.logData || '';
+      body = {seq: data.length, lost: false, size: data.length, cap: 16384, boot_ms: state.logBootMs || 0,
+        data: data.substring(Math.min(since, data.length))};
+    } else if (url.pathname === '/api/tailscale/leave') {
+      state.leaveCalls = (state.leaveCalls || 0) + 1;
+      body = {ok: true, server: state.leaveServer || 'logged_out'};
     } else if (url.pathname === '/api/tailnet-forward') {
       if (state.forwardFailures) { state.forwardFailures--; status = 503; }
       if (route.request().method() === 'POST') {
         state.savedForward = route.request().postDataJSON();
+        if (state.onForwardSave) state.onForwardSave(state);
         body = {ok: true};
       } else {
         body = state.forwardBody || {rules: [], max: 8, uplink_ip: '192.0.2.20', observation: 'passive_snapshot'};
@@ -199,6 +213,8 @@ async function fixture(browser, options = {}) {
         body = state.speedPolls < 2 ? {running: true, bytes: 1048576, elapsed_ms: 1000, kbps: 8389, first_byte_ms: 40, http: 200, result: ''}
                                     : {running: false, bytes: 12582912, elapsed_ms: 10000, kbps: 10066, first_byte_ms: 40, http: 200, result: 'time limit reached'}; }
     }
+    if (url.pathname === '/api/dhcp/leases' && state.leasesBody) body = state.leasesBody;
+    if (url.pathname === '/api/system' && route.request().method() === 'POST' && state.systemReject) { status = 400; body = state.systemReject; state.systemReject = null; }
     if (state.rejectProtected && ['/api/mqtt', '/api/ntfy'].includes(url.pathname)) status = 401;
     await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   });
@@ -385,6 +401,136 @@ async function main() {
       assert.equal('pin' in f.state.savedCellular, false); assert.equal('password' in f.state.savedCellular, false);
       await f.page.locator('#cell-pin').fill('1234'); await f.page.locator('#cell-save').click(); await f.page.waitForTimeout(300);
       assert.equal(f.state.savedCellular.pin, '1234');
+      /* A firmware without the USB fields: UART pins shown, USB defaults sent. */
+      assert.equal(await f.page.locator('#cell-transport').inputValue(), 'uart');
+      assert.equal(await f.page.locator('#cell-tx').isVisible(), true); assert.equal(await f.page.locator('#cell-usb-mode').isVisible(), false);
+      assert.equal(f.state.savedCellular.transport, 'uart'); assert.equal(f.state.savedCellular.usb_mode, 'auto'); assert.equal(f.state.savedCellular.usb_interface, -1);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Cellular over USB: pin fields hidden, USB mode and status shown, typed save.
+    {
+      const cellConfig = {enabled: true, mode: 'failover', roaming: false, data_ack: true, transport: 'usb', usb_mode: 'network', usb_interface: -1,
+        uart: 1, baud: 115200, tx: 17, rx: 18, rts: -1, cts: -1, pwrkey: -1, pwrkey_active_high: false, apn: '', user: '', has_password: false, has_pin: false};
+      f = await fixture(browser, { page: 'network', cellularBody: {config: cellConfig, status: {enabled_at_boot: true, task_running: true, state: 'connected',
+        registration: null, rssi_dbm: null, model: '', operator: '', ip: '192.168.8.100', has_ip: true, selected_uplink: true, restart_required: false,
+        connects: 1, bytes_in: 0, bytes_out: 0, error: '', transport: 'usb', qualification: 'experimental',
+        usb: {present: true, id: '12d1:14dc', interface: 1, chosen_by: 'none', rx_dropped: 0, mode: 'network', network: 'ecm', switches: 1}}} });
+      await f.page.waitForFunction(() => document.getElementById('cell-badge').textContent === 'Connected');
+      const text = await f.page.locator('#cell-status').textContent();
+      assert.match(text, /USB device 12d1:14dc · USB network CDC-ECM/); assert.match(text, /carrying Internet traffic/);
+      assert.equal(await f.page.locator('#cell-transport').inputValue(), 'usb');
+      assert.equal(await f.page.locator('#cell-usb-mode').inputValue(), 'network');
+      assert.equal(await f.page.locator('#cell-usb-iface').inputValue(), '-1');
+      assert.equal(await f.page.locator('#cell-usb-iface option').count(), 17);
+      for (const id of ['#cell-uart', '#cell-baud', '#cell-tx', '#cell-rx']) assert.equal(await f.page.locator(id).isVisible(), false, id);
+      assert.equal(await f.page.locator('#cell-pwrkey').isVisible(), true);   /* PWRKEY works with both connections */
+      assert.equal(await f.page.locator('#cell-card div.form-hint.cell-usb').isVisible(), true);
+      await f.page.locator('#cell-card div.form-hint.cell-usb details summary').click();
+      assert.match(await f.page.locator('#cell-card div.form-hint.cell-usb details').textContent(), /SIM7600[\s\S]*HiLink[\s\S]*Not supported/);
+      await f.page.locator('#cell-transport').selectOption('uart');
+      assert.equal(await f.page.locator('#cell-tx').isVisible(), true); assert.equal(await f.page.locator('#cell-usb-mode').isVisible(), false);
+      assert.equal(await f.page.locator('#cell-card div.form-hint.cell-usb').isVisible(), false);
+      await f.page.locator('#cell-transport').selectOption('usb');
+      await f.page.locator('#cell-usb-mode').selectOption('serial');
+      await f.page.evaluate(() => { const s = document.getElementById('cell-usb-iface'); s.value = '3'; s.dispatchEvent(new Event('change')); });
+      await f.page.locator('#cell-save').click();
+      for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
+      assert.equal(f.state.savedCellular.transport, 'usb'); assert.equal(f.state.savedCellular.usb_mode, 'serial');
+      assert.equal(f.state.savedCellular.usb_interface, 3); assert.equal(f.state.savedCellular.apn, '');
+      assert.equal(f.state.savedCellular.tx, 17);   /* pins kept for a later switch back */
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Monthly data limit: off text; with a limit the use, period start and pause
+    // are shown; saving sends only the limit (no modem settings, no restart);
+    // the counter reset asks first and sends reset_usage.
+    {
+      const cellConfig = {enabled: true, mode: 'failover', roaming: false, data_ack: true, uart: 1, baud: 115200, tx: 17, rx: 18, rts: -1, cts: -1,
+        pwrkey: -1, pwrkey_active_high: false, apn: 'internet.example', user: '', has_password: false, has_pin: false};
+      const st = {enabled_at_boot: true, task_running: true, state: 'connected', registration: 1, rssi_dbm: -70, model: '', operator: '', ip: '10.64.1.2',
+        has_ip: true, selected_uplink: false, restart_required: false, connects: 1, bytes_in: 0, bytes_out: 0, error: ''};
+      f = await fixture(browser, { page: 'network', cellularBody: {config: cellConfig, status: st,
+        data_limit: {limit_mb: 0, warn_percent: 80, reset_day: 1, pause: false, used_bytes: 0, paused: false, clock: true, period_start: null}} });
+      await f.page.waitForFunction(() => document.getElementById('cell-limit-status').textContent.length > 0);
+      assert.equal(await f.page.locator('#cell-limit-status').textContent(), 'Off: mobile data is not counted.');
+      assert.equal(await f.page.locator('#cell-limit-reset').isVisible(), false);
+      assert.equal(await f.page.locator('#cell-limit-save').isDisabled(), true);
+      f.state.cellularBody = {config: cellConfig, status: st, data_limit: {limit_mb: 1000, warn_percent: 80, reset_day: 10, pause: true,
+        used_bytes: 1000 * 1048576, paused: true, clock: true, period_start: '2026-11-10'}};
+      await f.page.locator('#cell-limit-mb').fill('1000');
+      await f.page.locator('#cell-limit-day').fill('10');
+      await f.page.locator('label:has(#cell-limit-pause)').click();
+      await f.page.locator('#cell-limit-save').click();
+      for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
+      assert.deepEqual(f.state.savedCellular, {data_limit: {limit_mb: 1000, warn_percent: 80, reset_day: 10, pause: true}});
+      await f.page.waitForFunction(() => document.getElementById('cell-limit-status').textContent.includes('1000 MB / 1000 MB'));
+      assert.match(await f.page.locator('#cell-limit-status').textContent(), /^Used this month: 1000 MB \/ 1000 MB \(100%\) · since 2026-11-10 · limit reached: mobile data paused until the next month$/);
+      assert.equal(await f.page.locator('#cell-limit-reset').isVisible(), true);
+      f.state.savedCellular = null;
+      f.page.once('dialog', d => d.accept());
+      await f.page.locator('#cell-limit-reset').click();
+      for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
+      assert.equal(f.state.savedCellular.data_limit.reset_usage, true);
+      assert.equal('enabled' in f.state.savedCellular, false);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Administration scope: shown from /api/system, saved alone; a refusal
+    // (page opened through the LAN) shows the gateway's reason, not a success.
+    {
+      f = await fixture(browser, { page: 'system/security', systemBody: { web_auth_enabled: true, session_timeout_s: 0, admin_scope: 'anywhere',
+        wifi_power_save: false, wifi_power_save_active: false, wifi_power_save_known: true } });
+      await f.page.waitForFunction(() => document.getElementById('sys-admin-scope').value === 'anywhere');
+      assert.equal(await f.page.locator('#sys-admin-scope-save').isDisabled(), true);
+      f.state.systemReject = 'this page is open through the local network: open it through the tailnet or the access point first, then limit access';
+      await f.page.locator('#sys-admin-scope').selectOption('tailnet_ap');
+      await f.page.locator('#sys-admin-scope-save').click();
+      await f.page.waitForFunction(() => /through the local network/.test(document.body.textContent));
+      assert.equal(await f.page.locator('#sys-admin-scope-save').isDisabled(), false);
+      f.state.savedSystem = null;
+      await f.page.locator('#sys-admin-scope-save').click();
+      for (let i = 0; i < 50 && !f.state.savedSystem; i++) await f.page.waitForTimeout(100);
+      assert.deepEqual(f.state.savedSystem, { admin_scope: 'tailnet_ap' });
+      await f.page.waitForFunction(() => document.getElementById('sys-admin-scope').value === 'tailnet_ap');
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Traffic per AP device: off -> no column; switching on posts the setting
+    // and shows each device's sent/received bytes.
+    {
+      const client = { mac: '02:11:22:33:44:55', ip: '192.168.4.2', hostname: 'phone', name: '', rssi: -50, reserved: false };
+      f = await fixture(browser, { page: 'network/clients', leasesBody: { clients: [client], leases: [], traffic_counted: false } });
+      await f.page.waitForFunction(() => document.querySelector('#dhcp-clients-body table'));
+      assert.equal(await f.page.locator('#dhcp-clients-body th', { hasText: 'Traffic' }).count(), 0);
+      assert.equal(await f.page.locator('#dhcp-traffic-on').isChecked(), false);
+      f.state.leasesBody = { clients: [{ ...client, sent_bytes: 2048, received_bytes: 3 * 1048576 }], leases: [], traffic_counted: true };
+      f.state.savedSystem = null;
+      await f.page.locator('label:has(#dhcp-traffic-on)').click();
+      for (let i = 0; i < 50 && !f.state.savedSystem; i++) await f.page.waitForTimeout(100);
+      assert.deepEqual(f.state.savedSystem, { ap_client_traffic: true });
+      await f.page.waitForFunction(() => /↑2\.0 KB ↓3\.0 MB/.test(document.getElementById('dhcp-clients-body').textContent));
+      assert.equal(await f.page.locator('#dhcp-clients-body th', { hasText: 'Traffic' }).count(), 1);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Cellular over USB waiting for a device, then refused for internal RAM: a
+    // "Waiting" badge (not "Connecting"), and firmware messages in Italian with
+    // their numbers kept.
+    {
+      const cellConfig = {enabled: true, mode: 'failover', roaming: false, data_ack: true, transport: 'usb', usb_mode: 'auto', usb_interface: -1,
+        uart: 1, baud: 115200, tx: 17, rx: 18, rts: -1, cts: -1, pwrkey: -1, pwrkey_active_high: false, apn: '', user: '', has_password: false, has_pin: false};
+      const status = (error, present) => ({enabled_at_boot: true, task_running: true, state: 'backoff', registration: null, rssi_dbm: null, model: '', operator: '',
+        ip: '', has_ip: false, selected_uplink: false, restart_required: false, connects: 0, bytes_in: 0, bytes_out: 0, error, transport: 'usb',
+        usb: {present, id: present ? '2c7c:0125' : '', interface: -1, chosen_by: 'none', rx_dropped: 0, mode: 'none', network: 'none', switches: 0,
+          internal_ram: {usb_host_bytes: 3344, usb_session_bytes: 0, free_bytes: 44331, min_free_bytes: 39828, lean_session: false}}});
+      f = await fixture(browser, { page: 'network', cellularBody: {config: cellConfig,
+        status: status("no USB device on the USB port: check the cable, the OTG port and the device's 5 V supply", false)} });
+      await f.page.waitForFunction(() => document.getElementById('cell-badge').textContent === 'Waiting');
+      assert.match(await f.page.locator('#cell-status').textContent(), /^Waiting before the next attempt · No USB device — no USB device on the USB port/);
+      await f.context.close();
+      f = await fixture(browser, { page: 'network', locale: 'it-IT', cellularBody: {config: cellConfig,
+        status: status('not enough internal RAM for this USB device: about 5 KB needed, 43 KB free, 40 KB kept for the rest of the gateway; turn off unused features', true)} });
+      await f.page.waitForFunction(() => document.documentElement.lang === 'it' && document.getElementById('cell-badge').textContent === 'In attesa');
+      const it = await f.page.locator('#cell-status').textContent();
+      assert.match(it, /Dispositivo USB 2c7c:0125/);
+      assert.match(it, /RAM interna insufficiente per questo dispositivo USB: servono circa 5 KB, liberi 43 KB/);
+      assert.ok(!/not enough|Waiting before/.test(it), it);
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
     // Layout migration card: only on the 2.x table, explicit confirmation, progress.
@@ -552,17 +698,27 @@ async function main() {
 
     // New upstream SNMP settings use the same honest unknown-state model:
     // no failed read may turn a running listener into an unchecked switch.
-    f = await fixture(browser, { page: 'system/logging', snmpBody: { enabled: true, running: true, community: 'fixture' } });
+    f = await fixture(browser, { page: 'system/logging', snmpBody: { enabled: true, running: true, has_community: true, community_is_default: false } });
     await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Running');
     assert.equal(await f.page.locator('#sys-snmp-en').isChecked(), true);
     f.state.snmpFailures = 2;
     await f.page.locator('#sys-snmp-reload').click();
     await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Unavailable');
     assert.equal(await f.page.locator('#sys-snmp-en').isChecked(), true);
-    f.state.snmpBody = { enabled: false, running: false, community: 'fixture' };
+    f.state.snmpBody = { enabled: false, running: false, has_community: true, community_is_default: false };
     await f.page.locator('#sys-snmp-reload').click();
     await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Disabled');
     assert.equal(await f.page.locator('#sys-snmp-card').getAttribute('data-feature-state'), 'disabled');
+    // The community is write-only: never shown, a placeholder says it is
+    // kept; "public" gets a warning; saving with the field empty keeps it.
+    assert.equal(await f.page.locator('#sys-snmp-community').inputValue(), '');
+    assert.equal(await f.page.locator('#sys-snmp-community').getAttribute('placeholder'), 'Saved — leave empty to keep');
+    assert.equal(await f.page.locator('#sys-snmp-community-hint').isVisible(), false);
+    f.state.snmpBody = { enabled: true, running: true, has_community: true, community_is_default: true };
+    await f.page.locator('#sys-snmp-reload').click();
+    await f.page.waitForFunction(() => document.getElementById('sys-snmp-badge').textContent === 'Running');
+    assert.equal(await f.page.locator('#sys-snmp-community-hint').isVisible(), true);
+    assert.equal((await f.page.content()).includes('fixture-secret'), false);
     assert.deepEqual(f.errors, []);
     await f.context.close(); count++;
     // An unlimited idle timer must not imply that password protection is off.
@@ -661,7 +817,12 @@ async function main() {
       events:[],monitoring:true,guard:true,guard_deferring:true,remote_commands:false,recovery_state:'idle',internal_free:17191,internal_min:15000,internal_largest:7000,sockets_used:12,socket_limit:31,
       minimum_internal:16384,minimum_largest:8192,socket_reserve:4,interval_s:60} });
     await f.page.waitForFunction(() => !document.getElementById('ops-settings-save').disabled);
-    assert.equal(await f.page.locator('#ops-guard-warning').isHidden(), false);
+    assert.equal(await f.page.locator('#ops-guard-warning').evaluate(e => e.hidden), false);
+    // Health & resources lives under Diagnostics -> Hardware (3.0.25) and loads there.
+    assert.equal(await f.page.locator('#ops-health-card').evaluate(e => e.closest('.subpage').dataset.sub + '/' + e.closest('.page-section').id), 'hardware/page-tools');
+    await f.page.evaluate(() => { location.hash = '#tools/hardware'; });
+    await f.page.waitForFunction(() => document.getElementById('ops-guard-warning').offsetParent !== null);
+    await f.page.evaluate(() => { location.hash = '#operations'; });
     assert.match(await f.page.locator('#ops-summary').textContent(), /free internal 17191 B/);
     await f.page.route('http://esp32.test/api/operations', route => route.request().method() === 'POST'
       ? route.fulfill({ status: 429, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'This device was checked less than a minute ago; try again shortly' }) })
@@ -780,6 +941,38 @@ async function main() {
     await f.page.waitForFunction(() => document.getElementById('ts-page-badge').textContent === 'Policy pending');
     assert.match(await f.page.locator('#ts-page-badge').getAttribute('class'), /badge-warning/);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Live log: lines show date and time once the device clock is known,
+    // also lines that arrived before it (browser time zone).
+    {
+      f = await fixture(browser, {page: 'tools', logData: 'W (61000) test: before the clock\n'});
+      await f.page.waitForFunction(() => document.getElementById('tool-log-body').textContent.includes('before the clock'));
+      const pre = () => f.page.evaluate(() => document.getElementById('tool-log-body').textContent);
+      assert.match(await pre(), /^W \(61000\) test: before the clock/m);
+      const boot = new Date(2026, 10, 18, 10, 0, 0).getTime();
+      f.state.logBootMs = boot; f.state.logData += 'E (122500) test: after\n';
+      await f.page.waitForFunction(() => document.getElementById('tool-log-body').textContent.includes('after'));
+      const text = await pre();
+      assert.match(text, /^W 2026-11-18 10:01:01 \(61000\) test: before the clock$/m);
+      assert.match(text, /^E 2026-11-18 10:02:02 \(122500\) test: after$/m);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Leave tailnet: nothing is sent before the confirmation; Cancel sends
+    // nothing; the toast says what the control server answered.
+    for (const [server, text] of [['logged_out', /logged this gateway out/], ['unreachable', /could not be reached: remove the device/]]) {
+      f = await fixture(browser, {page: 'tailscale', tailscaleSettings: {enabled: true}, leaveServer: server});
+      await f.page.waitForFunction(() => !!document.getElementById('ts-leave'));
+      await f.page.locator('#ts-leave').click();
+      assert.match(await f.page.locator('#modal-body').textContent(), /tailscale logout/);
+      assert.equal(f.state.leaveCalls, undefined);
+      await f.page.locator('#modal-cancel').click();
+      assert.equal(f.state.leaveCalls, undefined);
+      await f.page.locator('#ts-leave').click();
+      await f.page.locator('#modal-confirm').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('restarting'));
+      assert.equal(f.state.leaveCalls, 1);
+      assert.match(await f.page.locator('#toastContainer').textContent(), text);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Selective service gateway: installed mapping != verified service.
     const forwardRule = {name: 'Synthetic broker', enabled: true, installed: true,
       protocol: 'tcp', listen_port: 18830, destination_port: 1883,
@@ -828,6 +1021,64 @@ async function main() {
     assert.deepEqual(Object.keys(f.state.savedForward.rules[0]).sort(),
       ['name','enabled','protocol','listen_port','tailnet_destination','destination_port','allowed_source_subnet'].sort());
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Time limits live on each rule and are confirmed on Save: an untouched
+    // timed rule keeps its timer, a closed rule gets the chosen limit, an
+    // edited timed rule keeps its remaining time, "No time limit" on a table
+    // that never used timers sends nothing (the strict ledger never starts).
+    {
+      const ruleA={...forwardRule,name:'Timed NAS',index:0,rule_token:11};
+      const ruleB={...forwardRule,name:'Closed SSH',listen_port:2222,destination_port:22,index:1,rule_token:12};
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[ruleA,ruleB]},
+        serviceLeases:[{index:0,rule_token:11,temporary:true,effective_enabled:true,remaining_s:840,status:'active',delete_on_expiry:false},
+                       {index:1,rule_token:12,temporary:false,effective_enabled:false,remaining_s:0,status:'binding-unconfirmed',delete_on_expiry:false}]});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      assert.match(await f.page.locator('.tf-access-text').nth(0).textContent(),/closes in 14 min/);
+      assert.match(await f.page.locator('.tf-access-text').nth(1).textContent(),/Not forwarding: choose how long/);
+      assert.equal(await f.page.locator('.tf-runtime-badge').nth(1).textContent(),'Not forwarding: time limit');
+      assert.equal(await f.page.locator('.tf-time').nth(0).inputValue(),'keep');
+      assert.equal(await f.page.locator('.tf-time').nth(1).inputValue(),'');
+      assert.equal(await f.page.locator('.tf-del-exp-label').nth(1).isHidden(),true);
+      await f.page.locator('.tf-time').nth(1).selectOption('3600');
+      assert.equal(await f.page.locator('.tf-del-exp-label').nth(1).isHidden(),false);
+      await f.page.locator('.tf-del-exp').nth(1).check();
+      // The edit of rule A changes its identity on the device: it comes back closed.
+      await f.page.locator('.tf-edit').nth(0).click();await f.page.locator('.tf-name').nth(0).fill('Timed NAS renamed');
+      f.state.onForwardSave=st=>{st.forwardBody={...st.forwardBody,rules:[{...ruleA,name:'Timed NAS renamed',rule_token:21},ruleB]};
+        st.serviceLeases=[{index:0,rule_token:21,temporary:false,effective_enabled:false,remaining_s:0,status:'binding-unconfirmed'},st.serviceLeases[1]];
+        st.onForwardSave=null;};
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('LAN → Tailnet rules updated.'));
+      assert.deepEqual(f.state.leaseOps,[
+        {action:'lease',index:0,rule_token:21,seconds:840,permanent:false,delete_on_expiry:false},
+        {action:'lease',index:1,rule_token:12,seconds:3600,permanent:false,delete_on_expiry:true}]);
+      assert.deepEqual(f.errors,[]);await f.context.close();count++;
+      // Never-timed table: a new rule with the default "No time limit" sends no lease call.
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[{...forwardRule,index:0,rule_token:11}]},
+        serviceLeases:[{index:0,rule_token:11,temporary:false,effective_enabled:true,remaining_s:0,status:'permanent'}]});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      assert.match(await f.page.locator('.tf-access-text').nth(0).textContent(),/No time limit/);
+      await f.page.locator('#tf-add').click();
+      assert.equal(await f.page.locator('.tf-time').nth(1).inputValue(),'0');
+      await f.page.locator('.tf-name').nth(1).fill('Printer');await f.page.locator('.tf-listen').nth(1).fill('9100');
+      await f.page.locator('.tf-dest').nth(1).fill('100.64.0.9');await f.page.locator('.tf-dport').nth(1).fill('9100');
+      await f.page.locator('.tf-cidr').nth(1).fill('192.0.2.77');
+      f.state.onForwardSave=st=>{st.forwardBody={...st.forwardBody,rules:[st.forwardBody.rules[0],{...forwardRule,name:'Printer',index:1,rule_token:31}]};
+        st.serviceLeases=[st.serviceLeases[0],{index:1,rule_token:31,temporary:false,effective_enabled:false,remaining_s:0,status:'permanent'}];st.onForwardSave=null;};
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('LAN → Tailnet rules updated.'));
+      assert.equal(f.state.savedForward.rules[1].allowed_source_subnet,'192.0.2.77/32');   // one device = /32
+      assert.equal(f.state.leaseOps,undefined);
+      assert.deepEqual(f.errors,[]);await f.context.close();count++;
+      // A time limit the device refuses (no clock) is reported; the rule stays closed.
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[ruleB]},leaseFail:true,
+        serviceLeases:[{index:1,rule_token:12,temporary:false,effective_enabled:false,remaining_s:0,status:'binding-unconfirmed'}]});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      await f.page.locator('.tf-time').nth(0).selectOption('900');
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('stay closed until a time limit is applied'));
+      assert.equal(f.state.leaseOps.length,1);
+      await f.context.close();count++;
+    }
     // Malformed status must not wipe the saved/draft rule table or enable Save.
     f = await fixture(browser, {page: 'network/services', forwardBody: {rules: {}, max: 8}});
     await f.page.waitForFunction(() => document.getElementById('tf-badge').textContent === 'Unavailable');
@@ -865,14 +1116,14 @@ async function main() {
     for(const conflict of [false,true]){
       f=await fixture(browser,{page:'network/services',importConflict:conflict,importDelay:100});
       await f.page.waitForFunction(()=>!document.getElementById('tf-add').disabled);
-      await f.page.getByText('Back up or import saved service rules',{exact:true}).click();
+      await f.page.locator('.tf-more summary').click();
       await f.page.locator('#tf-import-file').setInputFiles(importFile);
       await f.page.waitForFunction(()=>!document.getElementById('tf-import-confirm').disabled);
       assert.match(await f.page.locator('#tf-import-preview').textContent(),/DISABLED/);
       assert.equal(f.state.savedImport,undefined);assert.equal(await f.page.locator('#tf-import-apply').isDisabled(),true);
       await f.page.locator('#tf-import-confirm').check();await f.page.locator('#tf-import-apply').click();
       assert.equal(await f.page.locator('#tf-add').isDisabled(),true);assert.equal(await f.page.locator('#tf-import-file').isDisabled(),true);
-      await f.page.waitForFunction(()=>document.getElementById('tf-import-preview').textContent.includes('Imported saved')||document.getElementById('tf-import-preview').textContent.includes('no automatic retry'));
+      await f.page.waitForFunction(()=>document.getElementById('tf-import-preview').textContent.includes('Imported rules')||document.getElementById('tf-import-preview').textContent.includes('no automatic retry'));
       assert.equal(f.state.savedImport.confirm_replace,true);assert.equal(f.state.savedImport.rules[0].enabled,false);
       assert.equal(f.calls.filter(p=>p==='/api/tailnet-forward/import').length,2);
       if(conflict){assert.equal(await f.page.locator('#tf-save').isDisabled(),true);assert.equal(await f.page.locator('#tf-import-apply').isDisabled(),true);}
@@ -925,7 +1176,7 @@ async function main() {
     assert.equal(await f.page.locator('.ops-monitor-paused').nth(1).isHidden(),true);
     assert.equal(await f.page.getByText('Monitor this device',{exact:true}).nth(0).locator('..').locator('input').isChecked(),true);
     await f.page.evaluate(()=>location.hash='#network/services');
-    await f.page.locator('#temporary-access summary').click();
+    await f.page.locator('.tf-more summary').click();
     await f.page.waitForFunction(()=>!document.getElementById('ops-lease-save').disabled);
     await f.page.locator('label:has(#ops-lease-notify)').click();
     await f.page.locator('#ops-lease-save').click();
@@ -1239,12 +1490,37 @@ async function main() {
     await f.page.locator('label:has(#eth-static)').click();await f.page.locator('#eth-ip').fill('192.168.1.60');await f.page.locator('#eth-mask').fill('255.255.255.0');await f.page.locator('#eth-gw').fill('192.168.1.1');
     await f.page.locator('#eth-save').click();
     for(let i=0;i<50&&!f.state.savedEthernet;i++)await f.page.waitForTimeout(100);
-    assert.deepEqual(f.state.savedEthernet,{enabled:true,chip:'w5500',preference:'ethernet_first',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:true,ip:'192.168.1.60',netmask:'255.255.255.0',gateway:'192.168.1.1',dns:''});
+    assert.deepEqual(f.state.savedEthernet,{enabled:true,transport:'spi',chip:'w5500',preference:'ethernet_first',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:true,ip:'192.168.1.60',netmask:'255.255.255.0',gateway:'192.168.1.1',dns:''});
+    assert.equal(await f.page.locator('#eth-sclk').isVisible(),true);assert.equal(await f.page.locator('#eth-card div.form-hint.eth-usb').isVisible(),false);
+    assert.deepEqual(f.errors,[]);await f.context.close();count++;
+    // Ethernet over USB (adapter or phone tethering): SPI fields hidden, USB status, typed save.
+    f=await fixture(browser,{page:'network',ethernetBody:{config:{enabled:true,transport:'usb',chip:'w5500',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:false,ip:'',netmask:'',gateway:'',dns:'',preference:'ethernet_first'},
+      status:{compiled:true,enabled_at_boot:true,driver_started:true,link_up:true,has_ip:true,selected_uplink:true,restart_required:false,link_changes:1,ip:'192.168.1.77',netmask:'255.255.255.0',gateway:'192.168.1.1',error:'',
+        transport:'usb',usb:{present:true,id:'0bda:8153',network:'ecm'}}}});
+    await f.page.waitForFunction(()=>document.getElementById('eth-badge').textContent==='Connected');
+    assert.match(await f.page.locator('#eth-status').textContent(),/Link up · USB device 0bda:8153 \(CDC-ECM\) · 192\.168\.1\.77 via 192\.168\.1\.1 · current uplink/);
+    assert.equal(await f.page.locator('#eth-transport').inputValue(),'usb');
+    for(const id of ['#eth-host','#eth-mhz','#eth-sclk','#eth-mosi','#eth-miso','#eth-cs','#eth-int','#eth-rst'])assert.equal(await f.page.locator(id).isVisible(),false,id);
+    assert.equal(await f.page.locator('#eth-pref').isVisible(),true);assert.equal(await f.page.locator('#eth-card div.form-hint.eth-usb').isVisible(),true);
+    await f.page.locator('#eth-pref').selectOption('wifi_first');await f.page.locator('#eth-save').click();
+    for(let i=0;i<50&&!f.state.savedEthernet;i++)await f.page.waitForTimeout(100);
+    assert.equal(f.state.savedEthernet.transport,'usb');assert.equal(f.state.savedEthernet.preference,'wifi_first');assert.equal(f.state.savedEthernet.sclk,12);
+    await f.page.locator('#eth-transport').selectOption('spi');
+    assert.equal(await f.page.locator('#eth-sclk').isVisible(),true);assert.equal(await f.page.locator('#eth-card div.form-hint.eth-usb').isVisible(),false);
+    assert.deepEqual(f.errors,[]);await f.context.close();count++;
+    // Ethernet over USB with an unsupported device: the reason is shown.
+    f=await fixture(browser,{page:'network',ethernetBody:{config:{enabled:true,transport:'usb',chip:'w5500',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:false,ip:'',netmask:'',gateway:'',dns:'',preference:'ethernet_first'},
+      status:{compiled:true,enabled_at_boot:true,driver_started:true,link_up:false,has_ip:false,selected_uplink:false,restart_required:false,link_changes:0,ip:'',netmask:'',gateway:'',
+        error:'this USB network device is not supported (vendor-only chip such as ASIX AX88179, or MBIM): use an adapter or phone with CDC-ECM, CDC-NCM or RNDIS',
+        transport:'usb',usb:{present:true,id:'0b95:1790',network:'none'}}}});
+    await f.page.waitForFunction(()=>document.getElementById('eth-status').textContent.includes('0b95:1790'));
+    assert.match(await f.page.locator('#eth-status').textContent(),/Link down · USB device 0b95:1790 — this USB network device is not supported/);
+    assert.equal(await f.page.locator('#eth-badge').textContent(),'No link');
     assert.deepEqual(f.errors,[]);await f.context.close();count++;
     // Service watch: off by default, saved with typed fields.
     f=await fixture(browser,{page:'network/services'});
     await f.page.waitForFunction(()=>document.getElementById('sw-status').textContent==='Off.');
-    await f.page.locator('#sw-box summary').click();
+    await f.page.locator('.tf-more summary').click();
     await f.page.locator('label:has(#sw-enabled)').click();await f.page.locator('#sw-interval').fill('300');
     await f.page.locator('#sw-save').click();
     await f.page.waitForFunction(()=>document.getElementById('sw-status').textContent==='Watching every 300 s.');
@@ -1309,7 +1585,7 @@ async function main() {
     await f.page.evaluate(() => { location.hash = 'firewall'; });
     await f.page.waitForFunction(() => document.getElementById('page-firewall').classList.contains('active'));
     assert.equal(await f.page.locator('#fw-lists').isHidden(), true);
-    assert.match(await f.page.locator('#page-firewall .adv-note').textContent(), /hidden in simple mode/);
+    assert.match(await f.page.locator('#page-firewall .adv-note').textContent(), /^\d+ advanced sections? (is|are) hidden in simple mode/);
     await f.page.locator('#page-firewall .adv-note button').click();
     assert.equal(await f.page.locator('body.ui-simple').count(), 0); assert.equal(await f.page.locator('#page-firewall .adv-note').isHidden(), true);
     assert.equal(await f.page.evaluate(() => localStorage.getItem('ui-advanced')), '1');
@@ -1319,6 +1595,23 @@ async function main() {
     await f.page.locator('#ui-mode-card .feature-switch').click();
     assert.equal(await f.page.locator('body.ui-simple').count(), 1);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Toast titles are translated too (ntfy test, sent and failed).
+    f = await fixture(browser, { page: 'automation/notifications', locale: 'it-IT',
+      ntfyBody: { enabled: true, server: 'https://ntfy.example', topic: 'fixture-topic', info_enabled: false, commands_enabled: false, last_publish_ok: false } });
+    await f.page.waitForFunction(() => document.documentElement.lang === 'it' && !document.getElementById('ntfy-test').disabled);
+    await f.page.locator('#ntfy-test').click();
+    await f.page.waitForFunction(() => [...document.querySelectorAll('.toast-title')].some(t => t.textContent === 'Test ntfy inviato'));
+    f.state.ntfyTestBody = {ok: false};
+    await f.page.locator('#ntfy-test').click();
+    await f.page.waitForFunction(() => [...document.querySelectorAll('.toast-title')].some(t => t.textContent === 'Test ntfy non riuscito'));
+    assert.equal(f.state.ntfyTests, 2);
+    assert.ok(!(await f.page.locator('#toastContainer').textContent()).includes('ntfy test'), 'no English toast title left');
+    assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // The simple-mode note keeps its number in Italian.
+    f = await fixture(browser, { page: 'firewall', locale: 'it-IT', simpleMode: true });
+    await f.page.waitForFunction(() => document.documentElement.lang === 'it' && /modalità semplice/.test((document.querySelector('#page-firewall .adv-note') || {}).textContent || ''));
+    assert.match(await f.page.locator('#page-firewall .adv-note').textContent(), /^\d+ sezion[ei] avanzat[ae] (è nascosta|sono nascoste) in modalità semplice/);
+    assert.deepEqual(f.errors, []); await f.context.close(); count++;
     // Translations: browser language detection, manual switch, technical values untouched, English fallback.
     f = await fixture(browser, { page: 'network/services', locale: 'it-IT', forwardBody: { rules: [tfRule()], max: 8, uplink_ip: '192.0.2.20', observation: 'passive_snapshot' } });
     await f.page.waitForFunction(() => document.documentElement.lang === 'it' && document.querySelector('.nav-tab[data-page="network"]').textContent.includes('Rete'));
@@ -1327,7 +1620,7 @@ async function main() {
     await f.page.locator('.tf-edit').first().click();
     await f.page.locator('.tf-name').first().fill('Rete di prova');
     assert.equal(await f.page.locator('.tf-name').first().inputValue(), 'Rete di prova');
-    assert.equal(await f.page.locator('label[for="tf-dest-0"]').textContent(), 'Destinazione Tailnet');
+    assert.equal(await f.page.locator('label[for="tf-dest-0"]').textContent(), 'Indirizzo del servizio tailnet');
     f.page.once('dialog', d => { assert.match(d.message(), /Eliminare questa regola/); d.dismiss(); });
     await f.page.locator('.tf-del').first().click();
     await f.page.evaluate(() => { location.hash = 'system'; });

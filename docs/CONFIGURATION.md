@@ -60,7 +60,7 @@ Up to **5** networks, tried in order. Per network:
 | **Source-NAT advertised routes** | Off by default. Masquerades traffic forwarded from the tunnel out to the uplink LAN (or out to the internet when this device is an exit node) to the device's own STA IP — the Tailscale default for subnet routers. **On** = the uplink subnet works the moment you advertise it (upstream hosts reply to this device, which un-NATs back into the tunnel). **Off** = the upstream router needs a static route for the tailnet (`100.64.0.0/10 → this device`) instead. Enabling it offers to add your uplink subnet to the advertised routes. ⚠️ Do **not** advertise *and* accept the same subnet — that loops the inbound route back into the tunnel. |
 | **Exit node** | Route AP-client public traffic through this tailnet exit node. Fails closed if unreachable. |
 | **Advertise this ESP32 as an exit node** | Opt-in server mode, mutually exclusive with choosing another exit node. Requires restart and Tailscale admin approval. IPv4 Internet egress is masqueraded; IPv6 remains fail-closed. |
-| **Max peers** | Upper bound on tracked peers. |
+| **Tailnet IPv6** | Tunnels carry IPv4 (plus 4via6 inbound). A peer's tailnet IPv6 address (`fd7a:115c:a1e0:…`) is not reachable from or through the gateway; use its 100.x address. |
 | **Accept peer subnet routes** | Install routes other nodes advertise. |
 | **LAN bypass when using an exit node** | RFC1918 destinations stay on the local LAN even with an exit node selected. |
 

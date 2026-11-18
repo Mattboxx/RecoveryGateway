@@ -51,6 +51,15 @@
 #include "mqtt_power_event.h"
 #include "notify_text.h"
 
+/* The gateway has an IPv4 address on its LAN-side uplink (Wi-Fi station or
+ * Ethernet: a broker on the local network) or on the uplink carrying Internet
+ * traffic (also a mobile one). */
+static bool mqtt_uplink_ready(void)
+{
+    esp_netif_ip_info_t ip = {0};
+    return uplink_address(eth_uplink_service_netif(), &ip) || uplink_address(uplink_internet_netif(), &ip);
+}
+
 static const char *TAG = "mqtt_bridge";
 _Static_assert(sizeof(mqtt_integration_config_t) == 496, "Keep the existing MQTT configuration RAM footprint");
 /* Synchronous SDK publish/error logging can exhaust a 6 KiB manager stack
@@ -1030,7 +1039,11 @@ static void manager_task(void *arg)
         } else if (events & BROKER_DISCONNECTED) {
             service_retry_failed(&retry, now_ms);
         }
-        if (!s_connected && cfg.enabled && cfg.uri[0] && cfg.base_topic[0]) {
+        /* No broker attempt before the uplink has an address: the first try
+         * at boot always failed ("Host is unreachable") and logged errors.
+         * Waiting costs no retry step; the attempt starts within a second of
+         * the address. */
+        if (!s_connected && cfg.enabled && cfg.uri[0] && cfg.base_topic[0] && mqtt_uplink_ready()) {
             if (service_retry_timed_out(&retry, now_ms)) {
                 stop_client();
                 service_retry_failed(&retry, now_ms);

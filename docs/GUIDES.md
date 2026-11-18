@@ -23,5 +23,6 @@ The 20 guide subjects required by the roadmap, mapped to existing documents.
 | Firmware Updates | UPDATES.md | Present |
 | Backup and Restore | BACKUP-RESTORE.md | Present |
 | Hardware Compatibility | HARDWARE.md, README → Hardware | Present |
-| Ethernet | ETHERNET.md | Present (experimental W5500) |
+| Ethernet | ETHERNET.md | Present (experimental W5500 and USB) |
+| USB devices (wiring and power) | USB-DEVICES.md | Present (experimental, not tested with real devices) |
 | Development and Testing | TESTING.md, AGENTS.md | Present |

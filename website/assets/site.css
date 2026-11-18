@@ -123,6 +123,7 @@ main:focus { outline: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 20px 0; }
+@media (min-width: 900px) { .grid-3 { grid-template-columns: repeat(3, 1fr); } }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
 .card h3 { margin-top: 0; }
 .card p { margin: 0 0 8px; color: var(--muted); }

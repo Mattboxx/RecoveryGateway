@@ -109,42 +109,24 @@ the ESP32 address and listen port (port forwarding, not transparent routing).
 WiFi plus software WireGuard on a microcontroller suits control, telemetry,
 dashboards and SSH; throughput is not measured for the current candidate.
 
-## Experimental dev.5 exposure leases
+## Time limits
 
-Network → LAN → Tailnet → **Temporary exposure and expiry** controls saved
-rules only. Arm/renew60–604800 seconds or explicitly confirm a permanent rule.
-Arming does not enable a disabled rule. Rule tokens are change detectors,
-not authentication. Unknown clock/store, expiry or an unconfirmed changed binding
-means denied forwarding. Monotonic packet cutoff and persisted UTC bound
-validity across restart; detected rollback latches closure. Expired rules are
-retained/reserve configured ports by default. Opt in to **Delete rule after
-expiry** when arming/renewing to remove it through the shared forwarding
-transaction. Failed allocation/save leaves it closed and retries at most once
-per minute; it does not reopen the old mapping.
+Each rule has a **Stays open** choice: *No time limit* (it forwards while it
+is switched on) or 15 minutes, 1 hour, 8 hours, 1 day or 7 days, optionally
+with *Delete the rule when the time is up*. Save applies the rules and then
+the time limit of each rule. A rule closed by its time limit says so on the
+rule ("Time is up" or "Not forwarding: choose how long it stays open"); choose
+a new time limit and Save to open it again. A time limit needs the clock to be
+set; it never switches on a rule that is off.
 
-The dev.4 positional timer had a confirmed bug: moving an expired rule into an
-untimed slot could make it permanent. Dev.5 uses a stable binding ledger, not
-the list position. Reordering preserves expiry; editing a binding cannot shed
-its timer by moving it. First timer use records the current permanent bindings;
-subsequent new/edited rules require explicit timer/permanent confirmation.
-`binding-unconfirmed` means closed, not an expired timer silently renewed.
-
-Lease storage v3 preserves matching v1/v2 timers by rule identity. Untracked
-rules in a migrated timed table are deliberately closed until confirmed; their
-old identity cannot be inferred safely. Older firmware rejects this newer lease
-store rather than treating it as unrestricted forwarding. Hardware migration/
-rollback remains unqualified. Expired bindings remain tombstoned even after
-automatic deletion, so restoring an old rule does not silently restore exposure.
-
-Home Assistant forwarding command topics now include the binding selector:
-`command/tailnet_forward/<index>/<eight-hex-digit-rule-token>`. Old index-only
-commands are rejected; refresh HA discovery or update custom publishers. This
-prevents delayed commands from toggling a different survivor after compaction.
-The selector detects stale configuration; it is not cryptographic client
-authentication and does not replace broker authorization.
-
-Physical clock/NVS/power-loss/NAT qualification is pending; already-admitted
-bytes are not recalled. AP-side forwarding is unaffected.
+How it is enforced: once a time limit has been used, every new or edited rule
+must have its choice confirmed (Save does this for you); until then the rule
+is closed, so an edited rule can neither lose nor silently gain a time limit.
+Rule tokens are change detectors, not authentication. Unknown clock or store,
+expiry or an unconfirmed rule means denied forwarding; expiry survives a
+restart and a clock rollback closes the rule. Expired rules keep their ports
+unless *Delete the rule when the time is up* was chosen. Notices when a time
+limit closes a rule (ntfy) are under *More options*, off by default.
 
 ## Example: IoT at a second home, broker at the first
 

@@ -30,7 +30,7 @@ typedef struct {uint8_t wg_public_key[32],disco_public_key[32];
     const char *ctrl_loss_reason;const char *ctrl_close_detail;int32_t ctrl_close_code,ctrl_loss_code;
     uint32_t ctrl_loss_count;const char *ctrl_retry_reason;uint32_t ctrl_retry_failures;
     uint64_t rt_loss_ms,rt_backoff_ms,rt_tcp_ms,rt_noise_ms,rt_register_ms,rt_fetch_ms,rt_stream_ms,rt_derp_ms;
-    uint32_t ctrl_last_reconnect_ms;char ctrl_reconnect_stages[112];} microlink_t;
+    uint32_t ctrl_last_reconnect_ms;char ctrl_reconnect_stages[112];bool force_register;} microlink_t;
 static uint64_t ml_get_time_ms(void){return 1234;}
 static size_t strlcpy_(char *d,const char *s,size_t n){size_t l=strlen(s);if(n){size_t c=l<n-1?l:n-1;memcpy(d,s,c);d[c]=0;}return l;}
 #define strlcpy strlcpy_
@@ -46,6 +46,7 @@ static char captured[4096];
 #define TAG "test"
 static bool ml_policy_authority_active(void){return authority;}
 static void ml_policy_suspend(void){authority=false;suspended++;}
+static unsigned expect_full;static void ml_policy_expect_full_map(void){expect_full++;}
 static void ml_conn_close(microlink_t *ml){(void)ml;closed++;ml_policy_suspend();}
 static void bytes_to_hex(const uint8_t *p,int n,char *s){(void)p;memset(s,'0',n*2);s[n*2]=0;}
 static cJSON *build_hostinfo(microlink_t *ml){(void)ml;return cJSON_CreateObject();}

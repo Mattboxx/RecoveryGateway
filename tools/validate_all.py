@@ -13,14 +13,14 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 DRIVERS='release_packaging device_session feature_preservation upstream_033 upstream_038 ntfy_stack ntfy_logic ntfy_transport ntfy_stream snmp_codec route_hook netif_hooks runtime_recovery portmap forwarding_transactions web_port tailnet_filter tailnet_state tailnet_api tailnet_core tailnet_sdk peer_dns ota_remote gateway_operations tailnet_authorization peer_convergence policy_protocols policy_reassembly ops_core ops_api service_lease health_monitor development_plan candidate_observer'.split()
-DRIVERS+=['json_guard','service_transfer','service_retry','capabilities','mqtt_discovery','web_security','config_profiles','service_check','mqtt_state','eth_uplink','mqtt_commands','cell_uplink','layout_migration','storage_store','history_snapshot','tailnet_names','notify_channels','ddns','throughput']
+DRIVERS+=['json_guard','service_transfer','service_retry','capabilities','mqtt_discovery','web_security','config_profiles','service_check','mqtt_state','eth_uplink','mqtt_commands','cell_uplink','cell_quota','ap_traffic','web_access','usb_port','usb_session','layout_migration','storage_store','history_snapshot','tailnet_names','notify_channels','ddns','throughput','reg_auth','tunnel_slots','wg_allowed_ips','tailnet_identity','tailnet_access','ctrl_addr_cache','peer_nvs_writes','noise_upgrade','derp_aux','wg_tcpip_send','tailnet_leave','log_time']
 DRIVERS+=['soak_serial']
 DRIVERS+=['lab_echo']
 DRIVERS+=['gateway_benchmark']
 DRIVERS+=['dhcps_dns']
 # wg_rx_owned / wg_rx_sdk test the RX-ownership experiment (MicroLink branch
 # perf/owned-rx-pbuf-20261029); dev.3 leaves that change out (no measured gain).
-DRIVERS+=['wg_crypto_hotloop','ml_perf','wg_crypto_diff','wg_mgr_wake','poly1305_xtensa','chacha20_xtensa','forward_drop_counters','web_idle','sdlog_memory_sink','tailnet_event_text','control_loss_setting','tls_distrust','wg_rx_path','coord_session_end','derp_frame_read','stun_parse','dns_relay_upstream','wg_log_rate','fast_chksum','x25519','derp_rx_wait','wg_handshake','x25519_xtensa','x25519_pie','x25519_control','boot_timeline','netcheck_budget','notify_text','telegram_commands','tailnet_dns']
+DRIVERS+=['wg_crypto_hotloop','ml_perf','wg_crypto_diff','wg_mgr_wake','poly1305_xtensa','chacha20_xtensa','forward_drop_counters','web_idle','sdlog_memory_sink','sdlog_probe','tailnet_event_text','control_loss_setting','tls_distrust','wg_rx_path','coord_session_end','derp_frame_read','stun_parse','dns_relay_upstream','wg_log_rate','fast_chksum','x25519','derp_rx_wait','wg_handshake','x25519_xtensa','x25519_pie','x25519_control','boot_timeline','netcheck_budget','notify_text','telegram_commands','tailnet_dns']
 DRIVERS+=['coord_recovery']
 DRIVERS+=['lab_cleanup']
 DRIVERS+=['candidate_ota_guard']
@@ -120,7 +120,10 @@ def main():
         pio=shutil.which('platformio') or str(Path.home()/'.platformio/penv/Scripts/platformio.exe')
         env.setdefault('PLATFORMIO_BUILD_DIR',str(Path(os.environ.get('TEMP','/tmp'))/'mattboxx-esp32-build-0114'))
         run('firmware-build',[pio,'run','-e','esp32-s3'],900)
-        if results[-1]['status']=='PASS':run('image-provenance',[sys.executable,'tools/check_image_provenance.py',str(Path(env['PLATFORMIO_BUILD_DIR'])/'esp32-s3')])
+        if results[-1]['status']=='PASS':
+            out=str(Path(env['PLATFORMIO_BUILD_DIR'])/'esp32-s3')
+            run('image-provenance',[sys.executable,'tools/check_image_provenance.py',out])
+            run('usb-ram-placement',[sys.executable,'tools/check_usb_ram_placement.py',out])
     selected=args.only.split(',') if args.only else DRIVERS
     if any(name not in DRIVERS for name in selected):parser.error('Unknown offline driver')
     if {'first_boot','password_crypto'}.intersection(selected) and env.get('MBEDTLS_DIR'):

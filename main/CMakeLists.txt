@@ -87,6 +87,10 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
                             "service_check.c"
                             "eth_uplink.c"
                             "cell_uplink.c"
+                            "cell_quota.c"
+                            "ap_traffic.c"
+                            "cell_hilink.c"
+                            "usb_port.c"
                             "layout_migration.c"
                             "storage_store.c"
                             "history.c"
@@ -135,11 +139,12 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
                                   espcoredump dns_relay snmp_agent cli task_reaper
                                   app_update spi_flash esp_partition esp_psram
                                   espressif__mqtt espressif__w5500
+                                  espressif__usb
                                   esp_http_client
                                   esp_eth esp_driver_spi esp_driver_gpio esp_driver_uart
                                   esp_driver_tsens
                     INCLUDE_DIRS "."
-                    LDFRAGMENTS "freertos_queue_iram.lf")
+                    LDFRAGMENTS "freertos_queue_iram.lf" "usb_flash.lf")
 
 # Phase 1.9k: wrap ip_napt_forward to skip NAPT for tailnet CGNAT
 # (100.64/10) destinations. Otherwise NAPT rewrites the AP-client

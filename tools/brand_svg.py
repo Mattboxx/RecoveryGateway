@@ -102,7 +102,7 @@ def compact_lockup():
 def roles(x0, y0, _scale, labels_x, font_size, label_lit, label_off):
     """Illustration: LAN device -> hub -> five roles, Service Gateway lit."""
     ys = [y0 - 100, y0 - 50, y0, y0 + 50, y0 + 100]
-    names = ['Subnet router', 'AP gateway', 'Service Gateway', 'Exit node', 'Remote recovery']
+    names = ['Wake-on-LAN', 'Subnet router', 'Service Gateway', 'Exit node', 'Ethernet / 4G backup']
     hx = x0 + 120
     parts = [
         f'<rect x="{x0 - 30}" y="{y0 - 22}" width="60" height="44" rx="9" fill="none" stroke="{GREEN}" stroke-width="2.5"/>',
@@ -141,11 +141,12 @@ def banner():
     body += f'<g transform="translate(80 84) scale(1.5)">{tile(INK_2, LINE)}{mark_on_dark(INK_2)}</g>'
     body += (f'<g font-family="{FONT}"><text x="200" y="134" font-size="50" font-weight="650" letter-spacing="-0.6" fill="{GREEN}">ESP32 Tailnet Gateway</text>'
              f'<text x="203" y="170" font-size="15" font-weight="650" letter-spacing="4" fill="{GREEN_MUTED}">MATTBOXX EDITION</text>'
-             f'<text x="80" y="268" font-size="28" font-weight="500" fill="{GREEN_SOFT}">One ESP32. Multiple Tailnet roles.</text>'
-             f'<text x="80" y="308" font-size="28" font-weight="600" fill="{GREEN}">Enable only what you need.</text></g>')
+             f'<text x="80" y="252" font-size="26" font-weight="500" fill="{GREEN_SOFT}">One ESP32. Remote access, Wake-on-LAN</text>'
+             f'<text x="80" y="288" font-size="26" font-weight="500" fill="{GREEN_SOFT}">and backup internet.</text>'
+             f'<text x="80" y="328" font-size="26" font-weight="600" fill="{GREEN}">Enable only what you need.</text></g>')
     body += roles(770, 200, 1, 1060, 18, GREEN, GREEN_MUTED)
     return svg('0 0 1280 400', body, 'ESP32 Tailnet Gateway — Mattboxx Edition',
-               'One ESP32. Multiple Tailnet roles. Enable only what you need. A LAN device passes through the ESP32; the Service Gateway role is lit while subnet router, AP gateway, exit node and remote recovery stay off until enabled.',
+               'One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need. A LAN device passes through the ESP32; the Service Gateway role is lit while Wake-on-LAN, subnet router, exit node and Ethernet / 4G backup stay off until enabled.',
                (1280, 400))
 
 
@@ -154,14 +155,15 @@ def social():
     body += f'<g transform="translate(96 80) scale(1.75)">{tile(INK_2, LINE)}{mark_on_dark(INK_2)}</g>'
     body += (f'<g font-family="{FONT}"><text x="232" y="146" font-size="58" font-weight="650" letter-spacing="-0.7" fill="{GREEN}">ESP32 Tailnet Gateway</text>'
              f'<text x="235" y="186" font-size="17" font-weight="650" letter-spacing="4.5" fill="{GREEN_MUTED}">MATTBOXX EDITION</text>'
-             f'<text x="96" y="318" font-size="32" font-weight="500" fill="{GREEN_SOFT}">One ESP32.</text>'
-             f'<text x="96" y="362" font-size="32" font-weight="500" fill="{GREEN_SOFT}">Multiple Tailnet roles.</text>'
-             f'<text x="96" y="406" font-size="32" font-weight="600" fill="{GREEN}">Enable only what you need.</text></g>')
+             f'<text x="96" y="300" font-size="32" font-weight="500" fill="{GREEN_SOFT}">One ESP32.</text>'
+             f'<text x="96" y="342" font-size="32" font-weight="500" fill="{GREEN_SOFT}">Remote access, Wake-on-LAN</text>'
+             f'<text x="96" y="384" font-size="32" font-weight="500" fill="{GREEN_SOFT}">and backup internet.</text>'
+             f'<text x="96" y="426" font-size="32" font-weight="600" fill="{GREEN}">Enable only what you need.</text></g>')
     body += roles(760, 360, 1, 1054, 20, GREEN, GREEN_MUTED)
     body += f'<path d="M96 512H1184" stroke="{LINE}" stroke-width="1"/>'
     body += (f'<g font-family="{FONT}" font-size="21" fill="{GREEN_MUTED}">'
-             '<text x="96" y="550">All-in-one ESP32-S3 Tailscale/Headscale gateway with selective LAN-to-Tailnet access,</text>'
-             '<text x="96" y="580">subnet routing, remote recovery and optional automation.</text></g>')
+             '<text x="96" y="550">ESP32-S3 firmware: Wake-on-LAN from Telegram or ntfy (no VPN needed), Tailscale/Headscale</text>'
+             '<text x="96" y="580">gateway, and Ethernet or 4G/LTE uplinks that keep IoT devices online.</text></g>')
     return svg('0 0 1280 640', body, 'ESP32 Tailnet Gateway — Mattboxx Edition',
                'All-in-one ESP32-S3 Tailscale/Headscale gateway with selective LAN-to-Tailnet access, subnet routing, remote recovery and optional automation.',
                (1280, 640))

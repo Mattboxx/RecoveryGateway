@@ -84,8 +84,21 @@ with tempfile.TemporaryDirectory(prefix='index-variants-') as d:
     # Soft budget for the page every visitor downloads from the gateway. Raised
     # from 170000 for the first-boot choices grouped by goal, the clearer
     # Tailscale and gateway Wi-Fi steps, the open-network switch on the
-    # Network page and the touch top bar (about 3.1 KB); the 3584 KiB app
-    # slots keep more than 1 MiB free.
-    assert page_gz < 174000, page_gz
+    # Network page and the touch top bar (about 3.1 KB); then from 174000 for
+    # the pins/USB choice of the cellular and Ethernet uplinks in setup and on
+    # the Network page, with their device lists (about 2.4 KB; owner: clarity
+    # before the budget); then from 176000 for the USB power warnings and the
+    # titled pins/USB step in setup (about 1.1 KB, owner 2026-11-16: explain
+    # power clearly); then from 178500 for the monthly data limit, the access
+    # scope, traffic per device, the write-only SNMP community and the
+    # aligned Telegram/ntfy command sections (about 1.1 KB, owner 2026-11-17:
+    # "Tutte"); then from 180000 for the Tailscale registration state, node
+    # key expiry, Tailnet Lock and tunnel counts (about 0.8 KB, owner
+    # 2026-11-18: "io procederei a fare tutte le 10 cose"); then from 182000
+    # for the redesigned LAN to Tailnet tab with per-rule time limits, the
+    # Leave tailnet button and dated log lines (about 0.6 KB, owner
+    # 2026-11-18, clarity before the budget); the 3584 KiB app slots keep more
+    # than 1 MiB free.
+    assert page_gz < 184000, page_gz
 print(f'PASS: actual page generator: page with {len(langs)} languages as separate scripts ({page_gz} gzip bytes), '
       f'English-only page without them and otherwise identical, C arrays decode to the page and scripts (host)')

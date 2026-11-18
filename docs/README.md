@@ -28,6 +28,7 @@ by task.
 | Automation | [MQTT](MQTT.md), [Home Assistant](HOME-ASSISTANT.md), [ntfy](NTFY.md) |
 | Wired uplink (experimental W5500) | [Ethernet](ETHERNET.md) |
 | Mobile uplink with a SIM (experimental, 3.0) | [Cellular](CELLULAR.md) |
+| USB modems, 4G sticks, USB Ethernet adapters, phone tethering: ports, cables and power (experimental, 3.0.25) | [USB devices](USB-DEVICES.md) |
 | From 2.x to 3.0 (settings kept) | [Migration](MIGRATION-3.0.md) |
 | Dynamic DNS (DuckDNS, Cloudflare, update URL) | [Dynamic DNS](DDNS.md) |
 | Telegram and email notifications | [Notifications](NOTIFICATIONS.md) |

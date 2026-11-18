@@ -74,6 +74,8 @@ typedef struct {
     uint32_t inserts;      /* responses written into the cache              */
     uint32_t evictions;    /* inserts that overwrote a different live entry */
     uint32_t stray;        /* upstream datagrams discarded: wrong source, ID or question */
+    uint32_t tcp;          /* queries received over TCP (after a truncated UDP answer) */
+    uint32_t truncated;    /* oversized upstream UDP answers turned into truncated replies */
     uint32_t entries;      /* currently-valid (unexpired) cache entries     */
     uint32_t capacity;     /* total cache slots                             */
     uint32_t cache_bytes;  /* SPIRAM footprint of the cache table           */

@@ -29,15 +29,15 @@ def body(sig):
     return src[s:src.index('\n}\n', s) + 3]
 
 
-wait = body('static int derp_wait_readable(microlink_t *ml, long us)')
+wait = body('static int derp_wait_readable(ml_derp_conn_t *c, long us)') + body('static int derp_wait_readable_any(microlink_t *ml, long us)')
 rest = body('static bool derp_must_rest(bool worked, uint64_t now_ms, uint64_t *busy_since_ms)')
 task = body('void ml_derp_rx_task(void *arg) {')
-poll = body('static int poll_derp_read(microlink_t *ml) {')
+poll = body('static int poll_derp_read(microlink_t *ml, ml_derp_conn_t *c) {')
 hdr = (ROOT / 'external/microlink/components/microlink/include/microlink_internal.h').read_text(encoding='utf-8')
 assert '#define ML_TASK_DERP_TX_PRIO    ML_TASK_DATAPLANE_PRIO' in hdr and '#define ML_DERP_MAX_BUSY_MS     40' in hdr
 assert '#define DERP_RX_IDLE_WAIT_US 20000' in src
 assert 'pdMS_TO_TICKS(5)' not in poll, 'a 5 ms wait is 0 ticks at 100 Hz'
-assert poll.count('derp_wait_readable(ml, DERP_RX_IDLE_WAIT_US);') == 2
+assert poll.count('derp_wait_readable(c, DERP_RX_IDLE_WAIT_US);') == 2
 assert 'if (n == 0) {' in poll and 'return n < 0 ? n : -1;   /* 0 = the relay closed the session */' in poll
 assert 'derp_must_rest(tx_count == 32, ml_get_time_ms(), &tx_busy_since)' in src
 teardown = src[src.index('for (int i = 0; i < 20 && !ml->derp.rx_parked; i++)'):][:120]
@@ -64,7 +64,9 @@ typedef struct { unsigned bits; } fd_set;
 #define FD_ZERO(s) ((s)->bits = 0)
 #define FD_SET(fd, s) ((s)->bits |= 1u << (fd))
 struct timeval { long tv_sec, tv_usec; };
-typedef struct { struct { int sockfd; bool connected; bool rx_parked; uint64_t last_recv_ms; } derp; int events; } microlink_t;
+#define ML_DERP_AUX 1
+typedef struct { int sockfd; bool connected; bool rx_parked; uint64_t last_recv_ms; } ml_derp_conn_t;
+typedef struct { ml_derp_conn_t derp, derp_aux; int events; } microlink_t;
 static int delays, delay_ms, selects, sel_nfds, sel_bits, sel_us, sel_rc, reconnects;
 static uint64_t now_ms = 1000;
 static uint32_t s_derp_frames_rx;
@@ -74,11 +76,13 @@ static void xEventGroupSetBits(int ev, int bits) { (void)ev; (void)bits; reconne
 static int ml_select_fds(int nfds, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *tv) {
     (void)wr; (void)ex; selects++; sel_nfds = nfds; sel_bits = rd->bits; sel_us = (int)(tv->tv_sec * 1000000 + tv->tv_usec); return sel_rc; }
 static int poll_rc[64], poll_n, poll_i;
-static int poll_derp_read(microlink_t *ml) { (void)ml; return poll_i < poll_n ? poll_rc[poll_i++] : 0; }
+static int aux_polls;
+static int poll_derp_read(microlink_t *ml, ml_derp_conn_t *c) { if (c != &ml->derp) aux_polls++; return poll_i < poll_n ? poll_rc[poll_i++] : 0; }
 @@REST@@
 @@WAIT@@
 static void one_pass(microlink_t *ml, uint64_t *rx_busy_since_p, bool *readable_idle_p) {
     uint64_t rx_busy_since = *rx_busy_since_p; bool readable_idle = *readable_idle_p;
+    ml_derp_conn_t *conns[2] = { &ml->derp, &ml->derp_aux };
     do {   /* one pass of the task's while loop; its continue ends the pass */
 @@LOOP@@
     } while (0);
@@ -86,12 +90,28 @@ static void one_pass(microlink_t *ml, uint64_t *rx_busy_since_p, bool *readable_
 }
 #define CHECK(c) do { if (!(c)) { printf("FAIL %d\n", __LINE__); return 1; } } while (0)
 int main(void) {
-    microlink_t ml = { .derp = { .sockfd = 7, .connected = true } };
-    sel_rc = 0; CHECK(derp_wait_readable(&ml, DERP_RX_IDLE_WAIT_US) == 0);
+    microlink_t ml = { .derp = { .sockfd = 7, .connected = true }, .derp_aux = { .sockfd = -1 } };
+    sel_rc = 0; CHECK(derp_wait_readable(&ml.derp, DERP_RX_IDLE_WAIT_US) == 0);
     CHECK(selects == 1 && delays == 0 && sel_nfds == 8 && sel_bits == (1 << 7) && sel_us == 20000);
-    sel_rc = -1; CHECK(derp_wait_readable(&ml, 20000) == -1 && delays == 1 && delay_ms == 10);
-    ml.derp.sockfd = -1; CHECK(derp_wait_readable(&ml, 20000) == -1 && selects == 2 && delays == 2);
+    sel_rc = -1; CHECK(derp_wait_readable(&ml.derp, 20000) == -1 && delays == 1 && delay_ms == 10);
+    ml.derp.sockfd = -1; CHECK(derp_wait_readable(&ml.derp, 20000) == -1 && selects == 2 && delays == 2);
     ml.derp.sockfd = 7;
+    /* both relays: one select over both sockets; none connected: a tick, no select */
+    sel_rc = 0; selects = delays = 0;
+    CHECK(derp_wait_readable_any(&ml, 20000) == 0 && sel_bits == (1 << 7) && sel_nfds == 8);
+    ml.derp_aux.sockfd = 9; ml.derp_aux.connected = true;
+    CHECK(derp_wait_readable_any(&ml, 20000) == 0 && sel_bits == ((1 << 7) | (1 << 9)) && sel_nfds == 10);
+    ml.derp.connected = false; ml.derp_aux.connected = false;
+    CHECK(derp_wait_readable_any(&ml, 20000) == -1 && selects == 2 && delays == 1);
+    ml.derp.connected = true;
+    /* the reader serves the auxiliary relay too; its read error drops only it */
+    { uint64_t sn = 0; bool r = false; ml.derp_aux.connected = true; poll_n = 0; poll_i = 0; aux_polls = 0;
+      one_pass(&ml, &sn, &r); CHECK(aux_polls == 1 && ml.derp_aux.rx_parked && !ml.derp.rx_parked);
+      poll_rc[0] = 0; poll_rc[1] = -1; poll_n = 2; poll_i = 0; reconnects = 0;
+      one_pass(&ml, &sn, &r); CHECK(reconnects == 0 && !ml.derp_aux.connected && ml.derp.connected && ml.derp_aux.rx_parked);
+      one_pass(&ml, &sn, &r); CHECK(aux_polls == 2);   /* not read again once down */
+      ml.derp_aux.sockfd = -1; s_derp_frames_rx = 0; poll_n = 0; poll_i = 0; }
+    selects = delays = 0;
 
     /* a socket that stays readable and yields nothing: every second pass sleeps */
     uint64_t since = 0; bool ri = false;
@@ -132,7 +152,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert out.returncode == 0 and 'derp rx wait ok' in out.stdout, (out.returncode, out.stdout)
     # The 3.0.10 loop (no guard): a readable empty socket never sleeps.
     old = loop_body[:loop_body.index('        /* Idle: wait for bytes (bounded).')] + \
-        '        if (!got) (void)derp_wait_readable(ml, DERP_RX_IDLE_WAIT_US);\n' + \
+        '        if (!got) (void)derp_wait_readable_any(ml, DERP_RX_IDLE_WAIT_US);\n' + \
         loop_body[loop_body.index('        if (derp_must_rest(got'):]
     c.write_text(PROGRAM.replace('@@REST@@', rest).replace('@@WAIT@@', wait).replace('@@LOOP@@', old), encoding='utf-8')
     subprocess.run(['gcc', '-std=c11', '-O1', '-w', str(c), '-o', str(exe)], check=True)

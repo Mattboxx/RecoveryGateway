@@ -19,6 +19,23 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.1.0
+  espressif/usb:
+    component_hash: 99eee72ea224d9117d4c342442717a1f20bf8112e2ab5d7d7038b827874f4c92
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    - esp32h4
+    - linux
+    version: 1.6.0
   espressif/w5500:
     component_hash: f76a95ce7a6029cf93aa39d47067588b24263852031f11c71e5d192ad915ec07
     dependencies:
@@ -50,9 +67,10 @@ dependencies:
 direct_dependencies:
 - espressif/cjson
 - espressif/mqtt
+- espressif/usb
 - espressif/w5500
 - espressif/wiznet_common
 - idf
-manifest_hash: 6946c59587f9aa49b2525e13cd9ad5e4cb6c7cbc99e6a76c768806b7f140755d
+manifest_hash: dcdb240f3125564dee64e853c612c30385b5f29ca8c25d517bcaaccf20b1c588
 target: esp32s3
 version: 3.0.0

@@ -100,12 +100,14 @@ int main(void) {
     assert(!bad->public_key_dh_ready);
 
     /* initiation from a key B does not know */
-    struct wireguard_device C; uint8_t kc[32]; key(kc, 3);
+    struct wireguard_device C = {0}; uint8_t kc[32]; key(kc, 3);   /* zeroed, as the firmware allocates it */
     assert(wireguard_device_init(&C, kc));
     assert(wireguard_peer_init(&C, &C.peers[0], B.public_key, NULL));
     assert(wireguard_create_handshake_initiation(&C, &C.peers[0], &init));
     assert(wireguard_process_initiation_message(&B, &init) == NULL);
     printf("handshake ok: first %d X25519, next %d\n", first, second);
+    /* The handshake tables are freed by wireguardif shutdown on the device. */
+    free(A.handshakes); free(B.handshakes); free(C.handshakes);
     return 0;
 }
 '''

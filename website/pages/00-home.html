@@ -1,16 +1,16 @@
 <!--
 slug:
 title: Home
-search_title: ESP32 Tailnet Gateway and Wake-on-LAN via Telegram or ntfy
-description: ESP32-S3 firmware for Tailscale and Headscale routing, plus standalone Wake-on-LAN with reachability checks over Telegram or ntfy.
+search_title: ESP32 Tailnet Gateway: Wake-on-LAN via Telegram or ntfy, Tailscale gateway, Ethernet and 4G
+description: ESP32-S3 firmware for Wake-on-LAN from Telegram or ntfy without a VPN, Tailscale and Headscale routing, and Ethernet or 4G/LTE uplinks that keep IoT devices online.
 schema: home
 -->
 <section class="hero">
   <div>
     <p class="eyebrow">Mattboxx Edition</p>
     <h1>ESP32 Tailnet Gateway</h1>
-    <p class="tagline">One ESP32. Multiple Tailnet roles. <span>Enable only what you need.</span></p>
-    <p class="lead">Give devices without a VPN client access to selected Tailscale or Headscale services. Wake a NAS or PC and check its status from Telegram or ntfy, with or without a Tailnet.</p>
+    <p class="tagline">One ESP32. Remote access, Wake-on-LAN and backup internet. <span>Enable only what you need.</span></p>
+    <p class="lead">Wake a NAS or PC and check that it answers from Telegram or ntfy, no VPN needed. Give devices without a VPN client access to selected Tailscale or Headscale services. Keep IoT devices online over Ethernet or a 4G/LTE SIM, wired to the pins or on USB, when Wi-Fi drops.</p>
     <div class="cta">
       <a class="btn primary" href="{{root}}install-firmware/">Install Firmware</a>
       <a class="btn" href="{{root}}getting-started/">Get started</a>
@@ -18,7 +18,7 @@ schema: home
     <p class="boards">Firmware v{{next_version}} · <a href="{{root}}hardware/">ESP32-S3 N8R8 / N16R8</a> · <a href="{{root}}changelog/">What's new</a></p>
   </div>
   <svg class="roles" viewBox="0 0 480 300" role="img" aria-labelledby="roles-t">
-    <title id="roles-t">A LAN device passes through the ESP32; the Service Gateway role is enabled, the other roles stay off until you enable them.</title>
+    <title id="roles-t">A LAN device passes through the ESP32; the Service Gateway role is enabled, while Wake-on-LAN, subnet router, exit node and Ethernet / 4G backup stay off until you enable them.</title>
     <rect x="16" y="128" width="56" height="40" rx="8" fill="none" stroke="currentColor" stroke-width="2.5"/>
     <path d="M72 148h66" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
     <g fill="none" stroke-width="3" stroke-linecap="round">
@@ -34,19 +34,20 @@ schema: home
       <circle class="lit" cx="296" cy="148" r="8"/>
       <circle class="muted-line" cx="296" cy="202" r="7"/><circle class="muted-line" cx="296" cy="256" r="7"/>
     </g>
-    <text x="314" y="45">Subnet router</text><text x="314" y="99">AP gateway</text>
+    <text x="314" y="45">Wake-on-LAN</text><text x="314" y="99">Subnet router</text>
     <text class="on" x="314" y="153">Service Gateway</text>
-    <text x="314" y="207">Exit node</text><text x="314" y="261">Remote recovery</text>
+    <text x="314" y="207">Exit node</text><text x="314" y="261">Ethernet / 4G backup</text>
     <text x="44" y="196" text-anchor="middle">LAN device</text>
   </svg>
 </section>
 
 <section aria-labelledby="use-cases">
   <h2 id="use-cases">What you can do</h2>
-  <div class="grid">
+  <div class="grid grid-3">
+    <article class="card"><h3>Wake a NAS or PC — no VPN needed</h3><p>Wake a device and verify that it responds, from a Telegram bot or an ntfy topic. Tailscale is optional: the ESP32 can be just a Wake-on-LAN node.</p><a href="{{root}}remote-recovery/#without-tailnet">Set up Wake-on-LAN</a></article>
+    <article class="card"><h3>Keep IoT devices online</h3><p>Use a mobile SIM or wired Ethernet as the main or backup uplink, with automatic failover and an optional monthly data limit. Connect a 4G/LTE modem or a W5500 Ethernet module to the board's pins, or plug a USB modem, 4G stick or USB Ethernet adapter into its USB port (USB in beta).</p><a href="{{root}}hardware/">Hardware</a> · <a href="{{root}}usb-devices/">USB devices</a></article>
     <article class="card"><h3>Reach a specific service</h3><p>Give a device on your LAN access to a selected TCP or UDP service on a Tailnet peer. Restrict access by source IP or subnet.</p><a href="{{root}}service-gateway/">Service Gateway</a></article>
     <article class="card"><h3>Reach a home or IoT network</h3><p>Advertise approved subnets to Tailnet clients, or give local devices a dedicated Wi-Fi network through the ESP32.</p><a href="{{root}}network-modes/">Network modes</a></article>
-    <article class="card"><h3>Recover a NAS or PC</h3><p>Wake a device and verify that it responds. Use Telegram or ntfy without a Tailnet, or open the gateway over Tailscale.</p><a href="{{root}}remote-recovery/#without-tailnet">Set up Wake-on-LAN</a></article>
     <article class="card"><h3>Monitor and automate</h3><p>Review local event history and resource trends. Connect Home Assistant via MQTT, send alerts via Telegram, email or ntfy, or monitor over SNMP.</p><a href="{{root}}automation/">Automation</a> · <a href="{{root}}screenshots/#history">Event history</a></article>
   </div>
 </section>

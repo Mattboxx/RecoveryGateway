@@ -123,6 +123,12 @@ int main(void){
  reset();offer(HIST_EV_TAILNET,HIST_WARN,0,"Tailnet connection lost");clock_s=60;notify_poll();assert(s_count==1&&s_queue[s_head].link==LINK_TAILNET);
  reset();s_cfg.level=NOTIFY_ALL;lost();clock_s=1;up();assert(!s_count);offer(HIST_EV_UPLINK,HIST_INFO,0,"Dynamic DNS updated");assert(s_count==1);
  reset();offer(HIST_EV_SECURITY,HIST_ERROR,0,"Security fixture");assert(s_count==1);drain();assert(s_tg.sent==1);
+ /* A short Wi-Fi station drop: history only with Problems; All events still sends it; a real outage still notifies. */
+ reset();offer(HIST_EV_UPLINK,HIST_WARN,0,"Wi-Fi station disconnected (reason 200)");assert(!s_count&&!s_dropped&&!s_links[LINK_UPLINK].down);
+ reset();s_cfg.mail_enabled=true;s_mail_level=NOTIFY_ALL;offer(HIST_EV_UPLINK,HIST_WARN,0,"Wi-Fi station disconnected (reason 200)");assert(s_count==1&&s_queue[s_head].channels==CH_MAIL);
+ reset();s_cfg.level=NOTIFY_ALL;offer(HIST_EV_UPLINK,HIST_WARN,0,"Wi-Fi station disconnected");assert(s_count==1&&s_queue[s_head].channels==CH_TG);
+ reset();offer(HIST_EV_UPLINK,HIST_WARN,0,"Wi-Fi station disconnected (reason 200)");lost();clock_s=59;notify_poll();assert(!s_count);clock_s=60;notify_poll();assert(s_count==1&&s_queue[s_head].link==LINK_UPLINK);
+ reset();offer(HIST_EV_UPLINK,HIST_WARN,0,"Wi-Fi station disconnectedX");assert(s_count==1);   /* only the exact event text */
  reset();task_ok=0;enqueue_locked(HIST_EV_SERVICE,HIST_INFO,CH_TG,0,"result");assert(s_count==1&&!s_worker&&creates==1);clock_s=29;notify_poll();assert(creates==1);clock_s=30;task_ok=1;notify_poll();assert(s_worker&&creates==2);drain();
  reset();enqueue_locked(HIST_EV_SERVICE,HIST_INFO,CH_TG,0,"old head");during_send=fill_while_sending;drain();assert(s_tg.sent==QUEUE_MAX+1&&s_count==0&&s_dropped==1);
  reset();lost();clock_s=60;notify_poll();during_send=recover_while_sending;drain();assert(strstr(last_text,"restored after about 65 s.")&&s_count==0);

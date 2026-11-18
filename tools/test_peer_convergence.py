@@ -29,7 +29,7 @@ manager=(ML/'src/ml_wg_mgr.c').read_text(encoding='utf-8')
 internal=(ML/'include/microlink_internal.h').read_text(encoding='utf-8')
 start=internal.index('typedef struct {\n    enum {\n        ML_PEER_ADD,')
 update=internal[start:internal.index('} ml_peer_update_t;',start)+len('} ml_peer_update_t;')]
-parser=function(coord,'static bool parse_peers_from_map_response(') if 'static bool parse_peers_from_map_response(' in coord else function(coord,'static void parse_peers_from_map_response(')
+parser=function(coord,'static uint32_t first_ipv4(const cJSON *addresses) {')+function(coord,'static bool parse_peers_from_map_response(') if 'static bool parse_peers_from_map_response(' in coord else function(coord,'static void parse_peers_from_map_response(')
 apply_map=function(coord,'static bool apply_peer_map(') if 'static bool apply_peer_map(' in coord else '''
 /* Baseline reproduction only: old coordinator had separate unguarded calls. */
 static bool apply_peer_map(microlink_t *ml,cJSON *map){if(!ml_policy_apply(map))return false;parse_peers_from_map_response(ml,map);return true;}
@@ -53,12 +53,13 @@ typedef uint8_t u8_t;
 typedef struct {uint32_t network;uint8_t prefix_len;} microlink_route_t;
 '''+update+r'''
 typedef struct {
-    bool active,online;uint8_t public_key[32];char hostname[64];uint32_t vpn_ip;
+    bool active,online;uint8_t public_key[32],disco_key[32];char hostname[64];uint32_t vpn_ip;
     uint64_t node_id;int wg_peer_index,endpoint_count;uint16_t derp_region;
     struct {uint32_t ip;uint16_t port;bool is_ipv6;} endpoints[ML_MAX_ENDPOINTS];
 } ml_peer_t;
 typedef struct {ml_peer_update_t *items[256];unsigned head,tail;} queue;
-typedef struct {ml_peer_t peers[ML_MAX_PEERS];int peer_count;void *peer_update_queue,*wg_netif;} microlink_t;
+enum {ML_REG_STATE_OK=0,ML_REG_STATE_APPROVAL=4};
+typedef struct {ml_peer_t peers[ML_MAX_PEERS];int peer_count;void *peer_update_queue,*wg_netif;bool tailnet_lock;unsigned char reg_state;} microlink_t;
 struct netif {unsigned dummy;};
 static unsigned calls,fail_alloc,fail_send,send_calls,rejected_adds,cache_removes,wg_removes;
 static bool sync_fail;
@@ -87,12 +88,17 @@ static int wireguardif_remove_peer(struct netif *n,u8_t slot){(void)n;assert(slo
 
 finders=function(manager,'static int find_peer_by_key(')+function(manager,'static int find_peer_by_node_id(')
 SINK=r'''
+static void clock_from_control(const cJSON *m){(void)m;}   /* tested in test_tailnet_access */
+static void note_ping_request(microlink_t *ml,const cJSON *p){(void)ml;(void)p;}
+static void apply_display_messages(microlink_t *ml,const cJSON *d){(void)ml;(void)d;}
+static uint64_t fake_ms=1;
+static uint64_t ml_get_time_ms(void){return fake_ms;}
 /* Only WG installation is replaced: explicit bounded sink, not actual crypto. */
 static int add_peer(microlink_t *ml,const ml_peer_update_t *u){
     int idx=find_peer_by_key(ml,u->public_key);
     if(idx<0)for(unsigned i=0;i<16;i++)if(!ml->peers[i].active){idx=(int)i;break;}
     if(idx<0){rejected_adds++;return -1;}
-    ml_peer_t *p=&ml->peers[idx];p->active=true;memcpy(p->public_key,u->public_key,32);
+    ml_peer_t *p=&ml->peers[idx];p->active=true;memcpy(p->public_key,u->public_key,32);memcpy(p->disco_key,u->disco_key,32);
     p->vpn_ip=u->vpn_ip;p->node_id=u->node_id;p->wg_peer_index=idx;
     p->endpoint_count=u->endpoint_count;memcpy(p->endpoints,u->endpoints,sizeof p->endpoints);p->derp_region=u->derp_region;
     if(u->has_online)p->online=u->online;
@@ -101,6 +107,7 @@ static int add_peer(microlink_t *ml,const ml_peer_update_t *u){
 '''
 remove=function(manager,'static void remove_peer(')
 prune=function(manager,'static void prune_peer_cache(') if 'static void prune_peer_cache(' in manager else ''
+fill=function(manager,'#define ML_WG_FILL_EVERY_MS')+function(manager,'static int find_peer_by_disco_key(')+function(manager,'static int slot_for_disco_key(')
 process=function(manager,'static void process_peer_updates(')
 
 TESTS=r'''
@@ -202,6 +209,67 @@ static void metadata(void){
     ml_policy_suspend();assert(!ml_peer_sync_resolve(&u));
     puts("PASS: actual coordinator/mailbox/manager latest full+partial metadata merge, reverse job order, explicit empty/zero clearing, suspended authority refusal (WG/NVS sinks)");
 }
+/* 40 peers with 16 tunnel slots: the whole map is authority (3.0.24 refused
+ * it and blocked every tunnel); peers without a slot get one when free. */
+static void large(void){
+    microlink_t ml={0};queue q={0};ml.peer_update_queue=&q;ml.wg_netif=&ml;
+    cJSON *map=cJSON_Parse("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]},\"PacketFilter\":[]}");assert(map);
+    cJSON *list=cJSON_AddArrayToObject(map,"Peers");
+    for(unsigned id=1;id<=40;id++){cJSON *p=peer_json(id,id);cJSON_AddBoolToObject(p,"Online",id>8);cJSON_AddItemToArray(list,p);}
+    assert(apply_peer_map(&ml,map));cJSON_Delete(map);
+    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.peers==40);
+    drain(&ml);unsigned installed=0;for(int i=0;i<16;i++)installed+=ml.peers[i].active;
+    assert(installed==16&&rejected_adds==24);
+    /* A slot frees (e.g. given away): the next round installs an online peer
+     * without a slot, at most every 30 s. */
+    int freed=find_peer_by_node_id(&ml,3);assert(freed>=0);ml.peers[freed].active=false;
+    fake_ms+=1000;drain(&ml);assert(find_peer_by_node_id(&ml,17)<0);
+    fake_ms+=30000;drain(&ml);int n17=find_peer_by_node_id(&ml,17);assert(n17>=0&&ml.peers[n17].online);
+    /* An online patch for a peer without a slot asks for one at once. */
+    ml.peers[n17].active=false;
+    map=cJSON_Parse("{\"PeersChangedPatch\":[{\"NodeID\":17,\"Online\":true}]}");assert(apply_peer_map(&ml,map));cJSON_Delete(map);
+    drain(&ml);assert(find_peer_by_node_id(&ml,17)>=0);
+    puts("PASS: actual coordinator/mailbox/manager: 40-peer map accepted with 16 slots; free slot filled by an online peer (30 s round or Online patch)");
+}
+/* A peer's key rotated in a patch (seamless renewal): policy, mailbox and
+ * manager move it to the new key without a full refresh; the old key's
+ * tunnel and authority are gone. */
+static void rotation(void){
+    microlink_t ml={0};queue q={0};ml.peer_update_queue=&q;ml.wg_netif=&ml;
+    cJSON *map=cJSON_Parse("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]},\"PacketFilter\":[]}");assert(map);
+    cJSON *list=cJSON_AddArrayToObject(map,"Peers");cJSON_AddItemToArray(list,peer_json(7,7));
+    assert(apply_peer_map(&ml,map));cJSON_Delete(map);drain(&ml);
+    int i=find_peer_by_node_id(&ml,7);assert(i>=0);
+    uint8_t old_key[32];memcpy(old_key,ml.peers[i].public_key,32);
+    char patch[300];snprintf(patch,sizeof patch,"{\"PeersChangedPatch\":[{\"NodeID\":7,\"Key\":\"nodekey:%064x\",\"Endpoints\":[\"198.51.100.7:41641\"]}]}",77);
+    map=cJSON_Parse(patch);assert(map);assert(apply_peer_map(&ml,map));cJSON_Delete(map);drain(&ml);
+    i=find_peer_by_node_id(&ml,7);assert(i>=0);
+    uint8_t new_key[32];char hex[65];snprintf(hex,sizeof hex,"%064x",77);hex_to_bytes(hex,new_key,32);
+    assert(!memcmp(ml.peers[i].public_key,new_key,32)&&memcmp(old_key,new_key,32));
+    assert(ml_policy_peer_status(old_key)==0&&ml_policy_peer_status(new_key)==1);
+    assert(find_peer_by_key(&ml,old_key)<0);
+    /* Rotating onto another peer's key is still refused (and blocks data). */
+    map=cJSON_Parse("{\"PeersChanged\":[]}");cJSON_Delete(map);
+    puts("PASS: actual policy/mailbox/manager: peer key rotation in a patch applied without a full refresh, old key revoked and its tunnel removed");
+}
+/* DISCO from an authorized peer without a slot takes one at once; unknown
+ * keys do not, and lookups are limited to one per second. */
+static void disco_slot(void){
+    microlink_t ml={0};queue q={0};ml.peer_update_queue=&q;ml.wg_netif=&ml;
+    cJSON *map=cJSON_Parse("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]},\"PacketFilter\":[]}");assert(map);
+    cJSON *list=cJSON_AddArrayToObject(map,"Peers");
+    for(unsigned id=1;id<=17;id++){cJSON *p=peer_json(id,id);char dk[80];snprintf(dk,sizeof dk,"discokey:%064x",1000+id);
+        cJSON_AddStringToObject(p,"DiscoKey",dk);cJSON_AddItemToArray(list,p);}
+    assert(apply_peer_map(&ml,map));cJSON_Delete(map);drain(&ml);
+    assert(find_peer_by_node_id(&ml,17)<0);              /* 16 stub slots: the 17th waits */
+    ml.peers[find_peer_by_node_id(&ml,4)].active=false;  /* a slot frees */
+    uint8_t dk[32];char hex[65];snprintf(hex,sizeof hex,"%064x",1000+17);hex_to_bytes(hex,dk,32);
+    uint8_t stranger[32];memset(stranger,0x5a,32);
+    fake_ms=100000;assert(slot_for_disco_key(&ml,stranger)<0);
+    fake_ms+=500;assert(slot_for_disco_key(&ml,dk)<0);     /* rate limited */
+    fake_ms+=600;int i=slot_for_disco_key(&ml,dk);assert(i>=0&&ml.peers[i].node_id==17);
+    puts("PASS: actual mailbox lookup: DISCO from an authorized peer without a slot installs it at once; strangers and bursts are bounded");
+}
 static void mailbox_oom(void){
     microlink_t ml={0};queue q={0};ml.peer_update_queue=&q;ml.wg_netif=&ml;sync_fail=true;
     cJSON *map=full(0);assert(!apply_peer_map(&ml,map));cJSON_Delete(map);
@@ -210,11 +278,11 @@ static void mailbox_oom(void){
 }
 int main(int argc,char **argv){assert(argc==2);(void)key_a;(void)key_b;
     if(!strcmp(argv[1],"capacity"))capacity();else if(!strcmp(argv[1],"stale"))stale();else if(!strcmp(argv[1],"semantics"))semantics();
-    else if(!strcmp(argv[1],"metadata"))metadata();else if(!strcmp(argv[1],"mailbox-oom"))mailbox_oom();else faults();ml_policy_reset();free(sync_entries);sync_entries=NULL;
+    else if(!strcmp(argv[1],"metadata"))metadata();else if(!strcmp(argv[1],"mailbox-oom"))mailbox_oom();else if(!strcmp(argv[1],"large"))large();else if(!strcmp(argv[1],"rotation"))rotation();else if(!strcmp(argv[1],"disco-slot"))disco_slot();else faults();ml_policy_reset();free(sync_entries);sync_entries=NULL;
 }
 '''
 
-program='#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+HEAD+finders+SINK+remove+prune+process+parser+apply_map+TESTS
+program='#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+HEAD+finders+SINK+remove+prune+fill+process+parser+apply_map+TESTS
 with tempfile.TemporaryDirectory(prefix='peer-convergence-') as directory:
     path=Path(directory);(path/'lwip').mkdir();(path/'lwip/pbuf.h').write_text(constant('PBUF'),encoding='utf-8');(path/'test.c').write_text(program,encoding='utf-8')
     flags=['-std=c11','-pthread','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-misleading-indentation','-O1','-g',
@@ -231,7 +299,7 @@ with tempfile.TemporaryDirectory(prefix='peer-convergence-') as directory:
     binary=path/('test.exe' if os.name=='nt' else 'test')
     subprocess.run([os.environ.get('CC','gcc'),*flags,str(path/'test.c'),'-o',str(binary),*libs],check=True)
     errors=[]
-    for scenario in ('capacity','stale','faults','semantics','metadata','mailbox-oom'):
+    for scenario in ('capacity','stale','faults','semantics','metadata','mailbox-oom','large','rotation','disco-slot'):
         with (path/'run.log').open('w+b') as log:
             try:subprocess.run([str(binary),scenario],check=True,timeout=45,stdout=log,stderr=subprocess.STDOUT)
             except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:errors.append(str(error))

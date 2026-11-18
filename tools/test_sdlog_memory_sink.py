@@ -30,10 +30,11 @@ def between(start, end):
 
 levels = between('static char extract_level(', 'default:  return true;              /* raw / un-leveled: keep unless OFF */\n    }\n}\n')
 master = between('static void apply_master_level(void)', 'apply_master_level();\n}\n')
-hook = between('static int sdlog_vprintf(const char *fmt, va_list args)', '    tl_in_sdlog = false;\n    return ret;\n}\n')
+hook = between('static int sdlog_time_prefix(char *out, size_t cap, time_t now)', '    tl_in_sdlog = false;\n    return ret;\n}\n')
 assert MAIN.index('sdlog_set_memory_sink(log_capture_store, SDLOG_LVL_WARN);') > MAIN.index('sdlog_init();')
 
 PROLOGUE = r'''
+#define _POSIX_THREAD_SAFE_FUNCTIONS 200112L   /* localtime_r on mingw */
 #include <assert.h>
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -41,6 +42,7 @@ PROLOGUE = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #define SDLOG_LVL_OFF 0
 #define SDLOG_LVL_ERROR 1
 #define SDLOG_LVL_WARN 2

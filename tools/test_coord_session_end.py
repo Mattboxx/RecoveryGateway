@@ -100,6 +100,7 @@ static int noise_send(microlink_t *ml, ml_noise_state_t *n, const uint8_t *d, in
 static int ml_h2_build_window_update(uint8_t *b, size_t n, uint32_t s, uint32_t inc) { (void)b; (void)n; (void)s; (void)inc; return 13; }
 static bool apply_long_poll_map(microlink_t *ml, cJSON *m) { (void)ml; assert(m); applied++; return apply_ok; }
 static void do_send_endpoint_update(microlink_t *ml, ml_noise_state_t *n) { (void)ml; (void)n; }
+static void answer_ping_request(microlink_t *ml, ml_noise_state_t *n) { (void)ml; (void)n; }   /* test_tailnet_access */
 ''' + code + r'''
 static void frame(uint8_t type, uint8_t flags, uint32_t stream, const void *payload, uint32_t len) {
     uint8_t *f = wire + wire_len;

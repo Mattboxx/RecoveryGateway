@@ -63,7 +63,9 @@ static void publish_state(const mqtt_power_event_t *power,bool selected){assert(
 static void publish_discovery(void){discovery++;if(ha_discovery&&discovery_visit(&s_discovery))discovery_result(&s_discovery,true);}
 static int esp_mqtt_client_subscribe(void *p,const char *t,int qos){assert(p&&t&&qos==1);subscribes++;return 0;}
 static bool homelab_ops_admit(void){return true;}
-static bool start_client(void){starts++;if(starts<3)return false;s_client=&client_token;return true;}
+static bool uplink_ready=true,offline_mode;static unsigned uplink_checks,first_start_tick;
+static bool mqtt_uplink_ready(void){uplink_checks++;return uplink_ready;}
+static bool start_client(void){if(!first_start_tick)first_start_tick=tick;starts++;if(starts<3)return false;s_client=&client_token;return true;}
 static int esp_mqtt_client_reconnect(void *p){assert(p);reconnects++;return -1;}
 static uint32_t ulTaskNotifyTake(int a,int b){(void)a;(void)b;return 0;}
 static void vTaskDelay(int n){(void)n;assert(false);}
@@ -78,6 +80,7 @@ static bool fixture_step(void){
     if(tick)seen[tick]=s_status;
     if(++tick>120)return false;
     now_us=(int64_t)tick*1000000;
+    if(offline_mode){uplink_ready=tick>=60;return true;}   /* no address until 60 s, no broker events */
     event_t ev={.client=s_client};
     if(tick==17||tick==80){assert(s_client);mqtt_event_handler(NULL,NULL,MQTT_EVENT_CONNECTED,&ev);}
     if(tick==20||tick==21||tick==25||tick==85||tick==86){assert(s_client);mqtt_event_handler(NULL,NULL,MQTT_EVENT_DISCONNECTED,&ev);}
@@ -85,6 +88,17 @@ static bool fixture_step(void){
 }
 int main(int argc,char **argv){
     if(argc>1){raw_reset=!strcmp(argv[1],"software")?2:ESP_RST_POWERON;power_selected=strcmp(argv[1],"disabled")!=0;ha_discovery=!strcmp(argv[1],"ha");}
+    if(argc>1&&!strcmp(argv[1],"offline")){
+        /* No uplink address for 60 s: no broker attempt, no failure counted,
+         * no backoff shown; the first attempt starts in the second the
+         * address appears. */
+        offline_mode=true;uplink_ready=false;now_us=1;manager_task(NULL);
+        assert(uplink_checks>=59&&first_start_tick==60&&starts>=1);
+        for(unsigned i=1;i<60;i++){mqtt_integration_status_t s=seen[i];assert(s.configured&&!s.connecting&&!s.connected&&!s.retry_level&&!s.retry_in_seconds);}
+        assert(seen[60].connecting||seen[60].retry_in_seconds);
+        puts("PASS: no MQTT broker attempt and no backoff before the uplink has an address; first attempt when it appears");
+        return 0;
+    }
     service_retry_t r={0};assert(service_retry_due(&r,0));
     service_retry_begin(&r,0);assert(!service_retry_due(&r,30000));assert(!service_retry_timed_out(&r,29999));assert(service_retry_timed_out(&r,30000));
     uint64_t now=0;for(unsigned i=0;i<100;i++){service_retry_failed(&r,now);uint64_t delay=r.next_ms-now;assert(delay>=5000&&delay<=300000);assert(!service_retry_due(&r,r.next_ms-1));assert(service_retry_due(&r,r.next_ms));now=r.next_ms;}
@@ -130,8 +144,41 @@ with tempfile.TemporaryDirectory(prefix='service-retry-') as folder:
     if os.environ.get('RETRY_SANITIZE')=='1':flags+=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
     subprocess.run([os.environ.get('CC','gcc'),*flags,str(p/'test.c'),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True,timeout=30)
-    for mode in ('software','disabled','ha'):
+    for mode in ('software','disabled','ha','offline'):
         subprocess.run([str(binary),mode],check=True,timeout=30)
+
+# Actual mqtt_uplink_ready(): LAN-side uplink (broker on the local network)
+# or the Internet uplink (also mobile) with an address.
+helper = source[source.index('static bool mqtt_uplink_ready(void)'):]
+helper = helper[:helper.index('\n}\n') + 3]
+UPLINK = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdio.h>
+typedef struct {int ip;} esp_netif_ip_info_t;
+typedef struct {int has;} esp_netif_t;
+static esp_netif_t lan, wan;
+static esp_netif_t *eth_uplink_service_netif(void){return &lan;}
+static esp_netif_t *uplink_internet_netif(void){return &wan;}
+static bool uplink_address(esp_netif_t *n,esp_netif_ip_info_t *ip){assert(ip);return n&&n->has;}
+@@HELPER@@
+int main(void){
+    assert(!mqtt_uplink_ready());
+    lan.has=1;assert(mqtt_uplink_ready());            /* broker on the LAN, mobile uplink still dialing */
+    lan.has=0;wan.has=1;assert(mqtt_uplink_ready());  /* only the mobile uplink */
+    lan.has=1;assert(mqtt_uplink_ready());
+    puts("PASS: actual mqtt_uplink_ready (LAN or Internet uplink address)");
+}
+'''
+with tempfile.TemporaryDirectory(prefix='mqtt-uplink-') as folder:
+    p=Path(folder);(p/'u.c').write_text(UPLINK.replace('@@HELPER@@',helper))
+    binary=p/('u.exe' if os.name=='nt' else 'u')
+    subprocess.run([os.environ.get('CC','gcc'),'-std=c11','-Wall','-Wextra','-Werror',str(p/'u.c'),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True,timeout=30)
+    bad=UPLINK.replace('@@HELPER@@',helper.replace('uplink_address(eth_uplink_service_netif(), &ip) || ',''))
+    (p/'m.c').write_text(bad);mb=p/('m.exe' if os.name=='nt' else 'm')
+    subprocess.run([os.environ.get('CC','gcc'),'-std=c11','-w',str(p/'m.c'),'-o',str(mb)],check=True)
+    assert subprocess.run([str(mb)],capture_output=True,timeout=30).returncode!=0,'Internet-only gate must fail (LAN broker)'
 
 # Actual optional-module supervisor backoff (main/module_supervisor.h).
 SUPERVISOR = r'''

@@ -11,7 +11,8 @@ const mode=html.slice(modeAt,html.indexOf('\n    }',modeAt)+6);
 const elements={},requests=[];
 function el(id){return elements[id]||(elements[id]={value:'',checked:false,disabled:false,textContent:'',listeners:{},
   tagName:id.endsWith('events')||id.endsWith('security')||id==='nt-tg-cmd'?'SELECT':'INPUT',type:id.endsWith('enabled')||id.endsWith('clear')||id.endsWith('startup')||id.endsWith('poweron')||/-cmd(-down|-info|-details|-mac)$/.test(id)?'checkbox':'text',
-  addEventListener(type,fn){this.listeners[type]=fn;}});}
+  addEventListener(type,fn){this.listeners[type]=fn;},
+  closest(){return {querySelectorAll(){return [];}};}});}
 const fields={tg:['enabled','token','clear','chat','events','startup','poweron','cmd','cmd-poll','cmd-down','cmd-info','cmd-details','cmd-mac'],mail:['enabled','host','port','security','user','pass','from','to','events','startup','poweron']};
 const context={document:{getElementById:el,querySelectorAll(q){const ch=q.includes('nt-tg-')?'tg':'mail';return fields[ch].map(k=>el('nt-'+ch+'-'+k));}},
   clearTimeout(){},setTimeout(){return 1;},onPage(){return false;},showToast(){},
@@ -42,7 +43,13 @@ const turn=()=>new Promise(setImmediate);
   const post=requests.shift();assert.equal(post.opts.method,'POST');
   assert.deepEqual(JSON.parse(post.opts.body).telegram.commands,{enabled:false,allow_recovery:false,only_when_tailscale_down:true,allow_direct_mac:false,
     info_enabled:true,info_include_details:false,poll_interval_seconds:15},'remote command defaults sent with the channel');
-  assert.equal(context.dependent['nt-tg-cmd-settings'],false);assert.equal(context.dependent['nt-tg-cmd-details-setting'],true);
+  /* Commands off: every command option looks inactive, info details included (3.0.25). */
+  assert.equal(context.dependent['nt-tg-cmd-settings'],false);assert.equal(context.dependent['nt-tg-cmd-details-setting'],false);
+  input('nt-tg-cmd','basic');
+  assert.equal(context.dependent['nt-tg-cmd-settings'],true);assert.equal(context.dependent['nt-tg-cmd-details-setting'],true,'commands on, info on: details editable');
+  el('nt-tg-cmd-info').checked=false;el('nt-tg-cmd-info').listeners.change.call(el('nt-tg-cmd-info'));
+  assert.equal(context.dependent['nt-tg-cmd-details-setting'],false,'info off: details inactive');
+  el('nt-tg-cmd-info').checked=true;el('nt-tg-cmd-info').listeners.change.call(el('nt-tg-cmd-info'));input('nt-tg-cmd','off');
   assert.equal(JSON.parse(post.opts.body).telegram.notify_startup,false);assert.equal(JSON.parse(post.opts.body).telegram.notify_poweron,true);assert.equal(JSON.parse(post.opts.body).email,undefined);
   input('nt-tg-token','newer-draft');assert.equal(el('nt-tg-save').disabled,true);
   el('nt-tg-save').listeners.click();assert.equal(requests.length,0,'duplicate save refused while a request is pending');

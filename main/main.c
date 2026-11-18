@@ -64,6 +64,7 @@
 #include "snmp_ops.h"
 #include "eth_uplink.h"
 #include "cell_uplink.h"
+#include "wifi_usb_budget.h"
 #include "uplink_services.h"
 #include "layout_migration.h"
 #include "service_check.h"
@@ -75,6 +76,7 @@
 #include "tailnet_forward.h"
 #include "mac_deny.h"
 #include "history.h"
+#include "ap_traffic.h"
 #include "notify_channels.h"
 #include "telegram_commands.h"
 #if CONFIG_TSR_DDNS
@@ -194,6 +196,7 @@ static volatile bool     s_ap_auto_off = false;
 #define AP_FALLBACK_DELAY_MS 60000u
 
 ESP_EVENT_DEFINE_BASE(UPLINK_SERVICES_EVENT);
+bool wifi_rx_lean_for_usb;
 
 esp_netif_t *uplink_internet_netif(void)
 {
@@ -1216,6 +1219,16 @@ void app_main(void)
      * listener only when previously enabled in NVS — disabled by default
      * for security. Auth-gated by the shared web_password hash. */
     remote_console_init();
+    {
+        /* The console is plain TCP: the password typed at its prompt crosses
+         * the LAN or the access point readable by anyone listening there.
+         * Over the tailnet it is inside the encrypted tunnel. */
+        remote_console_config_t rc = {0};
+        if (remote_console_get_config(&rc) == ESP_OK && rc.enabled && (rc.bind & (RC_BIND_AP | RC_BIND_STA)))
+            history_event(HIST_EV_SECURITY, HIST_WARN, "Remote console on port %u listens without encryption on the local network "
+                          "or the access point: the password typed there can be read on that network; limit it to the tailnet",
+                          (unsigned)rc.port);
+    }
 
     /* Initialize event group */
     s_wifi_event_group = xEventGroupCreate();
@@ -1247,6 +1260,13 @@ void app_main(void)
 
     /*Initialize WiFi */
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    /* The optional USB connection needs internal DMA RAM (the ESP32-S3 USB
+     * cannot use PSRAM). Only while it is enabled, the Wi-Fi keeps 16 static
+     * receive buffers instead of 24 (about 12.8 KB of internal RAM back; the
+     * pre-2026-05-24 value, RX_BA_WIN 32 <= 2 x 16 still holds). Without a
+     * USB connection the Wi-Fi configuration is exactly the usual one. */
+    wifi_rx_lean_for_usb = wifi_lean_rx_for_usb(cell_uplink_usb_configured() || eth_uplink_usb_configured(), &cfg);
+    if (wifi_rx_lean_for_usb) ESP_LOGI(TAG_AP, "USB connection on: Wi-Fi static RX buffers %d", cfg.static_rx_buf_num);
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
@@ -1280,6 +1300,7 @@ void app_main(void)
      * esp_wifi_start() posts asynchronous start events; installing after it
      * can race netif_add() and lose the ACL, traffic and STA TTL hooks. */
     eth_uplink_init();   /* optional SPI Ethernet: prepared, not started */
+    ap_traffic_init();   /* setting only; counting while on */
     netif_hooks_init();
 
     /* Start WiFi */
@@ -1291,6 +1312,17 @@ void app_main(void)
      * sustained LAN/AP-to-Tailnet throughput at the cost of higher power
      * consumption. A saved wifi_ps setting can opt into modem sleep. */
     ESP_ERROR_CHECK(wifi_power_save_init());
+    /* Beacon timeout of the uplink station. The driver drops the association
+     * after 6 s without a beacon. On the owner's gateway (2026-11-13..16, also
+     * with 3.0.24) that happened every ~12 h 06 min with reason 200 while the
+     * router answered again within ~3 s: a periodic pause of the router's
+     * beacons (likely its channel scan) that the other clients ride through.
+     * Each drop cost a DHCP round, a Tailnet control reconnect and a warning.
+     * 15 s rides such pauses through; a router that is really gone is noticed
+     * 9 s later, and a deauthentication still ends the association at once. */
+    esp_err_t beacon_err = esp_wifi_set_inactive_time(WIFI_IF_STA, WIFI_STA_BEACON_TIMEOUT_S);
+    if (beacon_err != ESP_OK)
+        ESP_LOGW(TAG_STA, "beacon timeout %d s not set: %s", WIFI_STA_BEACON_TIMEOUT_S, esp_err_to_name(beacon_err));
 
 
     /* Optional TX-power override. NVS "tx_pwr" is a u8 in 0.25 dBm

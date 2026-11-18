@@ -130,6 +130,7 @@ typedef struct {
 /* ---- State ---- */
 
 static atomic_bool s_present = false;   /* card mounted              */
+static bool s_probed;                   /* a mount was tried this boot (under s_state_mutex) */
 static atomic_bool s_enabled = false;   /* recorder active           */
 static _Atomic uint8_t s_sd_level      = SDLOG_LVL_WARN;  /* SD recorder sink level (read live) */
 static _Atomic uint8_t s_console_level = SDLOG_LVL_WARN;  /* console sink level (read live by the hook) */
@@ -617,6 +618,18 @@ static void writer_task(void *arg)
 
 /* ---- vprintf hook (never touches the card) ---- */
 
+/* "YYYY-MM-DD HH:MM:SS " in the device's time zone (Settings: time zone),
+ * or nothing while the clock is not set yet (before NTP): a line then keeps
+ * only its time since boot. Returns the bytes written (20 or 0). */
+static int sdlog_time_prefix(char *out, size_t cap, time_t now)
+{
+    if (now < 1700000000 || cap < 21) return 0;
+    struct tm tm;
+    if (!localtime_r(&now, &tm)) return 0;
+    size_t n = strftime(out, cap, "%Y-%m-%d %H:%M:%S ", &tm);
+    return n == 20 ? 20 : 0;
+}
+
 static int sdlog_vprintf(const char *fmt, va_list args)
 {
     va_list args_copy;
@@ -687,9 +700,12 @@ static int sdlog_vprintf(const char *fmt, va_list args)
 
                 if (clean_len > 0 && pass) {
                     sdlog_msg_t m;
+                    /* Date and time first, so a file read later says when. */
+                    int tp = sdlog_time_prefix(m.data, sizeof m.data, time(NULL));
                     int dl = clean_len;
-                    if (dl > SDLOG_LINE_MAX - 1) dl = SDLOG_LINE_MAX - 1;
-                    memcpy(m.data, s_pktbuf, dl);
+                    if (dl > SDLOG_LINE_MAX - 1 - tp) dl = SDLOG_LINE_MAX - 1 - tp;
+                    memcpy(m.data + tp, s_pktbuf, dl);
+                    dl += tp;
                     m.data[dl] = '\n';
                     m.len = (uint16_t)(dl + 1);
                     if (xQueueSend(s_queue, &m, 0) != pdTRUE)
@@ -806,6 +822,18 @@ void sdlog_set_microlink(void *ml)
     if (s_ml_mutex) xSemaphoreGive(s_ml_mutex);
 }
 
+/* Mounts the card if that was not tried yet (or `retry`). With the
+ * recorder off nothing touches the SD bus at boot: no probe, no driver, no
+ * "card init failed" errors on boards without a card; the first look at the
+ * recorder (its status in the web UI) or enabling it probes then. Caller
+ * holds s_state_mutex (or runs before anything else can, at init). */
+static void probe_card_locked(bool retry)
+{
+    if (atomic_load(&s_present) || (s_probed && !retry)) return;
+    s_probed = true;
+    mount_card();   /* sets s_present; failure is non-fatal */
+}
+
 esp_err_t sdlog_init(void)
 {
     s_state_mutex = xSemaphoreCreateMutex();
@@ -814,7 +842,7 @@ esp_err_t sdlog_init(void)
     if (!s_state_mutex || !s_file_mutex || !s_ml_mutex) return ESP_ERR_NO_MEM;
 
     load_config();
-    mount_card();   /* sets s_present; failure is non-fatal */
+    if (atomic_load(&s_enabled)) probe_card_locked(false);   /* off: no SD probe at boot */
 
     /* Install the hook unconditionally so runtime enable/disable works.
      * Runs after the UART console is up, so the saved fn is its hook. */
@@ -838,6 +866,9 @@ bool sdlog_is_enabled(void)   { return atomic_load(&s_enabled); }
 
 esp_err_t sdlog_enable(uint8_t sd_level)
 {
+    xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+    probe_card_locked(true);          /* the owner asks for it: look (again) */
+    xSemaphoreGive(s_state_mutex);
     if (!atomic_load(&s_present)) return ESP_ERR_INVALID_STATE;
     if (sd_level < SDLOG_LVL_ERROR) sd_level = SDLOG_LVL_ERROR;  /* OFF == disable() */
     if (sd_level > SDLOG_LVL_INFO)  sd_level = SDLOG_LVL_INFO;
@@ -880,6 +911,11 @@ esp_err_t sdlog_set_console_level(uint8_t level)
 
 void sdlog_get_status(sdlog_status_t *out)
 {
+    if (s_state_mutex) {                 /* first look: probe the card once */
+        xSemaphoreTake(s_state_mutex, portMAX_DELAY);
+        probe_card_locked(false);
+        xSemaphoreGive(s_state_mutex);
+    }
     if (!out) return;
     memset(out, 0, sizeof *out);
     out->present       = atomic_load(&s_present);

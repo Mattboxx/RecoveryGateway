@@ -38,6 +38,13 @@ typedef int esp_err_t;
 #define HTTPD_400_BAD_REQUEST 400
 #define PORTMAP_PROTO_TCP 6
 #define TAILNET_FORWARD_PROTO_TCP 6
+#include "web_access.h"
+uint8_t s_web_scope; uint32_t tailscale_tunnel_ip; bool ap_traffic_on;
+#define httpd_req_to_sockfd(r) ((void)(r), 3)
+static bool socket_addr(int fd, bool peer, web_addr_t *out) { (void)fd; (void)peer; *out = web_addr_v4(0x0101a8c0u); return true; }
+static uint32_t web_admin_ap_ip(void) { return 0; }
+static void nvs_save_u8(const char *key, uint8_t value) { (void)key; (void)value; }
+#define ap_traffic_set(on) ((void)(on), 0)
 typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 static unsigned critical, transaction, writes;

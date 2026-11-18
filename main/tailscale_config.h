@@ -43,7 +43,7 @@ extern int32_t tailscale_snat_subnet_routes;      // 1 = SNAT (masquerade) tunne
 // `tailscale_accepted_routes_count` is the number of valid entries (always
 // authoritative — entries past it must not be read). Internal lookup/publication
 // uses a cross-core critical section; other readers must use the snapshot.
-#define TAILSCALE_ACCEPTED_ROUTES_MAX 32
+#define TAILSCALE_ACCEPTED_ROUTES_MAX 64
 typedef struct {
     uint32_t network;     // host byte order
     uint8_t  prefix_len;  // CIDR prefix

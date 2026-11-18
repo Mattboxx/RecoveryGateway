@@ -337,6 +337,24 @@ static bool tailnet_transition(int from, int to, const microlink_diag_t *d, uint
     return true;
 }
 
+/* Warning event while this node's key expires within 14 days: once a day,
+ * from the wall clock (no warning before the clock is set). Returns true
+ * with the text when one is due. */
+#define KEY_EXPIRY_WARN_DAYS 14
+static bool key_expiry_warning(int64_t expires, int64_t now, int64_t *last_day, char *text, size_t size)
+{
+    if (expires <= 0 || now < 1700000000 || now >= expires) return false;
+    int64_t left = expires - now, day = now / 86400;
+    if (left > (int64_t)KEY_EXPIRY_WARN_DAYS * 86400 || day == *last_day) return false;
+    *last_day = day;
+    long days = (long)(left / 86400);
+    if (days >= 1)
+        snprintf(text, size, "Tailnet node key expires in %ld days: disable key expiry for this device in the admin console", days);
+    else
+        snprintf(text, size, "Tailnet node key expires within a day: disable key expiry for this device in the admin console");
+    return true;
+}
+
 static void history_task(void *arg)
 {
     (void)arg;
@@ -397,6 +415,13 @@ static void history_task(void *arg)
                 }
             }
             tailnet_seen = state;
+            /* Node key expiry ahead (and the expiry itself, as a refusal). */
+            static int64_t key_warned_day = -1;
+            ml_policy_status_t own;
+            ml_policy_get_status(&own);
+            char key_text[HIST_TEXT_MAX + 1];
+            if (key_expiry_warning(own.self_expires, (int64_t)time(NULL), &key_warned_day, key_text, sizeof key_text))
+                history_event(HIST_EV_TAILNET, HIST_WARN, key_text);
         }
         if (cfg.metrics && now >= next_sample) {
             next_sample = now + SAMPLE_PERIOD;

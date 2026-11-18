@@ -4,3 +4,5 @@ dependencies:
   espressif/w5500: "==2.0.1"
   espressif/wiznet_common: "==1.1.0"
   espressif/cjson: "==1.7.19~2"
+  # Optional USB connection of the cellular and Ethernet uplinks (USB host). Apache-2.0.
+  espressif/usb: "==1.6.0"

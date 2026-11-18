@@ -68,7 +68,7 @@ const data = {
   '/api/wol': { devices: [{ name: 'NAS', mac: '02:00:00:00:30:01', port: 9 }, { name: 'Workstation', mac: '02:00:00:00:30:02', port: 9 }] },
   '/api/mqtt': { enabled: true, connected: false, uri: 'mqtts://broker.example', base_topic: 'home/gateway', interval_seconds: 30, broker_watchdog_timeout_seconds: 300, broker_watchdog_wol_mac: '' },
   '/api/ntfy': { enabled: false, server: 'https://ntfy.example', topic: '', info_enabled: false, commands_enabled: false, last_publish_ok: false },
-  '/api/snmp': { enabled: false, running: false, community: 'private-example' },
+  '/api/snmp': { enabled: false, running: false, has_community: true, community_is_default: false },
   '/api/service-watch': { enabled: false, notify: false, interval_s: 900 },
   '/api/service-leases': [],
   '/api/health': { enabled: false, notify: false, interval_s: 60, failure_threshold: 3, gateway_port: 0, dns_name: '', internet_ip: '', internet_port: 0, tailnet_target: '', tailnet_port: 0, checks: [] },
