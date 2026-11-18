@@ -374,6 +374,17 @@ SERVE = r"""
  * glibc already declares under gnu11 (stdlib.h pulls in sys/select.h). */
 #define socklen_t test_socklen_t
 #define fd_set test_fd_set
+#define select test_select
+#define close test_close
+#define connect test_connect
+#define fcntl test_fcntl
+#define getsockopt test_getsockopt
+#define setsockopt test_setsockopt
+#define recv test_recv
+#define recvfrom test_recvfrom
+#define send test_send
+#define sendto test_sendto
+#define socket test_socket
 #undef FD_ZERO
 #undef FD_SET
 typedef unsigned socklen_t;
