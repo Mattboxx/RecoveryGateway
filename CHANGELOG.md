@@ -6,6 +6,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.21 adds to beta.20:
+
+- **Peer key rotation without interruption.** A peer that renews its key
+  (seamless renewal sends the new key as a patch) moves to it at once: the
+  old key loses access in the same update and the tunnel is replaced. Before,
+  the update was refused and the whole map reloaded.
+- **A peer without a tunnel slot that reaches out gets one at once** (its
+  discovery message), as the official client configures peers when they
+  connect; before it waited for the 30 s refill or longer.
+- **Control server reachable when DNS fails**: the last address that worked
+  is kept (written only when it changes) and used when the name cannot be
+  resolved; the encrypted handshake still checks the server.
+
 3.0.25-beta.20 adds to beta.19:
 
 - **An expired node key no longer loops.** When the control server marks

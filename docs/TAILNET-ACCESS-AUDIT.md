@@ -24,6 +24,9 @@ devices). Each item: what blocks access, status, where.
 | "Waiting for approval" stuck | state not cleared (reconnects skip registration) | follows MachineAuthorized in the map (beta.18) |
 | Node key expired seen in the map | reconnect loop every 60 s without registering (reconnects skip registration) | forces a registration, records the expiry for the renewal, shows it (beta.20) |
 | Built-in Tailscale control Noise key | a key rotation would stop every device | after a failed handshake the current key is fetched over verified HTTPS (beta.20) |
+| Peer key rotation in a patch | refused, full map refresh, short interruption | applied, old key revoked, tunnel replaced at once (beta.21) |
+| Peer without a tunnel slot reaching out | its DISCO dropped until the 30 s refill | gets a slot at once (rate-limited lookup) (beta.21) |
+| DNS failure for the control host | no connection | last working address (NVS, written on change) (beta.21) |
 
 ### Audit items 2-6
 
@@ -49,10 +52,8 @@ devices). Each item: what blocks access, status, where.
    work. Documented in CONFIGURATION.md; IPv6 allowed IPs and routing would
    be the fix.
 
-Also open: a peer's key rotation sent as a patch (PeersChangedPatch with a
-new Key, more frequent with seamless renewal) is refused and answered with a
-full map refresh: safe, but a short interruption for that peer (about once
-per key lifetime). No DNS fallback for the control host (official clients have baked
-bootstrap addresses); an explicit "controlplane.tailscale.com" login server is
-treated as custom (no port fallback); in keep mode a lone gateway can need one
-extra reconnect when a stream starts with OmitPeers.
+Also open: on the very first connection with DNS failing there is no known
+control address yet (official clients have baked bootstrap addresses and
+DERP bootstrap DNS); the TLS 443 path resolves the control host by name only.
+In keep mode a lone gateway can need one extra reconnect when a stream starts
+with OmitPeers.

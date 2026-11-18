@@ -123,8 +123,10 @@ static void deltas(void) {
     assert(!apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"Key\":\"" KEY_B "\"}]}"));
     assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
     standard();
-    assert(!apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"Key\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000003\"}]}"));
+    /* Rotation to a new key (seamless renewal): applied, old key revoked now. */
+    assert(apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"Key\":\"nodekey:0000000000000000000000000000000000000000000000000000000000000003\"}]}"));
     assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
+    {uint8_t key_c[32]={[31]=3};assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_c));}
     ml_policy_reset();assert(apply("{\"KeepAlive\":true}"));
     assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
     assert(apply("{\"PacketFilter\":[" ALL_RULE "]}"));

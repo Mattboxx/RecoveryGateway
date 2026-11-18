@@ -53,7 +53,7 @@ typedef uint8_t u8_t;
 typedef struct {uint32_t network;uint8_t prefix_len;} microlink_route_t;
 '''+update+r'''
 typedef struct {
-    bool active,online;uint8_t public_key[32];char hostname[64];uint32_t vpn_ip;
+    bool active,online;uint8_t public_key[32],disco_key[32];char hostname[64];uint32_t vpn_ip;
     uint64_t node_id;int wg_peer_index,endpoint_count;uint16_t derp_region;
     struct {uint32_t ip;uint16_t port;bool is_ipv6;} endpoints[ML_MAX_ENDPOINTS];
 } ml_peer_t;
@@ -98,7 +98,7 @@ static int add_peer(microlink_t *ml,const ml_peer_update_t *u){
     int idx=find_peer_by_key(ml,u->public_key);
     if(idx<0)for(unsigned i=0;i<16;i++)if(!ml->peers[i].active){idx=(int)i;break;}
     if(idx<0){rejected_adds++;return -1;}
-    ml_peer_t *p=&ml->peers[idx];p->active=true;memcpy(p->public_key,u->public_key,32);
+    ml_peer_t *p=&ml->peers[idx];p->active=true;memcpy(p->public_key,u->public_key,32);memcpy(p->disco_key,u->disco_key,32);
     p->vpn_ip=u->vpn_ip;p->node_id=u->node_id;p->wg_peer_index=idx;
     p->endpoint_count=u->endpoint_count;memcpy(p->endpoints,u->endpoints,sizeof p->endpoints);p->derp_region=u->derp_region;
     if(u->has_online)p->online=u->online;
@@ -107,7 +107,7 @@ static int add_peer(microlink_t *ml,const ml_peer_update_t *u){
 '''
 remove=function(manager,'static void remove_peer(')
 prune=function(manager,'static void prune_peer_cache(') if 'static void prune_peer_cache(' in manager else ''
-fill=function(manager,'#define ML_WG_FILL_EVERY_MS')
+fill=function(manager,'#define ML_WG_FILL_EVERY_MS')+function(manager,'static int find_peer_by_disco_key(')+function(manager,'static int slot_for_disco_key(')
 process=function(manager,'static void process_peer_updates(')
 
 TESTS=r'''
@@ -231,6 +231,45 @@ static void large(void){
     drain(&ml);assert(find_peer_by_node_id(&ml,17)>=0);
     puts("PASS: actual coordinator/mailbox/manager: 40-peer map accepted with 16 slots; free slot filled by an online peer (30 s round or Online patch)");
 }
+/* A peer's key rotated in a patch (seamless renewal): policy, mailbox and
+ * manager move it to the new key without a full refresh; the old key's
+ * tunnel and authority are gone. */
+static void rotation(void){
+    microlink_t ml={0};queue q={0};ml.peer_update_queue=&q;ml.wg_netif=&ml;
+    cJSON *map=cJSON_Parse("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]},\"PacketFilter\":[]}");assert(map);
+    cJSON *list=cJSON_AddArrayToObject(map,"Peers");cJSON_AddItemToArray(list,peer_json(7,7));
+    assert(apply_peer_map(&ml,map));cJSON_Delete(map);drain(&ml);
+    int i=find_peer_by_node_id(&ml,7);assert(i>=0);
+    uint8_t old_key[32];memcpy(old_key,ml.peers[i].public_key,32);
+    char patch[300];snprintf(patch,sizeof patch,"{\"PeersChangedPatch\":[{\"NodeID\":7,\"Key\":\"nodekey:%064x\",\"Endpoints\":[\"198.51.100.7:41641\"]}]}",77);
+    map=cJSON_Parse(patch);assert(map);assert(apply_peer_map(&ml,map));cJSON_Delete(map);drain(&ml);
+    i=find_peer_by_node_id(&ml,7);assert(i>=0);
+    uint8_t new_key[32];char hex[65];snprintf(hex,sizeof hex,"%064x",77);hex_to_bytes(hex,new_key,32);
+    assert(!memcmp(ml.peers[i].public_key,new_key,32)&&memcmp(old_key,new_key,32));
+    assert(ml_policy_peer_status(old_key)==0&&ml_policy_peer_status(new_key)==1);
+    assert(find_peer_by_key(&ml,old_key)<0);
+    /* Rotating onto another peer's key is still refused (and blocks data). */
+    map=cJSON_Parse("{\"PeersChanged\":[]}");cJSON_Delete(map);
+    puts("PASS: actual policy/mailbox/manager: peer key rotation in a patch applied without a full refresh, old key revoked and its tunnel removed");
+}
+/* DISCO from an authorized peer without a slot takes one at once; unknown
+ * keys do not, and lookups are limited to one per second. */
+static void disco_slot(void){
+    microlink_t ml={0};queue q={0};ml.peer_update_queue=&q;ml.wg_netif=&ml;
+    cJSON *map=cJSON_Parse("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]},\"PacketFilter\":[]}");assert(map);
+    cJSON *list=cJSON_AddArrayToObject(map,"Peers");
+    for(unsigned id=1;id<=17;id++){cJSON *p=peer_json(id,id);char dk[80];snprintf(dk,sizeof dk,"discokey:%064x",1000+id);
+        cJSON_AddStringToObject(p,"DiscoKey",dk);cJSON_AddItemToArray(list,p);}
+    assert(apply_peer_map(&ml,map));cJSON_Delete(map);drain(&ml);
+    assert(find_peer_by_node_id(&ml,17)<0);              /* 16 stub slots: the 17th waits */
+    ml.peers[find_peer_by_node_id(&ml,4)].active=false;  /* a slot frees */
+    uint8_t dk[32];char hex[65];snprintf(hex,sizeof hex,"%064x",1000+17);hex_to_bytes(hex,dk,32);
+    uint8_t stranger[32];memset(stranger,0x5a,32);
+    fake_ms=100000;assert(slot_for_disco_key(&ml,stranger)<0);
+    fake_ms+=500;assert(slot_for_disco_key(&ml,dk)<0);     /* rate limited */
+    fake_ms+=600;int i=slot_for_disco_key(&ml,dk);assert(i>=0&&ml.peers[i].node_id==17);
+    puts("PASS: actual mailbox lookup: DISCO from an authorized peer without a slot installs it at once; strangers and bursts are bounded");
+}
 static void mailbox_oom(void){
     microlink_t ml={0};queue q={0};ml.peer_update_queue=&q;ml.wg_netif=&ml;sync_fail=true;
     cJSON *map=full(0);assert(!apply_peer_map(&ml,map));cJSON_Delete(map);
@@ -239,7 +278,7 @@ static void mailbox_oom(void){
 }
 int main(int argc,char **argv){assert(argc==2);(void)key_a;(void)key_b;
     if(!strcmp(argv[1],"capacity"))capacity();else if(!strcmp(argv[1],"stale"))stale();else if(!strcmp(argv[1],"semantics"))semantics();
-    else if(!strcmp(argv[1],"metadata"))metadata();else if(!strcmp(argv[1],"mailbox-oom"))mailbox_oom();else if(!strcmp(argv[1],"large"))large();else faults();ml_policy_reset();free(sync_entries);sync_entries=NULL;
+    else if(!strcmp(argv[1],"metadata"))metadata();else if(!strcmp(argv[1],"mailbox-oom"))mailbox_oom();else if(!strcmp(argv[1],"large"))large();else if(!strcmp(argv[1],"rotation"))rotation();else if(!strcmp(argv[1],"disco-slot"))disco_slot();else faults();ml_policy_reset();free(sync_entries);sync_entries=NULL;
 }
 '''
 
@@ -260,7 +299,7 @@ with tempfile.TemporaryDirectory(prefix='peer-convergence-') as directory:
     binary=path/('test.exe' if os.name=='nt' else 'test')
     subprocess.run([os.environ.get('CC','gcc'),*flags,str(path/'test.c'),'-o',str(binary),*libs],check=True)
     errors=[]
-    for scenario in ('capacity','stale','faults','semantics','metadata','mailbox-oom','large'):
+    for scenario in ('capacity','stale','faults','semantics','metadata','mailbox-oom','large','rotation','disco-slot'):
         with (path/'run.log').open('w+b') as log:
             try:subprocess.run([str(binary),scenario],check=True,timeout=45,stdout=log,stderr=subprocess.STDOUT)
             except (subprocess.CalledProcessError,subprocess.TimeoutExpired) as error:errors.append(str(error))
