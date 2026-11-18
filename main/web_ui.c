@@ -3933,6 +3933,54 @@ static esp_err_t tailscale_reset_identity_handler(httpd_req_t *req)
     return response;
 }
 
+/* POST /api/tailscale/leave -- leave the tailnet: log this node out of the
+ * control server as `tailscale logout` does (best effort, up to 10 s; the
+ * node key expires there), erase the saved auth key and this device's
+ * tailnet identity, turn Tailscale off and restart. Joining again needs an
+ * auth key and makes a new device in the admin console. Other settings stay.
+ * "server" says what the control server answered: logged_out, refused,
+ * unreachable, not_registered or not_running. */
+static const char *tailscale_leave_server(esp_err_t lo)
+{
+    return lo == ESP_OK ? "logged_out" : lo == ESP_FAIL ? "refused"
+         : lo == ESP_ERR_INVALID_STATE ? "not_registered" : "unreachable";
+}
+
+static esp_err_t tailscale_leave_handler(httpd_req_t *req)
+{
+    if (require_password_session(req) != ESP_OK) return ESP_FAIL;
+    TaskHandle_t reboot;
+    if (reserve_restart(req, &reboot) != ESP_OK) return ESP_FAIL;
+    struct microlink_s *ml = tailscale_get_microlink();
+    const char *server = ml ? tailscale_leave_server(microlink_logout(ml, 10000)) : "not_running";
+    /* Forget locally even when the server could not be told: the key and the
+     * identity must not stay on a device the owner asked to leave. */
+    esp_err_t err = nvs_param_erase("ts_authkey");
+    if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    if (err == ESP_OK) err = nvs_param_set_int("ts_enabled", 0);
+    if (err == ESP_OK) err = microlink_factory_reset();
+    httpd_resp_set_type(req, "application/json");
+    char resp[96];
+    if (err != ESP_OK) {
+        snprintf(resp, sizeof resp, "{\"ok\":false,\"server\":\"%s\",\"reason\":\"%s\"}", server, esp_err_to_name(err));
+        xTaskNotify(reboot, WEB_RESTART_CANCEL, eSetValueWithOverwrite);
+        return httpd_resp_sendstr(req, resp);
+    }
+    tailscale_enabled = 0;
+    ESP_LOGW(TAG, "Left the tailnet (control server: %s); restarting", server);
+    snprintf(resp, sizeof resp, "{\"ok\":true,\"server\":\"%s\"}", server);
+    esp_err_t response = httpd_resp_sendstr(req, resp);
+    xTaskNotify(reboot, WEB_RESTART_COMMIT, eSetValueWithOverwrite);
+    return response;
+}
+
+static const httpd_uri_t uri_tailscale_leave = {
+    .uri      = "/api/tailscale/leave",
+    .method   = HTTP_POST,
+    .handler  = tailscale_leave_handler,
+    .user_ctx = NULL,
+};
+
 static const httpd_uri_t uri_tailscale_reset_identity = {
     .uri      = "/api/tailscale/reset_identity",
     .method   = HTTP_POST,
@@ -6455,6 +6503,7 @@ esp_err_t web_ui_init(void)
     reg_uri(server, &uri_tailscale);
     reg_uri(server, &uri_tailscale_save);
     reg_uri(server, &uri_tailscale_reset_identity);
+    reg_uri(server, &uri_tailscale_leave);
     reg_uri(server, &uri_system);
     reg_uri(server, &uri_system_save);
 #if CONFIG_TSR_SNMP

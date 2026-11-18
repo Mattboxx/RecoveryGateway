@@ -3284,7 +3284,11 @@
             <code class="mono" id="ts-lock-cmd" data-no-i18n style="word-break:break-all;"></code>
             <div>This gateway does not verify node signatures itself: it relies on the control server for peer keys.</div>
           </div>
-          <div style="display:flex; justify-content:flex-end; margin:0 0 0.5rem 0;">
+          <div style="display:flex; justify-content:flex-end; flex-wrap:wrap; gap:0.5rem; margin:0 0 0.5rem 0;">
+            <button class="btn btn-ghost btn-sm text-danger" id="ts-leave" type="button"
+                    title="Log this gateway out of the tailnet, delete the saved auth key and turn Tailscale off.">
+              Leave tailnet…
+            </button>
             <button class="btn btn-ghost btn-sm text-danger" id="ts-reset-identity" type="button"
                     title="Erase the device's stored node-key and reboot. Use when the control plane no longer recognises the current node-key.">
               Regenerate identity…
@@ -10036,6 +10040,46 @@
      * machine/wg/disco keys + cached peers, then reboots. The next
      * register attempt gets a fresh node-key the control plane will
      * see as a brand-new node. */
+    /* Leave the tailnet: log out at the control server (as `tailscale
+     * logout`), delete the auth key and this identity, Tailscale off. */
+    var TS_LEAVE_SERVER = {
+      logged_out: 'The control server logged this gateway out.',
+      refused: 'The control server refused the logout: remove the device in its admin console.',
+      unreachable: 'The control server could not be reached: remove the device in its admin console.',
+      not_registered: 'This gateway was not registered in a tailnet.',
+      not_running: 'Tailscale was not running: remove the device in the admin console if it is listed.'
+    };
+    document.getElementById('ts-leave').addEventListener('click', function () {
+      var btn = this;
+      showConfirm(
+        'Leave the tailnet?',
+        '<p style="margin:0 0 0.75rem 0;">This gateway leaves your tailnet, as the official "tailscale logout" command does.</p>'
+        + '<ul style="margin:0 0 0.75rem 1.2rem; padding:0; color:var(--fg-secondary);">'
+        +   '<li>Logs out at the control server (its node key expires there)</li>'
+        +   '<li>Deletes the saved auth key and this device\'s tailnet identity</li>'
+        +   '<li>Turns Tailscale off and restarts the gateway</li>'
+        + '</ul>'
+        + '<p style="margin:0; color:var(--fg-muted); font-size:var(--text-xs);">Other settings stay. To join again, enter an auth key: the gateway appears as a new device in the admin console.</p>',
+        function () {
+          btn.disabled = true; btn.textContent = 'Leaving…';
+          apiFetch('/api/tailscale/leave', { method: 'POST' })
+            .then(function (r) { if (r.status === 403) return { ok: false, reason: LOCK_TEXT }; return r.json(); })
+            .then(function (d) {
+              if (d.ok) {
+                showToast('success', UT('Left the tailnet'), (TS_LEAVE_SERVER[d.server] ? UT(TS_LEAVE_SERVER[d.server]) + ' ' : '') + UT('The gateway is restarting.'), 10000);
+              } else {
+                showToast('error', UT('Leaving failed'), d.reason || 'unknown', 6000);
+                btn.disabled = false; btn.textContent = UT('Leave tailnet…');
+              }
+            })
+            .catch(function () {
+              showToast('error', UT('Leaving failed'), UT('Network error.'), 5000);
+              btn.disabled = false; btn.textContent = UT('Leave tailnet…');
+            });
+        },
+        { html: true, confirmText: UT('Leave tailnet'), danger: true }
+      );
+    });
     document.getElementById('ts-reset-identity').addEventListener('click', function () {
       var btn = this;
       showConfirm(

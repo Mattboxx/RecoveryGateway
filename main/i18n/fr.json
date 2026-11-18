@@ -2350,5 +2350,22 @@
  "Time limit notices": "Notifications de limite de temps",
  "Time limit status unavailable.": "État de la limite de temps indisponible.",
  "Up to 8 rules. Each port on this gateway can be used by one rule per protocol.": "Jusqu'à 8 règles. Chaque port de cette passerelle ne peut servir qu'à une règle par protocole.",
- "Waiting for the clock: the time limit starts once the time is known.": "En attente de l'horloge : la limite de temps démarre dès que l'heure est connue."
+ "Waiting for the clock: the time limit starts once the time is known.": "En attente de l'horloge : la limite de temps démarre dès que l'heure est connue.",
+ "Deletes the saved auth key and this device's tailnet identity": "Supprime la clé d'authentification enregistrée et l'identité tailnet de cet appareil",
+ "Leave tailnet": "Quitter le tailnet",
+ "Leave tailnet…": "Quitter le tailnet…",
+ "Leave the tailnet?": "Quitter le tailnet ?",
+ "Leaving failed": "Échec de la sortie",
+ "Left the tailnet": "Tailnet quitté",
+ "Log this gateway out of the tailnet, delete the saved auth key and turn Tailscale off.": "Déconnecte cette passerelle du tailnet, supprime la clé enregistrée et désactive Tailscale.",
+ "Logs out at the control server (its node key expires there)": "Se déconnecte du serveur de contrôle (sa clé de nœud y expire)",
+ "Other settings stay. To join again, enter an auth key: the gateway appears as a new device in the admin console.": "Les autres réglages restent. Pour rejoindre à nouveau, saisissez une clé d'authentification : la passerelle apparaîtra comme un nouvel appareil dans la console d'administration.",
+ "Tailscale was not running: remove the device in the admin console if it is listed.": "Tailscale ne fonctionnait pas : supprimez l'appareil dans la console d'administration s'il y figure.",
+ "The control server could not be reached: remove the device in its admin console.": "Le serveur de contrôle était injoignable : supprimez l'appareil dans sa console d'administration.",
+ "The control server logged this gateway out.": "Le serveur de contrôle a déconnecté cette passerelle.",
+ "The control server refused the logout: remove the device in its admin console.": "Le serveur de contrôle a refusé la déconnexion : supprimez l'appareil dans sa console d'administration.",
+ "This gateway leaves your tailnet, as the official \"tailscale logout\" command does.": "Cette passerelle quitte votre tailnet, comme le fait la commande officielle \"tailscale logout\".",
+ "This gateway was not registered in a tailnet.": "Cette passerelle n'était inscrite dans aucun tailnet.",
+ "Turns Tailscale off and restarts the gateway": "Désactive Tailscale et redémarre la passerelle",
+ "The gateway is restarting.": "La passerelle redémarre."
 }

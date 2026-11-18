@@ -2350,5 +2350,22 @@
  "Time limit notices": "Zeitlimit-Meldungen",
  "Time limit status unavailable.": "Zeitlimit-Status nicht verfügbar.",
  "Up to 8 rules. Each port on this gateway can be used by one rule per protocol.": "Bis zu 8 Regeln. Jeder Port dieses Gateways kann pro Protokoll von einer Regel genutzt werden.",
- "Waiting for the clock: the time limit starts once the time is known.": "Warte auf die Uhrzeit: das Zeitlimit beginnt, sobald die Zeit bekannt ist."
+ "Waiting for the clock: the time limit starts once the time is known.": "Warte auf die Uhrzeit: das Zeitlimit beginnt, sobald die Zeit bekannt ist.",
+ "Deletes the saved auth key and this device's tailnet identity": "Löscht den gespeicherten Auth-Key und die Tailnet-Identität dieses Geräts",
+ "Leave tailnet": "Tailnet verlassen",
+ "Leave tailnet…": "Tailnet verlassen…",
+ "Leave the tailnet?": "Tailnet verlassen?",
+ "Leaving failed": "Verlassen fehlgeschlagen",
+ "Left the tailnet": "Tailnet verlassen",
+ "Log this gateway out of the tailnet, delete the saved auth key and turn Tailscale off.": "Meldet dieses Gateway vom Tailnet ab, löscht den gespeicherten Auth-Key und schaltet Tailscale aus.",
+ "Logs out at the control server (its node key expires there)": "Meldet sich beim Steuerserver ab (sein Node-Key läuft dort ab)",
+ "Other settings stay. To join again, enter an auth key: the gateway appears as a new device in the admin console.": "Andere Einstellungen bleiben. Zum erneuten Beitritt einen Auth-Key eingeben: das Gateway erscheint als neues Gerät in der Admin-Konsole.",
+ "Tailscale was not running: remove the device in the admin console if it is listed.": "Tailscale lief nicht: entferne das Gerät in der Admin-Konsole, falls es aufgeführt ist.",
+ "The control server could not be reached: remove the device in its admin console.": "Der Steuerserver war nicht erreichbar: entferne das Gerät in seiner Admin-Konsole.",
+ "The control server logged this gateway out.": "Der Steuerserver hat dieses Gateway abgemeldet.",
+ "The control server refused the logout: remove the device in its admin console.": "Der Steuerserver hat die Abmeldung abgelehnt: entferne das Gerät in seiner Admin-Konsole.",
+ "This gateway leaves your tailnet, as the official \"tailscale logout\" command does.": "Dieses Gateway verlässt dein Tailnet, wie es der offizielle Befehl \"tailscale logout\" tut.",
+ "This gateway was not registered in a tailnet.": "Dieses Gateway war in keinem Tailnet registriert.",
+ "Turns Tailscale off and restarts the gateway": "Schaltet Tailscale aus und startet das Gateway neu",
+ "The gateway is restarting.": "Das Gateway startet neu."
 }

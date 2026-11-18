@@ -17,6 +17,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **A direct path that stopped working is given up after 30 s** even when the
   peer is quiet (from upstream MicroLink 0.1.39; the case where the peer keeps
   talking through the relay was already handled since an earlier fix).
+- **Leave tailnet** button on the Tailscale page: logs the gateway out of the
+  control server as `tailscale logout` does (its node key expires there),
+  then deletes the saved auth key and the gateway's tailnet identity, turns
+  Tailscale off and restarts. The page says whether the control server
+  confirmed it; if it could not be reached, remove the device in the admin
+  console. Joining again needs an auth key and makes a new device.
 - The **Max peers** field is gone from the Tailscale page: it limited nothing
   since beta.16 (tailnet size is unlimited, 20 tunnels rotate automatically,
   both shown on the page). Saved values and backups are still accepted.

@@ -2398,5 +2398,22 @@
  "Time limit notices": "Avvisi sul limite di tempo",
  "Time limit status unavailable.": "Stato del limite di tempo non disponibile.",
  "Up to 8 rules. Each port on this gateway can be used by one rule per protocol.": "Fino a 8 regole. Ogni porta di questo gateway può essere usata da una sola regola per protocollo.",
- "Waiting for the clock: the time limit starts once the time is known.": "In attesa dell'orologio: il limite di tempo parte quando l'ora è nota."
+ "Waiting for the clock: the time limit starts once the time is known.": "In attesa dell'orologio: il limite di tempo parte quando l'ora è nota.",
+ "Deletes the saved auth key and this device's tailnet identity": "Elimina la auth key salvata e l'identità tailnet di questo dispositivo",
+ "Leave tailnet": "Esci dalla tailnet",
+ "Leave tailnet…": "Esci dalla tailnet…",
+ "Leave the tailnet?": "Uscire dalla tailnet?",
+ "Leaving failed": "Uscita non riuscita",
+ "Left the tailnet": "Uscito dalla tailnet",
+ "Log this gateway out of the tailnet, delete the saved auth key and turn Tailscale off.": "Disconnette questo gateway dalla tailnet, elimina la auth key salvata e spegne Tailscale.",
+ "Logs out at the control server (its node key expires there)": "Esegue il logout sul server di controllo (la sua chiave di nodo lì scade)",
+ "Other settings stay. To join again, enter an auth key: the gateway appears as a new device in the admin console.": "Le altre impostazioni restano. Per rientrare inserisci una auth key: il gateway comparirà come nuovo dispositivo nella console di amministrazione.",
+ "Tailscale was not running: remove the device in the admin console if it is listed.": "Tailscale non era attivo: rimuovi il dispositivo dalla console di amministrazione se è presente.",
+ "The control server could not be reached: remove the device in its admin console.": "Il server di controllo non era raggiungibile: rimuovi il dispositivo dalla sua console di amministrazione.",
+ "The control server logged this gateway out.": "Il server di controllo ha disconnesso questo gateway.",
+ "The control server refused the logout: remove the device in its admin console.": "Il server di controllo ha rifiutato il logout: rimuovi il dispositivo dalla sua console di amministrazione.",
+ "This gateway leaves your tailnet, as the official \"tailscale logout\" command does.": "Questo gateway esce dalla tua tailnet, come fa il comando ufficiale \"tailscale logout\".",
+ "This gateway was not registered in a tailnet.": "Questo gateway non era registrato in una tailnet.",
+ "Turns Tailscale off and restarts the gateway": "Spegne Tailscale e riavvia il gateway",
+ "The gateway is restarting.": "Il gateway si sta riavviando."
 }

@@ -2397,5 +2397,22 @@
  "Time limit notices": "时间限制通知",
  "Time limit status unavailable.": "时间限制状态不可用。",
  "Up to 8 rules. Each port on this gateway can be used by one rule per protocol.": "最多 8 条规则。本网关的每个端口在每种协议下只能被一条规则使用。",
- "Waiting for the clock: the time limit starts once the time is known.": "等待时钟：时间确定后开始计算时间限制。"
+ "Waiting for the clock: the time limit starts once the time is known.": "等待时钟：时间确定后开始计算时间限制。",
+ "Deletes the saved auth key and this device's tailnet identity": "删除已保存的 auth key 和本设备的 tailnet 身份",
+ "Leave tailnet": "退出 tailnet",
+ "Leave tailnet…": "退出 tailnet…",
+ "Leave the tailnet?": "退出 tailnet？",
+ "Leaving failed": "退出失败",
+ "Left the tailnet": "已退出 tailnet",
+ "Log this gateway out of the tailnet, delete the saved auth key and turn Tailscale off.": "将本网关从 tailnet 注销，删除已保存的 auth key 并关闭 Tailscale。",
+ "Logs out at the control server (its node key expires there)": "在控制服务器上注销（其节点密钥在那里过期）",
+ "Other settings stay. To join again, enter an auth key: the gateway appears as a new device in the admin console.": "其他设置保持不变。要重新加入，请输入 auth key：网关将在管理控制台中显示为新设备。",
+ "Tailscale was not running: remove the device in the admin console if it is listed.": "Tailscale 未运行：如果管理控制台中列出了该设备，请将其删除。",
+ "The control server could not be reached: remove the device in its admin console.": "无法连接控制服务器：请在其管理控制台中删除该设备。",
+ "The control server logged this gateway out.": "控制服务器已将本网关注销。",
+ "The control server refused the logout: remove the device in its admin console.": "控制服务器拒绝注销：请在其管理控制台中删除该设备。",
+ "This gateway leaves your tailnet, as the official \"tailscale logout\" command does.": "本网关将退出你的 tailnet，与官方命令 \"tailscale logout\" 的效果相同。",
+ "This gateway was not registered in a tailnet.": "本网关未在任何 tailnet 中注册。",
+ "Turns Tailscale off and restarts the gateway": "关闭 Tailscale 并重启网关",
+ "The gateway is restarting.": "网关正在重启。"
 }

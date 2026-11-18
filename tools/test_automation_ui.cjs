@@ -157,6 +157,9 @@ async function fixture(browser, options = {}) {
       else {status=202;body={ok:true,state:'pending'};
         const rule=(state.forwardBody.rules||[]).find(r=>r.index===input.index&&r.rule_token===input.rule_token);
         if(rule)rule.destination_check={state:'reachable',summary:'This gateway completed a TCP handshake with the Tailnet destination',next_step:'Enable the rule, then connect from an allowed LAN client',checked_ip:'100.64.0.9',latency_ms:42,age_s:0};}
+    } else if (url.pathname === '/api/tailscale/leave') {
+      state.leaveCalls = (state.leaveCalls || 0) + 1;
+      body = {ok: true, server: state.leaveServer || 'logged_out'};
     } else if (url.pathname === '/api/tailnet-forward') {
       if (state.forwardFailures) { state.forwardFailures--; status = 503; }
       if (route.request().method() === 'POST') {
@@ -933,6 +936,23 @@ async function main() {
     await f.page.waitForFunction(() => document.getElementById('ts-page-badge').textContent === 'Policy pending');
     assert.match(await f.page.locator('#ts-page-badge').getAttribute('class'), /badge-warning/);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Leave tailnet: nothing is sent before the confirmation; Cancel sends
+    // nothing; the toast says what the control server answered.
+    for (const [server, text] of [['logged_out', /logged this gateway out/], ['unreachable', /could not be reached: remove the device/]]) {
+      f = await fixture(browser, {page: 'tailscale', tailscaleSettings: {enabled: true}, leaveServer: server});
+      await f.page.waitForFunction(() => !!document.getElementById('ts-leave'));
+      await f.page.locator('#ts-leave').click();
+      assert.match(await f.page.locator('#modal-body').textContent(), /tailscale logout/);
+      assert.equal(f.state.leaveCalls, undefined);
+      await f.page.locator('#modal-cancel').click();
+      assert.equal(f.state.leaveCalls, undefined);
+      await f.page.locator('#ts-leave').click();
+      await f.page.locator('#modal-confirm').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('restarting'));
+      assert.equal(f.state.leaveCalls, 1);
+      assert.match(await f.page.locator('#toastContainer').textContent(), text);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Selective service gateway: installed mapping != verified service.
     const forwardRule = {name: 'Synthetic broker', enabled: true, installed: true,
       protocol: 'tcp', listen_port: 18830, destination_port: 1883,
