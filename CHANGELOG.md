@@ -6,6 +6,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.24 adds to beta.23:
+
+- **LAN → Tailnet tab redesigned.** Three short steps explain what a rule
+  does. Each rule shows on one line whether it has a time limit and when it
+  closes, with one choice: "Stays open: No time limit, 15 minutes, 1 hour,
+  8 hours, 1 day or 7 days" (and optionally delete the rule when the time is
+  up). Save applies the choice. Before, the timer lived in a separate
+  section with seconds and "Arm / renew timer" buttons, and after a timer
+  had been used once, every new or edited rule silently stopped forwarding
+  until it was confirmed there. Now a rule that is not forwarding because of
+  its time limit says so on the rule itself. Clearer field names ("Tailnet
+  service address", "Port on this gateway", "Allowed LAN devices"); one
+  device can be entered as a plain address (192.168.1.50). Service watch,
+  time limit notices and backup/import are under "More options".
+- **Peers homed on another relay region are reachable.** A DERP relay only
+  delivers to devices connected to it. The gateway used one relay (its home
+  region), so traffic it started toward a peer homed elsewhere with no
+  direct path (LAN to tailnet, exit node, wake-on-LAN) was lost until that
+  peer reached out first. When the home relay reports a peer missing, the
+  gateway now opens one more relay connection to that peer's region, as the
+  official client does, and closes it after 60 s idle. Nothing is opened
+  otherwise; it can be compiled out (CONFIG_ML_DERP_AUX).
+- The relay connection accepts the upgrade only with status 101 (as the
+  control connection since beta.23), and a relay ping is answered by the
+  writer task instead of the reader.
+
 3.0.25-beta.23 adds to beta.22:
 
 - **Why the control server refused the connection is shown.** The Tailscale

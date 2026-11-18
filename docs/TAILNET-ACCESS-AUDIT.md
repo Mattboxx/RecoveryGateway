@@ -31,6 +31,8 @@ devices). Each item: what blocks access, status, where.
 | Custom server Noise key changed | every handshake failed until a restart | fetched again after a failed handshake (beta.22) |
 | Peer cache flash writes | 7.7 KB rewritten per peer per map (about 140 KB per reconnect with 18 peers) | written only when a peer changes; wrap-safe LRU (beta.22) |
 | Control server refuses the Noise upgrade | "101" anywhere passed; every refusal shown as "Noise handshake failed" | status 101 only; the server's answer named (version, URL/proxy, access, rate limit, 5xx) (beta.23) |
+| Peer homed on another DERP region, no direct path | traffic the gateway starts toward it lost (relays deliver only to their own clients) | after the home relay's PeerGone "not here", one on-demand relay connection to the peer's region, closed after 60 s idle (beta.24) |
+| LAN → Tailnet rule edited after a timer was used | silently stopped forwarding until confirmed in a separate timer section | time limit chosen on the rule and confirmed on Save; a closed rule says why (beta.24) |
 
 ### Audit items 2-6
 
@@ -55,6 +57,14 @@ devices). Each item: what blocks access, status, where.
    excepted); reaching a peer's fd7a:... address from the gateway does not
    work. Documented in CONFIGURATION.md; IPv6 allowed IPs and routing would
    be the fix.
+
+Also open: HTTPS login servers and custom DERP relays must have a certificate
+from a public CA (a private CA or self-signed certificate is refused; use
+http:// for a LAN-only Headscale, or a public certificate). The DERP map keeps
+32 regions of 4 nodes (Tailscale's public map has 28 regions; extra nodes of
+a region are only redundancy). One auxiliary relay at a time: two peers in two
+other regions, both without a direct path and both busy, share it in turns
+(a busy relay keeps its region for 10 s).
 
 Also open: on the very first connection with DNS failing there is no known
 control address yet (official clients have baked bootstrap addresses and

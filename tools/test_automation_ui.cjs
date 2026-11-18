@@ -41,6 +41,8 @@ async function fixture(browser, options = {}) {
     } else if (url.pathname === '/api/operations') {
       if(route.request().method()==='POST') {
         state.savedOperation=route.request().postDataJSON();body={ok:true};
+        if(state.savedOperation.action==='lease'){(state.leaseOps=state.leaseOps||[]).push(state.savedOperation);
+          if(state.leaseFail){body={ok:false,error:'clock not synchronized'};status=409;}}
         if(state.savedOperation.action==='tcp-save')state.savedTcp=state.savedOperation.targets.map(target=>({...target,state:'not checked',observed_ms:0}));
         if(state.savedOperation.action==='tcp-check')state.savedTcp=state.savedTcp.map(target=>target.name===state.savedOperation.name?{...target,state:'reachable',observed_ms:1000}:target);
         if(state.savedOperation.action==='settings'){
@@ -59,7 +61,7 @@ async function fixture(browser, options = {}) {
       if(state.healthFailures){state.healthFailures--;status=503;}
       body=state.healthBody || {enabled:false,notify:false,interval_s:60,failure_threshold:3,gateway_port:0,dns_name:'',internet_ip:'',internet_port:0,tailnet_target:'',tailnet_port:0,checks:[],saved_tcp:state.savedTcp||[]};
     } else if (url.pathname === '/api/service-leases') {
-      body=state.leasesBody || [];
+      body=state.serviceLeases || (Array.isArray(state.leasesBody)?state.leasesBody:[]);
     } else if (url.pathname === '/api/mqtt') {
       if (state.mqttDelay) await new Promise(resolve => setTimeout(resolve, state.mqttDelay));
       if (state.mqttFailures) { state.mqttFailures--; status = 503; }
@@ -159,6 +161,7 @@ async function fixture(browser, options = {}) {
       if (state.forwardFailures) { state.forwardFailures--; status = 503; }
       if (route.request().method() === 'POST') {
         state.savedForward = route.request().postDataJSON();
+        if (state.onForwardSave) state.onForwardSave(state);
         body = {ok: true};
       } else {
         body = state.forwardBody || {rules: [], max: 8, uplink_ip: '192.0.2.20', observation: 'passive_snapshot'};
@@ -978,6 +981,64 @@ async function main() {
     assert.deepEqual(Object.keys(f.state.savedForward.rules[0]).sort(),
       ['name','enabled','protocol','listen_port','tailnet_destination','destination_port','allowed_source_subnet'].sort());
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Time limits live on each rule and are confirmed on Save: an untouched
+    // timed rule keeps its timer, a closed rule gets the chosen limit, an
+    // edited timed rule keeps its remaining time, "No time limit" on a table
+    // that never used timers sends nothing (the strict ledger never starts).
+    {
+      const ruleA={...forwardRule,name:'Timed NAS',index:0,rule_token:11};
+      const ruleB={...forwardRule,name:'Closed SSH',listen_port:2222,destination_port:22,index:1,rule_token:12};
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[ruleA,ruleB]},
+        serviceLeases:[{index:0,rule_token:11,temporary:true,effective_enabled:true,remaining_s:840,status:'active',delete_on_expiry:false},
+                       {index:1,rule_token:12,temporary:false,effective_enabled:false,remaining_s:0,status:'binding-unconfirmed',delete_on_expiry:false}]});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      assert.match(await f.page.locator('.tf-access-text').nth(0).textContent(),/closes in 14 min/);
+      assert.match(await f.page.locator('.tf-access-text').nth(1).textContent(),/Not forwarding: choose how long/);
+      assert.equal(await f.page.locator('.tf-runtime-badge').nth(1).textContent(),'Not forwarding: time limit');
+      assert.equal(await f.page.locator('.tf-time').nth(0).inputValue(),'keep');
+      assert.equal(await f.page.locator('.tf-time').nth(1).inputValue(),'');
+      assert.equal(await f.page.locator('.tf-del-exp-label').nth(1).isHidden(),true);
+      await f.page.locator('.tf-time').nth(1).selectOption('3600');
+      assert.equal(await f.page.locator('.tf-del-exp-label').nth(1).isHidden(),false);
+      await f.page.locator('.tf-del-exp').nth(1).check();
+      // The edit of rule A changes its identity on the device: it comes back closed.
+      await f.page.locator('.tf-edit').nth(0).click();await f.page.locator('.tf-name').nth(0).fill('Timed NAS renamed');
+      f.state.onForwardSave=st=>{st.forwardBody={...st.forwardBody,rules:[{...ruleA,name:'Timed NAS renamed',rule_token:21},ruleB]};
+        st.serviceLeases=[{index:0,rule_token:21,temporary:false,effective_enabled:false,remaining_s:0,status:'binding-unconfirmed'},st.serviceLeases[1]];
+        st.onForwardSave=null;};
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('LAN → Tailnet rules updated.'));
+      assert.deepEqual(f.state.leaseOps,[
+        {action:'lease',index:0,rule_token:21,seconds:840,permanent:false,delete_on_expiry:false},
+        {action:'lease',index:1,rule_token:12,seconds:3600,permanent:false,delete_on_expiry:true}]);
+      assert.deepEqual(f.errors,[]);await f.context.close();count++;
+      // Never-timed table: a new rule with the default "No time limit" sends no lease call.
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[{...forwardRule,index:0,rule_token:11}]},
+        serviceLeases:[{index:0,rule_token:11,temporary:false,effective_enabled:true,remaining_s:0,status:'permanent'}]});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      assert.match(await f.page.locator('.tf-access-text').nth(0).textContent(),/No time limit/);
+      await f.page.locator('#tf-add').click();
+      assert.equal(await f.page.locator('.tf-time').nth(1).inputValue(),'0');
+      await f.page.locator('.tf-name').nth(1).fill('Printer');await f.page.locator('.tf-listen').nth(1).fill('9100');
+      await f.page.locator('.tf-dest').nth(1).fill('100.64.0.9');await f.page.locator('.tf-dport').nth(1).fill('9100');
+      await f.page.locator('.tf-cidr').nth(1).fill('192.0.2.77');
+      f.state.onForwardSave=st=>{st.forwardBody={...st.forwardBody,rules:[st.forwardBody.rules[0],{...forwardRule,name:'Printer',index:1,rule_token:31}]};
+        st.serviceLeases=[st.serviceLeases[0],{index:1,rule_token:31,temporary:false,effective_enabled:false,remaining_s:0,status:'permanent'}];st.onForwardSave=null;};
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('LAN → Tailnet rules updated.'));
+      assert.equal(f.state.savedForward.rules[1].allowed_source_subnet,'192.0.2.77/32');   // one device = /32
+      assert.equal(f.state.leaseOps,undefined);
+      assert.deepEqual(f.errors,[]);await f.context.close();count++;
+      // A time limit the device refuses (no clock) is reported; the rule stays closed.
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[ruleB]},leaseFail:true,
+        serviceLeases:[{index:1,rule_token:12,temporary:false,effective_enabled:false,remaining_s:0,status:'binding-unconfirmed'}]});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      await f.page.locator('.tf-time').nth(0).selectOption('900');
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('stay closed until a time limit is applied'));
+      assert.equal(f.state.leaseOps.length,1);
+      await f.context.close();count++;
+    }
     // Malformed status must not wipe the saved/draft rule table or enable Save.
     f = await fixture(browser, {page: 'network/services', forwardBody: {rules: {}, max: 8}});
     await f.page.waitForFunction(() => document.getElementById('tf-badge').textContent === 'Unavailable');
@@ -1015,14 +1076,14 @@ async function main() {
     for(const conflict of [false,true]){
       f=await fixture(browser,{page:'network/services',importConflict:conflict,importDelay:100});
       await f.page.waitForFunction(()=>!document.getElementById('tf-add').disabled);
-      await f.page.getByText('Back up or import saved service rules',{exact:true}).click();
+      await f.page.locator('.tf-more summary').click();
       await f.page.locator('#tf-import-file').setInputFiles(importFile);
       await f.page.waitForFunction(()=>!document.getElementById('tf-import-confirm').disabled);
       assert.match(await f.page.locator('#tf-import-preview').textContent(),/DISABLED/);
       assert.equal(f.state.savedImport,undefined);assert.equal(await f.page.locator('#tf-import-apply').isDisabled(),true);
       await f.page.locator('#tf-import-confirm').check();await f.page.locator('#tf-import-apply').click();
       assert.equal(await f.page.locator('#tf-add').isDisabled(),true);assert.equal(await f.page.locator('#tf-import-file').isDisabled(),true);
-      await f.page.waitForFunction(()=>document.getElementById('tf-import-preview').textContent.includes('Imported saved')||document.getElementById('tf-import-preview').textContent.includes('no automatic retry'));
+      await f.page.waitForFunction(()=>document.getElementById('tf-import-preview').textContent.includes('Imported rules')||document.getElementById('tf-import-preview').textContent.includes('no automatic retry'));
       assert.equal(f.state.savedImport.confirm_replace,true);assert.equal(f.state.savedImport.rules[0].enabled,false);
       assert.equal(f.calls.filter(p=>p==='/api/tailnet-forward/import').length,2);
       if(conflict){assert.equal(await f.page.locator('#tf-save').isDisabled(),true);assert.equal(await f.page.locator('#tf-import-apply').isDisabled(),true);}
@@ -1075,7 +1136,7 @@ async function main() {
     assert.equal(await f.page.locator('.ops-monitor-paused').nth(1).isHidden(),true);
     assert.equal(await f.page.getByText('Monitor this device',{exact:true}).nth(0).locator('..').locator('input').isChecked(),true);
     await f.page.evaluate(()=>location.hash='#network/services');
-    await f.page.locator('#temporary-access summary').click();
+    await f.page.locator('.tf-more summary').click();
     await f.page.waitForFunction(()=>!document.getElementById('ops-lease-save').disabled);
     await f.page.locator('label:has(#ops-lease-notify)').click();
     await f.page.locator('#ops-lease-save').click();
@@ -1419,7 +1480,7 @@ async function main() {
     // Service watch: off by default, saved with typed fields.
     f=await fixture(browser,{page:'network/services'});
     await f.page.waitForFunction(()=>document.getElementById('sw-status').textContent==='Off.');
-    await f.page.locator('#sw-box summary').click();
+    await f.page.locator('.tf-more summary').click();
     await f.page.locator('label:has(#sw-enabled)').click();await f.page.locator('#sw-interval').fill('300');
     await f.page.locator('#sw-save').click();
     await f.page.waitForFunction(()=>document.getElementById('sw-status').textContent==='Watching every 300 s.');
@@ -1519,7 +1580,7 @@ async function main() {
     await f.page.locator('.tf-edit').first().click();
     await f.page.locator('.tf-name').first().fill('Rete di prova');
     assert.equal(await f.page.locator('.tf-name').first().inputValue(), 'Rete di prova');
-    assert.equal(await f.page.locator('label[for="tf-dest-0"]').textContent(), 'Destinazione Tailnet');
+    assert.equal(await f.page.locator('label[for="tf-dest-0"]').textContent(), 'Indirizzo del servizio tailnet');
     f.page.once('dialog', d => { assert.match(d.message(), /Eliminare questa regola/); d.dismiss(); });
     await f.page.locator('.tf-del').first().click();
     await f.page.evaluate(() => { location.hash = 'system'; });

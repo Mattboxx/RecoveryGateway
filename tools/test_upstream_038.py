@@ -196,12 +196,11 @@ run('actual DERP TLS policy: trusted verification default, CertName and CA-attac
 #define MBEDTLS_SSL_VERIFY_REQUIRED 2
 #define MBEDTLS_SSL_VERIFY_NONE 0
 typedef struct {char cert_name[80];} ml_derp_node_t;
-typedef struct {struct {int ssl_conf;} derp;} microlink_t;
 static int mode,attach_error,attaches;
 static void mbedtls_ssl_conf_authmode(int *conf,int value){(void)conf;mode=value;}
 static int ml_tls_bundle_attach(int *conf){(void)conf;attaches++;return attach_error;}
 static int configure(ml_derp_node_t *derp_node,const char *derp_host){
- microlink_t node={0};microlink_t *ml=&node;
+ struct {int ssl_conf;} conn={0},*c=&conn;
 ''' + tls + r'''
  assert(!strcmp(tls_name,derp_node&&derp_node->cert_name[0]?derp_node->cert_name:derp_host));
  return 0;fail_tls:return -1;
