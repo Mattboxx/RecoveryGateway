@@ -370,8 +370,14 @@ SERVE = r"""
 #ifndef EWOULDBLOCK
 #define EWOULDBLOCK EAGAIN
 #endif
+/* Stand-ins for the lwIP socket API; renamed so they never clash with what
+ * glibc already declares under gnu11 (stdlib.h pulls in sys/select.h). */
+#define socklen_t test_socklen_t
+#define fd_set test_fd_set
+#undef FD_ZERO
+#undef FD_SET
 typedef unsigned socklen_t;
-#define timeval test_timeval   /* glibc headers already define struct timeval */
+#define timeval test_timeval
 struct timeval {long tv_sec, tv_usec;};
 struct in_addr_ {uint32_t s_addr;};
 struct sockaddr {int x;};
