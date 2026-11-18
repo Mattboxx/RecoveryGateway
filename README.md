@@ -72,7 +72,12 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.26
+## What's new in Firmware 3.0.27
+
+- **One more case that could block the tunnel is fixed:** a device whose key
+  expiry carries a time zone offset (possible with some control servers).
+
+### Also in 3.0.26
 
 - **Fix for tailnets with recently added devices**: their new 64-bit device IDs
   made the gateway refuse the device list and block the tunnel.
