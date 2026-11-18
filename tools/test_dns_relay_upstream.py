@@ -371,6 +371,7 @@ SERVE = r"""
 #define EWOULDBLOCK EAGAIN
 #endif
 typedef unsigned socklen_t;
+#define timeval test_timeval   /* glibc headers already define struct timeval */
 struct timeval {long tv_sec, tv_usec;};
 struct in_addr_ {uint32_t s_addr;};
 struct sockaddr {int x;};

@@ -96,6 +96,7 @@ typedef struct {char ctrl_host[64];char ctrl_host_parsed[64];char ctrl_port_str[
 static uint64_t fake_ms=1;static uint64_t ml_get_time_ms(void){return fake_ms;}
 static int fetches,fetch_ok;static bool fetch_tls;static char fetch_host[64],fetch_port[8],fetch_hdr[96];
 struct microlink_s;static int fetch_server_pubkey(void *m,const char *host,const char *port);
+#define strlcpy test_strlcpy   /* glibc >= 2.38 declares strlcpy under gnu11 */
 static size_t strlcpy(char *d,const char *s,size_t n){size_t l=strlen(s);if(n){size_t c=l<n-1?l:n-1;memcpy(d,s,c);d[c]=0;}return l;}
 #define timeval test_timeval   /* host headers may define their own */
 struct timeval {time_t tv_sec;long tv_usec;};

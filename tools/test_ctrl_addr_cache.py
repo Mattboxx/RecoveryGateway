@@ -61,6 +61,7 @@ typedef int esp_err_t;typedef int nvs_handle_t;
 #define NVS_READONLY 0
 #define NVS_NAMESPACE "microlink"
 #define NVS_KEY_CTRL_ADDR "ctrl_addr"
+#define strlcpy test_strlcpy   /* glibc >= 2.38 declares strlcpy under gnu11 */
 static size_t strlcpy(char *d,const char *s,size_t n){size_t l=strlen(s);if(n){size_t c=l<n-1?l:n-1;memcpy(d,s,c);d[c]=0;}return l;}
 static unsigned char blob[80];static size_t blob_len;static int writes,fail_open;
 static esp_err_t nvs_open(const char *ns,int m,nvs_handle_t *h){(void)ns;(void)m;*h=1;return fail_open?ESP_FAIL:ESP_OK;}

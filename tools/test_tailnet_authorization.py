@@ -225,6 +225,21 @@ static void ownership(void) {
     assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
     puts("PASS: longest-prefix ownership, exit route cannot spoof CGNAT identity, empty AllowedIPs and expired peer deny");
 }
+/* Every array of the policy allocation is 16-byte aligned for any number of
+ * rules, peers and prefixes: with an odd rule count the peer table started on
+ * a 2-byte boundary (106-byte rules), a LoadStoreAlignment restart on the
+ * ESP32-S3 and undefined behaviour on the host. */
+static void layout_alignment(void) {
+    for (uint32_t e=0;e<9;e++) for (uint32_t pc=1;pc<4;pc++) for (uint32_t pool=1;pool<4;pool++) for (int ix=0;ix<2;ix++) {
+        policy *q=policy_alloc_ix(pc,pool,e,ix);assert(q);
+        assert(((uintptr_t)q->entries&15)==0&&((uintptr_t)q->peers&15)==0&&((uintptr_t)q->pool&15)==0);
+        assert((uint8_t *)q->peers>=(uint8_t *)(q->entries+e)&&(uint8_t *)q->pool>=(uint8_t *)(q->peers+pc));
+        if (ix) assert(((uintptr_t)q->index&15)==0&&((uintptr_t)q->ix_groups&15)==0
+                       &&(uint8_t *)q->index>=(uint8_t *)(q->pool+pool)&&(uint8_t *)q->ix_groups>=(uint8_t *)(q->index+pool));
+        q->peers[pc-1].id=~0ull;q->peers[pc-1].expires=1;q->pool[pool-1].bits=128;   /* last slots writable */
+        free(q);
+    }
+}
 static void bounds_and_ranges(void) {
     for(unsigned scenario=0;scenario<5;scenario++) {
         assert(apply(ALL));cJSON *map=cJSON_CreateObject();assert(map);
@@ -500,7 +515,7 @@ static void cap_sources(void) {
     ml_policy_reset();
 }
 int main(void) {
-    peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();cap_sources();concurrency();
+    layout_alignment();peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();cap_sources();concurrency();
     printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); rules, peers, prefixes sized by the map (%zu, %zu, %zu bytes each) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),sizeof(entry),sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
 }
 '''

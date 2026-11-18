@@ -106,6 +106,8 @@ int main(void) {
     assert(wireguard_create_handshake_initiation(&C, &C.peers[0], &init));
     assert(wireguard_process_initiation_message(&B, &init) == NULL);
     printf("handshake ok: first %d X25519, next %d\n", first, second);
+    /* The handshake tables are freed by wireguardif shutdown on the device. */
+    free(A.handshakes); free(B.handshakes); free(C.handshakes);
     return 0;
 }
 '''
