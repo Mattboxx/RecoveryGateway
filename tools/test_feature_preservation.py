@@ -16,6 +16,14 @@ BASELINES = (BASE, "160bf04b866d4d28dd95437191660b85ec01c886")
 # documented successor is present. Index-only rule topics could toggle another
 # rule after compaction (dev.5 reindex bypass); see SERVICE-GATEWAY.md.
 REPLACED = {"%s/command/tailnet_forward/%d": "%s/command/tailnet_forward/%d/%08lx"}
+# Controls the owner retired on purpose, with the reason. The setting behind
+# them stays accepted by the API (old backups and scripts keep working).
+RETIRED = {
+    # Owner 2026-11-18: "Max peers" limited nothing since 3.0.25-beta.16 (map,
+    # policy and peer table sized by the tailnet; 20 rotating tunnel slots shown
+    # on the page) and misled users; /api/tailscale still accepts max_peers.
+    "ts-max-peers",
+}
 
 
 def baseline(path, ref=BASE):
@@ -31,7 +39,8 @@ class FeaturePreservationTests(unittest.TestCase):
                 old = set(re.findall(pattern, baseline(path, ref), re.S))
                 self.assertTrue(old, f"Empty baseline for {path}")
                 removed = {item for item in old - current
-                           if not (isinstance(item, str) and REPLACED.get(item) in current)}
+                           if not (isinstance(item, str) and REPLACED.get(item) in current)
+                           and item not in RETIRED}
                 self.assertEqual(sorted(removed), [], f"Removed controls in {path}")
 
     def test_http_paths_methods_and_handlers(self):
@@ -40,6 +49,12 @@ class FeaturePreservationTests(unittest.TestCase):
 
     def test_static_ui_ids(self):
         self.preserved("main/index.html", r'\bid="([^"\n]+)"')
+
+    def test_retired_controls_keep_their_setting(self):
+        web = (ROOT / "main/web_ui.c").read_text(encoding="utf-8")
+        self.assertIn('save_int_if_present(s, "max_peers",', web)
+        self.assertIn('"max_peers"', web.split("static esp_err_t tailscale_get_handler", 1)[1] if
+                      "static esp_err_t tailscale_get_handler" in web else web)
 
     def test_home_assistant_entity_ids(self):
         self.preserved("main/mqtt_integration.c",

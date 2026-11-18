@@ -94,8 +94,11 @@ with tempfile.TemporaryDirectory(prefix='index-variants-') as d:
     # aligned Telegram/ntfy command sections (about 1.1 KB, owner 2026-11-17:
     # "Tutte"); then from 180000 for the Tailscale registration state, node
     # key expiry, Tailnet Lock and tunnel counts (about 0.8 KB, owner
-    # 2026-11-18: "io procederei a fare tutte le 10 cose"); the 3584 KiB
-    # app slots keep more than 1 MiB free.
-    assert page_gz < 182000, page_gz
+    # 2026-11-18: "io procederei a fare tutte le 10 cose"); then from 182000
+    # for the redesigned LAN to Tailnet tab with per-rule time limits, the
+    # Leave tailnet button and dated log lines (about 0.6 KB, owner
+    # 2026-11-18, clarity before the budget); the 3584 KiB app slots keep more
+    # than 1 MiB free.
+    assert page_gz < 184000, page_gz
 print(f'PASS: actual page generator: page with {len(langs)} languages as separate scripts ({page_gz} gzip bytes), '
       f'English-only page without them and otherwise identical, C arrays decode to the page and scripts (host)')

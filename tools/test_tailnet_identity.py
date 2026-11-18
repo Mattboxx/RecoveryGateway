@@ -52,12 +52,12 @@ def compile_run(program, name, extra=()):
 
 # --- structural wiring -------------------------------------------------------
 reg = COORD[COORD.index('static int do_register('):COORD.index('State: FETCH_PEERS')]
-assert 'if (ml->renewing) {' in reg and '"OldNodeKey"' in reg
+assert 'if (ml->renewing && !ml->logout_requested) {' in reg and '"OldNodeKey"' in reg   # a logout never renews
 assert 'ml->reg_auth.registered = !ml->renewing && ml_identity_registered(ml);' in reg
 assert 'ml_identity_mark_expired(ml);' in reg and 'ml->reg_state = ML_REG_STATE_KEY_EXPIRED;' in reg
 assert reg.index('ml->registered_this_boot = true;') > reg.index('ml_reg_auth_result(')
 assert 'state = ml->registered_this_boot && !ml->force_register ? COORD_FETCH_PEERS : COORD_REGISTER;' in COORD
-assert COORD.count('ml->force_register = true;') == 4   # map/long-poll failures, expired key (map and periodic check)
+assert COORD.count('ml->force_register = true;') == 5   # map/long-poll failures, expired key (map and periodic check), logout
 apply_map = function(COORD, 'static bool apply_peer_map(')
 assert apply_map.index('"TKAInfo"') < apply_map.index('ml_policy_apply(map)') and 'ml->tailnet_lock=on;' in apply_map
 init = MAIN[MAIN.index('microlink_t *microlink_init('):]
