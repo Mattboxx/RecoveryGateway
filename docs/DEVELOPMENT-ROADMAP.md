@@ -276,6 +276,25 @@ and loss (owner priority: speed first) and a second real client with IPv6.
 Nearest alternative today: the peer's 100.x address. Next step: a separate
 beta with that change OFF by default and an A/B on board A.
 
+**Next version (owner, 2026-11-18): configuration profiles brought up to
+date.** Owner: "per la prossima versione metti anche in conto di aggiornare
+tutti i profili di configurazione in base anche al setup iniziale e tutti i
+tipi di configurazione aggiunti fino ad ora". Today the profiles
+(`main/config_profiles.c`: gateway, recovery, iot, monitoring, advanced)
+switch only 7 low-risk local settings (record limit 8) and predate the
+first-boot goal choices (`ui_roles`) and most later settings.
+
+To do:
+- align each profile with the first-boot goals;
+- review every setting type added since: USB/cellular/Ethernet uplinks,
+  DNS relay and tailnet names, admin scope, AP options, notification
+  channels, microSD log, LAN → Tailnet time limits, the login server
+  certificate and others;
+- widen the record with a versioned migration;
+- keep the rule that a profile never opens access or sends data anywhere on
+  its own: those become guided steps, not switches;
+- update the preview/rollback, the UI and the tests.
+
 **Deferred, low priority (owner: "ci penseremo in futuro se mi contatteranno
 persone interessate"): very large tailnets.** One map response must fit the
 768 KB buffer (about 250-500 peers in an official map), parsed whole by cJSON.
