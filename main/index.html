@@ -12563,6 +12563,17 @@
      * doesn't reach, so this synthetic header makes up for it; the
      * actual Backtrace text IS in the buffer because it comes from a
      * different object (debug_helpers.c). */
+    /* Lines of the crashed boot get their date and time, in this browser's
+     * time zone, when that boot had the clock (boot_ms), as in the live log. */
+    function precrashDated(text, bootMs) {
+      if (typeof bootMs !== 'number' || bootMs < 1700000000000) return text;
+      function p2(n) { return (n < 10 ? '0' : '') + n; }
+      return text.replace(/^([EWIDV]) \((\d+)\) /gm, function (all, lvl, ms) {
+        var d = new Date(bootMs + Number(ms));
+        return lvl + ' ' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate())
+          + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + ' (' + ms + ') ';
+      });
+    }
     function loadPrecrashLog() {
       var btn = document.getElementById('precrash-refresh');
       var pre = document.getElementById('precrash-body');
@@ -12579,11 +12590,11 @@
           if (last.reason && (last.reason.indexOf('PANIC') >= 0 || last.reason.indexOf('WDT') >= 0)) {
             var when = _fmtWallclock(last.wallclock);
             var who  = last.who ? (' from ' + escapeHtml(last.who)) : '';
-            hdr = '<span style="color:#f87171;font-weight:600;">*** Last crash (' + escapeHtml(last.reason) + when + (when === '—' ? '' : ', ' + when) + who + ') ***</span>\n'
+            hdr = '<span style="color:#f87171;font-weight:600;">*** Last crash (' + escapeHtml(last.reason) + (when === '—' ? '' : ', ' + when) + who + ') ***</span>\n'
                 + (last.crash ? '<span style="color:#fca5a5;">' + escapeHtml(last.crash) + '</span>\n\n' : '\n');
           }
           if (d.have && d.size > 0) {
-            pre.innerHTML = hdr + colorizeLog(d.text || '— empty —');
+            pre.innerHTML = hdr + colorizeLog(precrashDated(d.text || '— empty —', d.boot_ms));
             b.className = 'badge badge-warning';
             b.textContent = d.size + ' B';
             pre.scrollTop = pre.scrollHeight;

@@ -3166,6 +3166,7 @@ static esp_err_t log_precrash_handler(httpd_req_t *req)
     size_t sz = log_capture_precrash_size();
     cJSON_AddBoolToObject  (root, "have", have);
     cJSON_AddNumberToObject(root, "size", (double)sz);
+    cJSON_AddNumberToObject(root, "boot_ms", (double)log_capture_precrash_boot_ms());
 
     if (have && sz > 0) {
         /* Cap to a reasonable web payload — same ceiling as the live

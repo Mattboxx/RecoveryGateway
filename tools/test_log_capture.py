@@ -28,7 +28,8 @@ program = r'''
 ''' + constants + r'''
 static char *s_buf;static size_t s_head,s_count,s_cap;static uint64_t s_seq;static int s_lock,s_precrash_lock;
 static struct {size_t head,count;char data[PRECRASH_RING_BYTES];} s_precrash;
-''' + function('static void buffer_append(') + function('size_t log_capture_read(') + function('size_t log_capture_read_since(') + function('void log_capture_clear(') + r'''
+#include <time.h>
+''' + function('static int64_t log_boot_ms(') + function('static void buffer_append(') + function('size_t log_capture_read(') + function('size_t log_capture_read_since(') + function('void log_capture_clear(') + r'''
 int main(void){
  s_cap=DEFAULT_BUFFER_BYTES;s_buf=calloc(s_cap,1);char input[1024],*out=calloc(s_cap+1,1);assert(s_buf&&out&&s_cap==16*1024);
  for(unsigned i=0;i<72;i++){memset(input,(int)('A'+i%26),sizeof input);buffer_append(input,sizeof input);}
@@ -40,9 +41,20 @@ int main(void){
  assert(log_capture_read_since(s_seq,out,s_cap+1,&seq)==0&&seq==s_seq);
  log_capture_clear();assert(!s_count&&s_seq==72*1024);buffer_append("new",3);
  assert(log_capture_read_since(seq,out,s_cap+1,&seq)==3&&!strcmp(out,"new"));
- free(out);free(s_buf);puts("PASS actual log ring: unchanged 16KB capacity, 4KB RTC, wrap, cursor, tail and clear");
+ /* Start of this boot for dating the next boot's pre-crash lines: none before the clock. */
+ assert(log_boot_ms(1699999999,999999,5)==0&&log_boot_ms(0,0,0)==0);
+ assert(log_boot_ms(1763460000,500000,61000)==1763460000LL*1000+500-61000);
+ free(out);free(s_buf);puts("PASS actual log ring: unchanged 16KB capacity, 4KB RTC, wrap, cursor, tail and clear; boot start for dating");
 }
 '''
+flat = source.replace('\r\n', '\n')
+store = flat[flat.index('int log_capture_store('):]
+store = store[:store.index('\n}\n')]
+assert 'if (!s_boot_ms_known) {' in store and 'if (b) { s_precrash.boot_ms = b; s_boot_ms_known = true; }' in store
+init = flat[flat.index('esp_err_t log_capture_init('):]
+init = init[:init.index('\n}\n')]
+assert init.index('s_snapshot_boot_ms = s_precrash.boot_ms > 0') < init.index('s_precrash.boot_ms = 0;')
+assert '#define PRECRASH_MAGIC        0xC0DEAFF3u' in flat   # older rings (no boot_ms) are not misread
 with tempfile.TemporaryDirectory(prefix='log-capture-') as folder:
     path = Path(folder); c = path / 'case.c'; c.write_text(program, encoding='utf-8')
     binary = path / ('case.exe' if os.name == 'nt' else 'case')

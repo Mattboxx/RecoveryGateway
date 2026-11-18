@@ -157,6 +157,8 @@ async function fixture(browser, options = {}) {
       else {status=202;body={ok:true,state:'pending'};
         const rule=(state.forwardBody.rules||[]).find(r=>r.index===input.index&&r.rule_token===input.rule_token);
         if(rule)rule.destination_check={state:'reachable',summary:'This gateway completed a TCP handshake with the Tailnet destination',next_step:'Enable the rule, then connect from an allowed LAN client',checked_ip:'100.64.0.9',latency_ms:42,age_s:0};}
+    } else if (url.pathname === '/api/log/precrash') {
+      body = state.precrashBody || {have: false, size: 0, boot_ms: 0, text: ''};
     } else if (url.pathname === '/api/log/raw') {
       const since = Number(url.searchParams.get('since') || 0);
       const data = state.logData || '';
@@ -948,6 +950,20 @@ async function main() {
     await f.page.waitForFunction(() => document.getElementById('ts-page-badge').textContent === 'Policy pending');
     assert.match(await f.page.locator('#ts-page-badge').getAttribute('class'), /badge-warning/);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Pre-crash log: dated from the crashed boot's start when it had the
+    // clock; undated (as stored) when it never had it.
+    for (const boot of [new Date(2026, 10, 17, 23, 59, 0).getTime(), 0]) {
+      f = await fixture(browser, {page: 'tools', precrashBody: {have: true, size: 60, boot_ms: boot,
+        text: 'I (1000) test: first\nE (61500) test: last words\nBacktrace: 0x1 0x2\n'}});
+      await f.page.waitForFunction(() => document.getElementById('precrash-body').textContent.includes('last words'));
+      const t = await f.page.evaluate(() => document.getElementById('precrash-body').textContent);
+      if (boot) {
+        assert.match(t, /^I 2026-11-17 23:59:01 \(1000\) test: first$/m);
+        assert.match(t, /^E 2026-11-18 00:00:01 \(61500\) test: last words$/m);
+      } else assert.match(t, /^E \(61500\) test: last words$/m);
+      assert.match(t, /^Backtrace: 0x1 0x2$/m);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Live log: lines show date and time once the device clock is known,
     // also lines that arrived before it (browser time zone).
     {
