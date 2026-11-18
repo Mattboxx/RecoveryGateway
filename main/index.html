@@ -9364,7 +9364,15 @@
     function tfConfigRules(rules){return rules.map(function(r){return {name:r.name,enabled:r.enabled,protocol:r.protocol,listen_port:r.listen_port,tailnet_destination:r.tailnet_destination,destination_port:r.destination_port,allowed_source_subnet:r.allowed_source_subnet};});}
     function tfEditingDisabled(on){document.querySelectorAll('#tf-list input,#tf-list select,#tf-list .tf-del').forEach(function(el){el.disabled=on;});}
     /* "192.168.1.50" means that one device. */
-    function tfSource(v){v=(v||'').trim();return /^\d+\.\d+\.\d+\.\d+$/.test(v)?v+'/32':v;}
+    /* "192.168.1.50" means that one device; a list "192.168.1.50, 192.168.1.51"
+     * (up to 5, the others single addresses in the same /16) is checked by the
+     * gateway as it is. */
+    function tfSource(v){v=(v||'').trim();return /^\d+\.\d+\.\d+\.\d+$/.test(v)?v+'/32':v.replace(/\s*,\s*/g,', ');}
+    function tfSourcesValid(v){
+      var parts=(v||'').split(/[\s,]+/).filter(Boolean);
+      if(!parts.length||parts.length>5)return false;
+      return parts.every(function(x,i){return i===0?/^\d+\.\d+\.\d+\.\d+(\/([0-9]|[12][0-9]|3[0-2]))?$/.test(x):/^\d+\.\d+\.\d+\.\d+(\/32)?$/.test(x);});
+    }
     function snapshotTf(){document.querySelectorAll('.tf-row').forEach(function(row){var r=s_tf_list[+row.dataset.idx];if(!r)return;r.name=row.querySelector('.tf-name').value.trim();r.enabled=row.querySelector('.tf-enabled').checked;r.protocol=row.querySelector('.tf-proto').value;r.listen_port=Number(row.querySelector('.tf-listen').value);r.tailnet_destination=row.querySelector('.tf-dest').value.trim();r.destination_port=Number(row.querySelector('.tf-dport').value);r.allowed_source_subnet=tfSource(row.querySelector('.tf-cidr').value);
       var t=row.querySelector('.tf-time');if(t)r._time=t.value;var d=row.querySelector('.tf-del-exp');r._delete=!!(d&&d.checked);});}
     /* Time limits. A rule without one forwards while it is switched on. With
@@ -9503,7 +9511,7 @@
           +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-name-'+i+'">Name</label><input class="input tf-name" id="tf-name-'+i+'" maxlength="31" value="'+escapeHtml(r.name||'')+'" placeholder="Remote MQTT"></div><div class="form-group"><label class="form-label" for="tf-proto-'+i+'">Protocol</label><select class="select tf-proto" id="tf-proto-'+i+'"><option value="tcp" '+(r.protocol!=='udp'?'selected':'')+'>TCP</option><option value="udp" '+(r.protocol==='udp'?'selected':'')+'>UDP</option></select></div></div>'
           +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-dest-'+i+'">Tailnet service address</label><input class="input mono tf-dest" id="tf-dest-'+i+'" maxlength="95" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.tailnet_destination||'')+'" placeholder="100.64.0.2 or broker.tailnet.ts.net"><span class="form-hint">A tailnet IP (100.x.y.z) or a MagicDNS name.</span></div><div class="form-group"><label class="form-label" for="tf-dport-'+i+'">Service port</label><input class="input mono tf-dport" id="tf-dport-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.destination_port||'')+'" placeholder="1883"></div></div>'
           +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-listen-'+i+'">Port on this gateway</label><input class="input mono tf-listen" id="tf-listen-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.listen_port||'')+'" placeholder="18830"></div>'
-          +'<div class="form-group"><label class="form-label" for="tf-cidr-'+i+'">Allowed LAN devices</label><input class="input mono tf-cidr" id="tf-cidr-'+i+'" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.allowed_source_subnet||'')+'" placeholder="192.168.1.50"><span class="form-hint">One device (192.168.1.50) or a whole subnet (192.168.1.0/24). Prefer one device.</span></div></div>'
+          +'<div class="form-group"><label class="form-label" for="tf-cidr-'+i+'">Allowed LAN devices</label><input class="input mono tf-cidr" id="tf-cidr-'+i+'" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.allowed_source_subnet||'')+'" placeholder="192.168.1.50"><span class="form-hint">One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.</span></div></div>'
           +'<div class="btn-row"><button class="btn btn-ghost btn-sm tf-del" type="button">Delete rule</button><span class="form-hint">Changes apply when you press Save below.</span></div></div>'
           +'<div class="tf-evidence">'+tfCheckHtml(r)+tfActivityHtml(r)+tfDiagnosticHtml(r)+'</div></div>';
       }).join('');
@@ -9573,7 +9581,7 @@
       snapshotTf();var seen={};
       for(var i=0;i<s_tf_list.length;i++){
         var r=s_tf_list[i],lp=+r.listen_port,dp=+r.destination_port,key=r.protocol+':'+lp;
-        if(!r.tailnet_destination||!/^\d+\.\d+\.\d+\.\d+\/([0-9]|[12][0-9]|3[0-2])$/.test((r.allowed_source_subnet||'').trim())
+        if(!r.tailnet_destination||!tfSourcesValid(r.allowed_source_subnet)
           ||!Number.isInteger(lp)||!Number.isInteger(dp)||lp<1||lp>65535||dp<1||dp>65535){
           showToast('error','Invalid rule',UT('Check the service address, the ports and the allowed LAN devices in rule')+' '+(i+1)+'.',5000);return;
         }
@@ -12351,8 +12359,9 @@
       function nearBottom() { return (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 40; }
 
       /* Date and time of each line: the device sends when its log counter
-       * started (boot_ms, once its clock is set); "I (12345) TAG: ..." is
-       * shown as "I 2026-11-18 11:23:45 (12345) TAG: ..." in this browser's
+       * started (boot_ms, once its clock is set); a line with the level, the
+       * milliseconds since boot and the tag gets the date and time after the
+       * level, in this browser's
        * time zone. Lines that arrived before the clock was known get their
        * date as soon as it is. */
       var bootMs = 0;

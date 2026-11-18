@@ -2380,7 +2380,6 @@
  "On": "开启",
  "Port on this gateway": "本网关上的端口",
  "A tailnet IP (100.x.y.z) or a MagicDNS name.": "tailnet IP（100.x.y.z）或 MagicDNS 名称。",
- "One device (192.168.1.50) or a whole subnet (192.168.1.0/24). Prefer one device.": "单个设备（192.168.1.50）或整个子网（192.168.1.0/24）。建议只填一个设备。",
  "Save notices": "保存通知设置",
  "Saved configuration. Open \"Explain status\" on a rule for details. Reload to refresh.": "已保存的配置。在规则上打开“解释状态”查看详情。重新加载以刷新。",
  "Saved, but the time limits could not be confirmed: reload and Save again.": "已保存，但无法确认时间限制：请重新加载并再次保存。",
@@ -2414,5 +2413,6 @@
  "This gateway leaves your tailnet, as the official \"tailscale logout\" command does.": "本网关将退出你的 tailnet，与官方命令 \"tailscale logout\" 的效果相同。",
  "This gateway was not registered in a tailnet.": "本网关未在任何 tailnet 中注册。",
  "Turns Tailscale off and restarts the gateway": "关闭 Tailscale 并重启网关",
- "The gateway is restarting.": "网关正在重启。"
+ "The gateway is restarting.": "网关正在重启。",
+ "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "单个设备（192.168.1.50）、最多 5 个设备（192.168.1.50, 192.168.1.51）或整个子网（192.168.1.0/24）。建议填写具体设备。"
 }

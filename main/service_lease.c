@@ -38,7 +38,9 @@ static int lease_index(const lease_store_t *store,uint32_t token) {
 }
 uint32_t service_lease_token(const tailnet_forward_rule_t *rule) {
     /* Change detection, not a cryptographic identity or authentication token. */
-    tailnet_forward_rule_t copy=*rule;copy.valid=copy.enabled=0;memset(copy._reserved,0,sizeof copy._reserved);
+    /* The extra sources count (formerly reserved, zero in older rules, so their
+     * tokens do not change): adding a source is an edit of the rule. */
+    tailnet_forward_rule_t copy=*rule;copy.valid=copy.enabled=0;
     uint32_t h=2166136261u;const uint8_t *bytes=(const uint8_t*)&copy;
     for(unsigned i=0;i<sizeof copy;i++)h=(h^bytes[i])*16777619u;
     return h?h:1;

@@ -11,7 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT/'main/tailnet_forward.c').read_text(encoding='utf-8')
-filter_functions = 'static bool packet_fields' + source.split('static bool packet_fields', 1)[1]
+filter_functions = 'bool tailnet_forward_source_allowed' + source.split('bool tailnet_forward_source_allowed',1)[1].split('\n}\n',1)[0]+'\n}\n' + 'static bool packet_fields' + source.split('static bool packet_fields', 1)[1]
 conflicts = 'bool tailnet_forward_listen_conflicts' + source.split(
     'bool tailnet_forward_listen_conflicts', 1)[1].split('static bool remove_expired_rules', 1)[0]
 policy='int tailnet_forward_snapshot_mappings'+source.split('int tailnet_forward_snapshot_mappings',1)[1].split('static bool packet_fields',1)[0]

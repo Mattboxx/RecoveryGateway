@@ -1079,6 +1079,21 @@ async function main() {
       assert.equal(f.state.leaseOps.length,1);
       await f.context.close();count++;
     }
+    // Several allowed devices per rule: a list is saved as typed (the gateway
+    // checks it); more than 5 entries never reach the device.
+    {
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[{...forwardRule,index:0,rule_token:11}]}});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      await f.page.locator('.tf-edit').nth(0).click();
+      await f.page.locator('.tf-cidr').nth(0).fill('192.0.2.1,192.0.2.2,192.0.2.3,192.0.2.4,192.0.2.5,192.0.2.6');
+      await f.page.locator('#tf-save').click();
+      assert.equal(f.state.savedForward,undefined);
+      await f.page.locator('.tf-cidr').nth(0).fill('192.0.2.42 ,192.0.2.43');
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('LAN → Tailnet rules updated.'));
+      assert.equal(f.state.savedForward.rules[0].allowed_source_subnet,'192.0.2.42, 192.0.2.43');
+      assert.deepEqual(f.errors,[]);await f.context.close();count++;
+    }
     // Malformed status must not wipe the saved/draft rule table or enable Save.
     f = await fixture(browser, {page: 'network/services', forwardBody: {rules: {}, max: 8}});
     await f.page.waitForFunction(() => document.getElementById('tf-badge').textContent === 'Unavailable');

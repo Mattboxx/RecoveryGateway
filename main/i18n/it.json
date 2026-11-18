@@ -2381,7 +2381,6 @@
  "On": "Accesa",
  "Port on this gateway": "Porta su questo gateway",
  "A tailnet IP (100.x.y.z) or a MagicDNS name.": "Un IP della tailnet (100.x.y.z) o un nome MagicDNS.",
- "One device (192.168.1.50) or a whole subnet (192.168.1.0/24). Prefer one device.": "Un dispositivo (192.168.1.50) o una sottorete intera (192.168.1.0/24). Meglio un solo dispositivo.",
  "Save notices": "Salva avvisi",
  "Saved configuration. Open \"Explain status\" on a rule for details. Reload to refresh.": "Configurazione salvata. Apri \"Spiega lo stato\" su una regola per i dettagli. Ricarica per aggiornare.",
  "Saved, but the time limits could not be confirmed: reload and Save again.": "Salvato, ma non è stato possibile confermare i limiti di tempo: ricarica e salva di nuovo.",
@@ -2415,5 +2414,6 @@
  "This gateway leaves your tailnet, as the official \"tailscale logout\" command does.": "Questo gateway esce dalla tua tailnet, come fa il comando ufficiale \"tailscale logout\".",
  "This gateway was not registered in a tailnet.": "Questo gateway non era registrato in una tailnet.",
  "Turns Tailscale off and restarts the gateway": "Spegne Tailscale e riavvia il gateway",
- "The gateway is restarting.": "Il gateway si sta riavviando."
+ "The gateway is restarting.": "Il gateway si sta riavviando.",
+ "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "Un dispositivo (192.168.1.50), fino a 5 dispositivi (192.168.1.50, 192.168.1.51) o una sottorete intera (192.168.1.0/24). Meglio singoli dispositivi."
 }

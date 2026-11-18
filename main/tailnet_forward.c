@@ -70,7 +70,26 @@ static bool rule_is_valid(const tailnet_forward_rule_t *r)
     uint32_t mask = r->source_prefix == 0 ? 0 : (r->source_prefix == 32 ? UINT32_MAX : UINT32_MAX << (32 - r->source_prefix));
     /* Stored networks are already normalized by parse_cidr. Do not silently
      * broaden an inconsistent saved policy while loading or accepting it. */
-    return (r->source_network & mask) == r->source_network;
+    if ((r->source_network & mask) != r->source_network) return false;
+    /* Extra single addresses: never .0.0 of the /16 (0 marks unused) and no
+     * hole before a used one. */
+    bool gap = false;
+    for (int i = 0; i < TAILNET_FORWARD_EXTRA_SOURCES; i++) {
+        if (!r->extra_source[i]) gap = true;
+        else if (gap) return false;
+    }
+    return true;
+}
+
+bool tailnet_forward_source_allowed(const tailnet_forward_rule_t *r, uint32_t src)
+{
+    if (r->source_prefix > 32) return false;
+    uint32_t mask = r->source_prefix == 0 ? 0 : (r->source_prefix == 32 ? UINT32_MAX : UINT32_MAX << (32 - r->source_prefix));
+    if ((src & mask) == r->source_network) return true;
+    if ((src >> 16) != (r->source_network >> 16)) return false;
+    for (int i = 0; i < TAILNET_FORWARD_EXTRA_SOURCES && r->extra_source[i]; i++)
+        if ((uint16_t)src == r->extra_source[i]) return true;
+    return false;
 }
 
 esp_err_t tailnet_forward_parse_cidr(const char *text, uint32_t *network, uint8_t *prefix) {
@@ -85,6 +104,44 @@ esp_err_t tailnet_forward_parse_cidr(const char *text, uint32_t *network, uint8_
 }
 void tailnet_forward_format_cidr(uint32_t n,uint8_t p,char *out,size_t z) {
     snprintf(out,z,"%u.%u.%u.%u/%u",(unsigned)(n>>24),(unsigned)((n>>16)&255),(unsigned)((n>>8)&255),(unsigned)(n&255),p);
+}
+esp_err_t tailnet_forward_parse_sources(const char *text, tailnet_forward_rule_t *r)
+{
+    if (!text || !r || strlen(text) >= TAILNET_FORWARD_SOURCES_TEXT) return ESP_ERR_INVALID_ARG;
+    char copy[TAILNET_FORWARD_SOURCES_TEXT]; strlcpy(copy, text, sizeof copy);
+    uint32_t network = 0; uint8_t prefix = 0; uint16_t extra[TAILNET_FORWARD_EXTRA_SOURCES] = {0};
+    int n = 0;
+    for (char *save = NULL, *tok = strtok_r(copy, ", \t", &save); tok; tok = strtok_r(NULL, ", \t", &save)) {
+        char one[32];
+        if (strlen(tok) >= sizeof one - 3) return ESP_ERR_INVALID_ARG;
+        /* A plain address means that one device. */
+        snprintf(one, sizeof one, strchr(tok, '/') ? "%s" : "%s/32", tok);
+        uint32_t net; uint8_t p;
+        if (tailnet_forward_parse_cidr(one, &net, &p) != ESP_OK) return ESP_ERR_INVALID_ARG;
+        if (n == 0) { network = net; prefix = p; }
+        else {
+            /* More entries: single addresses in the same /16 as the first. */
+            if (p != 32 || n > TAILNET_FORWARD_EXTRA_SOURCES || (net >> 16) != (network >> 16) || !(uint16_t)net)
+                return ESP_ERR_INVALID_ARG;
+            extra[n - 1] = (uint16_t)net;
+        }
+        n++;
+    }
+    if (!n) return ESP_ERR_INVALID_ARG;
+    r->source_network = network; r->source_prefix = prefix;
+    memcpy(r->extra_source, extra, sizeof extra);
+    return ESP_OK;
+}
+void tailnet_forward_format_sources(const tailnet_forward_rule_t *r, char *out, size_t z)
+{
+    tailnet_forward_format_cidr(r->source_network, r->source_prefix, out, z);
+    for (int i = 0; i < TAILNET_FORWARD_EXTRA_SOURCES && r->extra_source[i]; i++) {
+        size_t used = strlen(out);
+        if (used >= z) break;
+        uint32_t a = (r->source_network & 0xffff0000u) | r->extra_source[i];
+        snprintf(out + used, z - used, ", %u.%u.%u.%u", (unsigned)(a >> 24), (unsigned)((a >> 16) & 255),
+                 (unsigned)((a >> 8) & 255), (unsigned)(a & 255));
+    }
 }
 
 static bool resolve_rule(int i) {
@@ -317,11 +374,8 @@ static bool allow_packet(struct pbuf *p, bool eth, uint32_t local_ip_nbo, bool u
         const tailnet_forward_rule_t *r=&m->rule;
         if (!s_active[i].installed || r->proto != proto || r->listen_port != dp) continue;
         bool ok = false;
-        if (r->source_prefix <= 32) {
-            uint32_t mask = r->source_prefix == 0 ? 0 : (r->source_prefix == 32 ? UINT32_MAX : UINT32_MAX << (32 - r->source_prefix));
-            ok = uplink && local_ip_nbo==m->binding_ip_nbo && ((src & mask) == r->source_network)
-                 && service_lease_allowed(i,r);
-        }
+        ok = uplink && local_ip_nbo==m->binding_ip_nbo && tailnet_forward_source_allowed(r, src)
+             && service_lease_allowed(i,r);
         if(i<s_count&&m->generation==s_generation) {
             uint32_t seen = TF_UPTIME_S();
             if (ok) {s_runtime[i].accepted_packets++; s_runtime[i].last_accepted_s = seen;}

@@ -2909,8 +2909,8 @@ static esp_err_t tailnet_forward_handler(httpd_req_t *req)
     for (int i = 0; i < TAILNET_FORWARD_MAX; i++) {
         tailnet_forward_rule_t r; tailnet_forward_runtime_t rt;
         if (!tailnet_forward_get(i, &r, &rt)) continue;
-        char cidr[32], resolved[16] = "";
-        tailnet_forward_format_cidr(r.source_network, r.source_prefix, cidr, sizeof cidr);
+        char cidr[TAILNET_FORWARD_SOURCES_TEXT], resolved[16] = "";
+        tailnet_forward_format_sources(&r, cidr, sizeof cidr);
         if (rt.resolved_ip) snprintf(resolved, sizeof resolved, "%u.%u.%u.%u",
             (unsigned)(rt.resolved_ip>>24), (unsigned)((rt.resolved_ip>>16)&255),
             (unsigned)((rt.resolved_ip>>8)&255), (unsigned)(rt.resolved_ip&255));
@@ -3016,7 +3016,7 @@ static esp_err_t tailnet_forward_save_handler(httpd_req_t *req)
         uint16_t lpi=0,dpi=0;if(!json_port_value(lp,&lpi)||!json_port_value(dp,&dpi)){cJSON_Delete(root);httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"invalid port");return ESP_FAIL;}
         tailnet_forward_rule_t *r=&rules[i];r->valid=1;r->enabled=cJSON_IsTrue(enabled);r->proto=!strcasecmp(proto->valuestring,"udp")?17:(!strcasecmp(proto->valuestring,"tcp")?6:0);r->listen_port=lpi;r->destination_port=dpi;
         strlcpy(r->destination,dst->valuestring,sizeof r->destination);if(cJSON_IsString(name))strlcpy(r->name,name->valuestring,sizeof r->name);
-        if(tailnet_forward_parse_cidr(cidr->valuestring,&r->source_network,&r->source_prefix)!=ESP_OK){cJSON_Delete(root);httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"invalid allowed source subnet");return ESP_FAIL;}
+        if(tailnet_forward_parse_sources(cidr->valuestring,r)!=ESP_OK){cJSON_Delete(root);httpd_resp_send_err(req,HTTPD_400_BAD_REQUEST,"invalid allowed source subnet");return ESP_FAIL;}
     }
     cJSON_Delete(root);char why[128]="";esp_err_t err=tailnet_forward_set_all(rules,count,why,sizeof why);
     if(err!=ESP_OK){

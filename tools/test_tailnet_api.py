@@ -58,6 +58,9 @@ esp_err_t tailnet_forward_parse_cidr(const char *s,uint32_t *net,uint8_t *prefix
     if(strcmp(s,"192.0.2.0/24"))return ESP_ERR_INVALID_ARG;
     *net=0xc0000200; *prefix=24; return ESP_OK;
 }
+esp_err_t tailnet_forward_parse_sources(const char *s,tailnet_forward_rule_t *r) {
+    return tailnet_forward_parse_cidr(s,&r->source_network,&r->source_prefix);
+}
 esp_err_t tailnet_forward_set_all(const tailnet_forward_rule_t *r,int n,char *why,size_t capacity) {
     ++save_calls; last_count=n; memcpy(last_rules,r,n*sizeof *r);
     if(save_result==ESP_ERR_INVALID_STATE)strlcpy(why,"port conflict",capacity);

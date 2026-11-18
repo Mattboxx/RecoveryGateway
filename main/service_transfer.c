@@ -33,7 +33,7 @@ static esp_err_t transfer_parse(const cJSON *root,tailnet_forward_rule_t *rules,
         r->proto=!strcmp(proto->valuestring,"tcp")?6:!strcmp(proto->valuestring,"udp")?17:0;
         if(!r->proto||!json_guard_port(cJSON_GetObjectItemCaseSensitive(j,"listen_port"),&r->listen_port)
            ||!json_guard_port(cJSON_GetObjectItemCaseSensitive(j,"destination_port"),&r->destination_port)
-           ||tailnet_forward_parse_cidr(src->valuestring,&r->source_network,&r->source_prefix)!=ESP_OK)return ESP_ERR_INVALID_ARG;
+           ||tailnet_forward_parse_sources(src->valuestring,r)!=ESP_OK)return ESP_ERR_INVALID_ARG;
         memcpy(r->name,name->valuestring,strlen(name->valuestring)+1);memcpy(r->destination,dst->valuestring,strlen(dst->valuestring)+1);
     }
     return ESP_OK;
@@ -43,8 +43,8 @@ static cJSON *transfer_json(const tailnet_forward_rule_t *rules,int count){
     cJSON *arr=cJSON_AddArrayToObject(root,"rules");
     if(!arr||!cJSON_AddStringToObject(root,"format",TRANSFER_FORMAT))goto failed;
     for(int i=0;i<count;i++){
-        cJSON *j=cJSON_CreateObject();if(!j)goto failed;const tailnet_forward_rule_t *r=&rules[i];char cidr[32];
-        tailnet_forward_format_cidr(r->source_network,r->source_prefix,cidr,sizeof cidr);
+        cJSON *j=cJSON_CreateObject();if(!j)goto failed;const tailnet_forward_rule_t *r=&rules[i];char cidr[TAILNET_FORWARD_SOURCES_TEXT];
+        tailnet_forward_format_sources(r,cidr,sizeof cidr);
         bool ok=cJSON_AddStringToObject(j,"name",r->name)&&cJSON_AddBoolToObject(j,"enabled",r->enabled)
             &&cJSON_AddStringToObject(j,"protocol",r->proto==6?"tcp":"udp")&&cJSON_AddNumberToObject(j,"listen_port",r->listen_port)
             &&cJSON_AddStringToObject(j,"tailnet_destination",r->destination)&&cJSON_AddNumberToObject(j,"destination_port",r->destination_port)
