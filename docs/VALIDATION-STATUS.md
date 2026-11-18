@@ -1,5 +1,14 @@
 # Validation records
 
+3.0.26 stable (release source `a52d5af`, MicroLink `719139e`; BIN 7411d91ed72a2872a8a8c2cd8791f6b0d9b1f8d276462f2c2d2096861513a01d; bootloader, partition table and esptool as 3.0.25). Content: everything in 3.0.26-beta.2 plus the configuration profiles for every first-boot goal. The reporting user confirmed that the beta connects to the tailnet.
+- **Offline:** clean build, image provenance PASS, USB RAM placement PASS; `validate_all.py --build --browser` 168/168 PASS on `a52d5af`. The campaign rebuilt the same source into a byte-different image (710b3f8e…): builds are not bit-reproducible. The released image is the board-A-tested 7411d91e…, packaged by `package_v2.py` from an input folder holding that exact image.
+- **Board A over Tailscale (owner-started lab runner), 18/18:** the 14 checks of beta.2, plus the profiles:
+  - seven profiles in setup order with `setup_recommended`;
+  - LAN → Tailnet preview: 3 local settings, 4 guided steps, no exposure change;
+  - the IoT preview includes the AP traffic count;
+  - previews changed nothing. No profile was applied on the owner's board.
+- **Not run:** apply/rollback of the new profiles on hardware (host-tested); the items listed under 3.0.26-beta.2.
+
 3.0.26-beta.2 (release source `e80270f`, MicroLink `719139e`, published 2026-11-18 as the pre-release `v3.0.26-beta.2`, not Latest; BIN 61f89fc0022dcb6a30554fe39a155100ee1184f4be78740810bf998d698482b9).
 
 - **Content:** exact 64-bit node IDs, the "reason=peer-id" fix. A user's tailnets with recently created devices were blocked on 3.0.25: new Tailscale node IDs are above 2^53, and on board A's tailnet the largest ID is already 0.915 × 2^53. Also private CA for Headscale, bootstrap DNS, `cap:` sources, two auxiliary relays, five sources per LAN → Tailnet rule, dated pre-crash log, and the UDP helpers on the TCPIP thread.
