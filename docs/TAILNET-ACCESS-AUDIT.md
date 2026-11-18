@@ -22,15 +22,19 @@ devices). Each item: what blocks access, status, where.
 | Address item 0 assumed IPv4 | empty address for IPv6-first lists | first IPv4 of the list (beta.18) |
 | Start refused without a saved key | key could not be removed after registering | registered identity starts without it (beta.18) |
 | "Waiting for approval" stuck | state not cleared (reconnects skip registration) | follows MachineAuthorized in the map (beta.18) |
+| Node key expired seen in the map | reconnect loop every 60 s without registering (reconnects skip registration) | forces a registration, records the expiry for the renewal, shows it (beta.20) |
+| Built-in Tailscale control Noise key | a key rotation would stop every device | after a failed handshake the current key is fetched over verified HTTPS (beta.20) |
 
 ### Audit items 2-6
 
 2. **Map response size.** One response must fit one buffer: 512 KB through
    beta.17, 768 KB in beta.18 (about 250-500 peers in an official map at
    1.5-3 KB per peer). Beyond it the accumulator overflows, the policy is
-   reset and the gateway reconnects. Real fix: request zstd-compressed maps
-   (Tailscale supports them; the firmware sends "Compress": "") with an
-   on-device decoder; parsing memory also limits a larger buffer.
+   reset and the gateway reconnects. Compression (zstd, which Tailscale
+   supports; the firmware sends "Compress": "") would cut the bytes on the
+   wire but not this limit: the decompressed map is still held and parsed
+   whole (cJSON needs several times its size). The fix is a streaming parser
+   that reads the Peers list one peer at a time.
 3. **PingRequest.** Liveness requests over Noise are answered with a HEAD
    to their URL since beta.19 (as the reference client); other types
    (disco, TSMP, c2n) and plain-TLS URLs are logged, not answered.

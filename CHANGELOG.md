@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.20 adds to beta.19:
+
+- **An expired node key no longer loops.** When the control server marks
+  the node key expired, the gateway registers again (it reconnected every
+  minute without registering, since reconnects skip registration), shows
+  "node key expired" and renews the key at the next start with an auth key.
+- **Ready for a Tailscale control key rotation.** The control server's key
+  is built in; if the encrypted handshake fails, the current key is fetched
+  over verified HTTPS and used (never over plain HTTP).
+
 3.0.25-beta.19 adds to beta.18:
 
 - **Control server liveness pings are answered** (over the encrypted

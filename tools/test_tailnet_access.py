@@ -63,9 +63,17 @@ assert 'save_trimmed_str_if_present(s, "login_server", "ts_login");' in WEB
 
 assert 'answer_ping_request(ml, noise);' in COORD and 'note_ping_request(ml,' in amap and 'apply_display_messages(ml,' in amap
 assert 'if (ctrl_is_tailscale(ml)) {' in tcp
+# Node.Expired in the map forces a real registration (reconnects skip it
+# since beta.17) and records the expiry for the renewal.
+assert 'ml->force_register = true;   /* the server answers NodeKeyExpired */' in COORD
+assert 'ml->force_register = true;   /* not straight to the map */' in COORD
+assert COORD.count('saas_refresh_key(ml);') == 1
+noise = function(COORD, 'static int do_noise_handshake(')
+assert 'else if (ml->ctrl_noise_pubkey_valid) {' in noise
 C_CODE = (function(COORD, 'static bool ctrl_is_tailscale(const microlink_t *ml)\n{') + function(COORD, 'static void ctrl_transport_failed(')
           + function(COORD, 'static void note_ping_request(') + function(COORD, 'static void apply_display_messages(')
           + function(COORD, 'int microlink_get_display_messages(') + function(COORD, 'static uint32_t first_ipv4(const cJSON *addresses) {')
+          + function(COORD, 'static void saas_refresh_key(')
           + function(COORD, 'static void clock_from_control(') + function(WEB, 'static void save_trimmed_str_if_present(')
           + function(MGR, 'static char *trim_in_place('))
 PROGRAM = r'''
@@ -83,8 +91,11 @@ static const char *TAG = "t";
 #define MICROLINK_MAX_DISPLAY_MESSAGES 4
 typedef struct {char id[48];char title[96];char text[320];char severity[8];bool impacts_connectivity;} microlink_display_message_t;
 typedef struct {char ctrl_host[64];char ctrl_host_parsed[64];char ctrl_port_str[8];bool ctrl_saas_tls;uint8_t ctrl_transport_failures;
+    uint64_t ctrl_saas_key_ms;bool use_tls;char ctrl_host_hdr[96];bool ctrl_noise_pubkey_valid;
     microlink_display_message_t display_msgs[MICROLINK_MAX_DISPLAY_MESSAGES];uint8_t display_msg_count;char ping_path[200];char ping_last[200];} microlink_t;
-static uint64_t ml_get_time_ms(void){return 1;}
+static uint64_t fake_ms=1;static uint64_t ml_get_time_ms(void){return fake_ms;}
+static int fetches,fetch_ok;static bool fetch_tls;static char fetch_host[64],fetch_port[8],fetch_hdr[96];
+struct microlink_s;static int fetch_server_pubkey(void *m,const char *host,const char *port);
 static size_t strlcpy(char *d,const char *s,size_t n){size_t l=strlen(s);if(n){size_t c=l<n-1?l:n-1;memcpy(d,s,c);d[c]=0;}return l;}
 #define timeval test_timeval   /* host headers may define their own */
 struct timeval {time_t tv_sec;long tv_usec;};
@@ -93,6 +104,7 @@ static time_t fake_now, set_to;static int sets;
 static int settimeofday(const struct timeval *tv, const void *tz){(void)tz;set_to=tv->tv_sec;sets++;fake_now=tv->tv_sec;return 0;}
 static char saved[200];
 static void nvs_save_str(const char *k,const char *v){(void)k;snprintf(saved,sizeof saved,"%s",v);}
+static int fetch_server_pubkey(void *mv,const char *host,const char *port){microlink_t *m=mv;fetches++;fetch_tls=m->use_tls;snprintf(fetch_host,sizeof fetch_host,"%s",host);snprintf(fetch_port,sizeof fetch_port,"%s",port);snprintf(fetch_hdr,sizeof fetch_hdr,"%s",m->ctrl_host_hdr);return fetch_ok?0:-1;}
 @@CODE@@
 static uint32_t ip(const char *json){cJSON *a=cJSON_Parse(json);uint32_t r=first_ipv4(a);cJSON_Delete(a);return r;}
 static void ct(const char *text){cJSON *m=cJSON_CreateObject();cJSON_AddStringToObject(m,"ControlTime",text);clock_from_control(m);cJSON_Delete(m);}
@@ -108,6 +120,13 @@ int main(void){
     strcpy(ml.ctrl_host,"https://controlplane.tailscale.com/");strcpy(ml.ctrl_host_parsed,"controlplane.tailscale.com");
     assert(ctrl_is_tailscale(&ml));ctrl_transport_failed(&ml);ctrl_transport_failed(&ml);assert(ml.ctrl_saas_tls);   /* typed by hand: same fallback */
     strcpy(ml.ctrl_port_str,"8443");assert(!ctrl_is_tailscale(&ml));                  /* explicit port kept */
+    /* Tailscale key refresh after a Noise failure: HTTPS only, every 10 min, custom servers untouched. */
+    ml.ctrl_host[0]=0;ml.use_tls=false;strcpy(ml.ctrl_host_hdr,"keep-me");fake_ms=5000;fetch_ok=1;
+    saas_refresh_key(&ml);assert(fetches==1&&fetch_tls&&!strcmp(fetch_host,"controlplane.tailscale.com")&&!strcmp(fetch_port,"443"));
+    assert(!strcmp(fetch_hdr,"controlplane.tailscale.com")&&!ml.use_tls&&!strcmp(ml.ctrl_host_hdr,"keep-me"));   /* restored */
+    fake_ms=5000+599999;saas_refresh_key(&ml);assert(fetches==1);
+    fake_ms=5000+600000;saas_refresh_key(&ml);assert(fetches==2);
+    strcpy(ml.ctrl_host,"https://hs.example");fake_ms+=700000;saas_refresh_key(&ml);assert(fetches==2);
     /* PingRequest: liveness over Noise recorded once per URL; others not. */
     cJSON *pr=cJSON_Parse("{\"URL\":\"https://controlplane.tailscale.com/machine/ping/abc\",\"URLIsNoise\":true}");
     note_ping_request(&ml,pr);assert(!strcmp(ml.ping_path,"/machine/ping/abc"));
@@ -144,7 +163,7 @@ int main(void){
     strcpy(saved,"unchanged");o=cJSON_Parse("{\"auth_key\":5}");save_trimmed_str_if_present(o,"auth_key","k");assert(!strcmp(saved,"unchanged"));cJSON_Delete(o);
     char k1[]=" \tabc-def\r\n",k2[]="abc",k3[]="   ";
     assert(!strcmp(trim_in_place(k1),"abc-def")&&!strcmp(trim_in_place(k2),"abc")&&!strcmp(trim_in_place(k3),"")&&trim_in_place(NULL)==NULL);
-    puts("PASS: actual TLS-443 fallback for Tailscale control (also when typed by hand; custom servers untouched), liveness PingRequest recorded once, DisplayMessages patch/bound/truncation, clock from ControlTime only while unset and only valid UTC, first IPv4 of Addresses, auth key trimmed on save and load");
+    puts("PASS: actual control key refresh over HTTPS only (rate limited), TLS-443 fallback for Tailscale control (also when typed by hand; custom servers untouched), liveness PingRequest recorded once, DisplayMessages patch/bound/truncation, clock from ControlTime only while unset and only valid UTC, first IPv4 of Addresses, auth key trimmed on save and load");
     return 0;
 }
 '''
