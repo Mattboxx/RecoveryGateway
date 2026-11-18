@@ -6,21 +6,41 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Next (after 3.0.26-beta.2), in progress:
+## [3.0.26] - 2026-11-18
 
-- **Configuration profiles brought up to date** (System → General): one
-  profile per first-boot goal, with two new ones (*LAN → Tailnet services*,
-  *Home Assistant*), in the same order as the setup; the goals chosen at first
-  boot are marked "chosen at setup". Each profile's guided steps now cover
-  what was added since (backup uplinks, time limits and several devices per
-  LAN → Tailnet rule, sharing a service with another network, the login
-  server certificate, administration scope, the microSD log). The IoT profile
-  also turns on the traffic count per access point device. Profiles still
-  never open access, change routes or send data by themselves.
+### Fixed
 
-3.0.26-beta.1 adds to 3.0.25:
+- **Tunnel blocked in tailnets with recently added devices.** The log showed
+  "Authorization/peer update needs a full refresh; tunnel data blocked
+  (stage=policy reason=peer-id ...)". Tailscale device IDs are 64-bit numbers;
+  devices added recently have IDs larger than the gateway's JSON reader could
+  hold exactly, so the gateway refused the whole device list and blocked the
+  tunnel. IDs are now read exactly, also in device updates and removals.
 
-3.0.26-beta.2 adds to 3.0.25 (3.0.26-beta.1 was an internal candidate, not published):
+### Added
+
+- **Headscale with a private CA or a self-signed certificate**: a *Login
+  server certificate* field on the Tailscale page, trusted only for the login
+  server and its relays (the server name is still checked).
+- **First connection without working DNS**: the Tailscale control server is
+  found through a Tailscale relay at a built-in address, as the official
+  client does.
+- **ACL rules with "cap:" sources** admit the devices that hold that
+  capability.
+- **Two relays to other regions at once** for devices without a direct path.
+- **LAN → Tailnet: up to 5 allowed devices per rule**, and a guide for sharing
+  one service with another network (docs/SERVICE-GATEWAY.md).
+- **Configuration profiles for every first-boot goal** (System → General):
+  two new ones (*LAN → Tailnet services*, *Home Assistant*), shown in the
+  setup's order, the goals chosen at first boot marked "chosen at setup",
+  guided steps for everything added since 3.0, and the IoT profile also
+  counts traffic per access point device. Profiles never open access, change
+  routes or send data by themselves.
+- **Date and time in the pre-crash log.**
+
+### Notes of the 3.0.26 betas
+
+3.0.26-beta.2 (3.0.26-beta.1 was an internal candidate, not published):
 
 - **Fixed: tunnel blocked in tailnets with recently added devices**
   ("Authorization/peer update needs a full refresh; tunnel data blocked
