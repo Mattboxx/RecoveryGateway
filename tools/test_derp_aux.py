@@ -28,7 +28,7 @@ def function(sig):
 
 aux = SRC[SRC.index('#if ML_DERP_AUX\n\n#define DERP_AWAY_SLOTS'):SRC.index('#endif /* ML_DERP_AUX */')]
 aux = aux[len('#if ML_DERP_AUX\n'):]
-dispatch = function('static void dispatch_derp_frame(')
+dispatch = function('static int derp_aux_slot(') + function('static void dispatch_derp_frame(')
 defines = SRC[SRC.index('#define DERP_FRAME_SERVER_KEY'):SRC.index('#if ML_DERP_AUX\nstatic void derp_away_note(')]
 
 # Wiring that a unit test cannot run (tasks, sockets): checked on the source.
@@ -37,7 +37,7 @@ assert 'c = derp_conn_for(ml, item.dest_pubkey);' in tx and 'ret = derp_send_pac
 assert tx.index('if (ret < 0 && c != &ml->derp) {') < tx.index('xEventGroupSetBits(ml->events, ML_EVT_DERP_RECONNECT);\n                } else {')
 assert 'derp_aux_maintain(ml, loop_start);' in tx
 rx = function('void ml_derp_rx_task(void *arg) {')
-assert 'conns[1] = &ml->derp_aux;' in rx and 'int ret = poll_derp_read(ml, c);' in rx
+assert 'conns[1 + i] = &ml->derp_aux[i];' in rx and 'k < 1 + ML_DERP_AUX_N' in rx and 'int ret = poll_derp_read(ml, c);' in rx
 assert rx.index('c->rx_parked = false;') < rx.index('if (!c->connected || c->sockfd < 0) {')
 assert 'if (!k) xEventGroupSetBits(ml->events, ML_EVT_DERP_RECONNECT);' in rx
 assert 'derp_wait_readable_any(ml, DERP_RX_IDLE_WAIT_US)' in rx
@@ -46,7 +46,7 @@ op = op[:op.index('\n}\n') + 3]
 assert 'uint8_t preferred = home ? 0x01 : 0x00;' in op and 'if (home) xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECTED);' in op
 assert "atoi((char *)resp_buf + 9) != 101" in op
 disc = function('void ml_derp_disconnect(microlink_t *ml) {')
-assert 'derp_conn_close(&ml->derp_aux);' in disc
+assert 'derp_conn_close(&ml->derp_aux[s]);' in disc and 's < ML_DERP_AUX_N' in disc
 assert '#if defined(CONFIG_ML_DERP_AUX) && CONFIG_ML_DERP_AUX' in HDR
 
 PROGRAM = r'''
@@ -84,8 +84,8 @@ typedef struct {uint8_t public_key[32];uint16_t derp_region;} ml_peer_t;
 typedef struct {uint8_t *data;size_t len;uint8_t frame_type;uint8_t dest_pubkey[32];} ml_derp_tx_item_t;
 typedef struct {ml_derp_tx_item_t items[8];int n;int front;} queue_t;
 typedef struct {
-    ml_derp_conn_t derp, derp_aux;
-    volatile uint16_t derp_aux_region; volatile uint32_t derp_aux_used_s; volatile uint32_t derp_aux_opens;
+    ml_derp_conn_t derp, derp_aux[2];
+    volatile uint16_t derp_aux_region[2]; volatile uint32_t derp_aux_used_s[2]; volatile uint32_t derp_aux_opens;
     ml_peer_t peers[ML_MAX_PEERS]; int peer_count;
     uint16_t derp_home_region; int derp_region_count; ml_derp_region_t derp_regions[4];
     queue_t *derp_tx_queue;
@@ -101,6 +101,7 @@ static int routed;static uint8_t routed_from[32];
 static void route_derp_packet(microlink_t *ml,uint8_t *d,size_t l,const uint8_t *src){(void)ml;(void)l;routed++;memcpy(routed_from,src,32);free(d);}
 @@DEFINES@@
 #define ML_DERP_AUX 1
+#define ML_DERP_AUX_N 2
 @@AUX@@
 @@DISPATCH@@
 static void key(uint8_t *k,int id){memset(k,0,32);k[0]=(uint8_t)id;k[31]=0x5a;}
@@ -108,7 +109,8 @@ static void gone(microlink_t *ml,ml_derp_conn_t *c,int id,int reason){
     uint8_t *p=malloc(33);key(p,id);p[32]=(uint8_t)reason;dispatch_derp_frame(ml,c,0x08,(uint8_t[32]){0},p,reason<0?32:33);}
 int main(void){
     static microlink_t ml;static queue_t q;memset(&ml,0,sizeof ml);ml.derp_tx_queue=&q;
-    ml.derp.sockfd=5;ml.derp.connected=true;ml.derp_aux.sockfd=-1;ml.derp_aux.rx_parked=true;ml.derp_home_region=1;
+    ml.derp.sockfd=5;ml.derp.connected=true;ml.derp_home_region=1;
+    for(int i=0;i<2;i++){ml.derp_aux[i].sockfd=-1;ml.derp_aux[i].rx_parked=true;}
     ml.derp_region_count=4;
     const char *hosts[4][2]={{"derp1a","derp1b"},{"derp2a","derp2b"},{"derp3a",""},{"derp4a","derp4b"}};
     for(int r=0;r<4;r++){ml.derp_regions[r].region_id=(uint16_t)(r+1);ml.derp_regions[r].node_count=2;
@@ -125,57 +127,67 @@ int main(void){
 
     /* "Disconnected" and aux-relay reports do not route anywhere else. */
     gone(&ml,&ml.derp,2,0);gone(&ml,&ml.derp,2,-1);assert(!s_away_any);
-    gone(&ml,&ml.derp_aux,2,1);assert(!s_away_any);
+    gone(&ml,&ml.derp_aux[0],2,1);gone(&ml,&ml.derp_aux[1],2,1);assert(!s_away_any);
 
-    /* Home relay: peer 2 not here -> its home region (2) over the auxiliary relay. */
+    /* Home relay: peer 2 not here -> its home region (2) over an auxiliary relay. */
     gone(&ml,&ml.derp,2,1);assert(s_away_any);
     ml_derp_conn_t *c=derp_conn_for(&ml,k2);
-    assert(c==&ml.derp_aux&&opens==1&&!strcmp(opened_host,"derp2a")&&opened_region==2&&!opened_home);
-    assert(ml.derp_aux_region==2&&ml.derp_aux_opens==1);
-    fake_ms+=500;assert(derp_conn_for(&ml,k2)==&ml.derp_aux&&opens==1);          /* reused */
+    assert(c==&ml.derp_aux[0]&&opens==1&&!strcmp(opened_host,"derp2a")&&opened_region==2&&!opened_home);
+    assert(ml.derp_aux_region[0]==2&&ml.derp_aux_opens==1);
+    fake_ms+=500;assert(derp_conn_for(&ml,k2)==&ml.derp_aux[0]&&opens==1);       /* reused */
     assert(derp_conn_for(&ml,k1)==&ml.derp);                                    /* peer on our region */
     gone(&ml,&ml.derp,1,1);assert(derp_conn_for(&ml,k1)==&ml.derp);             /* away but homed with us */
     gone(&ml,&ml.derp,5,1);assert(derp_conn_for(&ml,k5)==&ml.derp);             /* region unknown */
     assert(derp_conn_for(&ml,k9)==&ml.derp);                                    /* not in the peer table */
 
-    /* Another region while the relay is busy: no thrashing, old path. */
+    /* A second region while the first relay is busy: the second relay. */
     gone(&ml,&ml.derp,3,1);fake_ms+=2000;
-    assert(derp_conn_for(&ml,k3)==&ml.derp&&opens==1&&ml.derp_aux_region==2);
-    /* Idle 10 s: it moves to region 3 (old session closed after the reader parked). */
-    fake_ms+=11000;ml.derp_aux.rx_parked=true;
-    assert(derp_conn_for(&ml,k3)==&ml.derp_aux&&closes==1&&opens==2&&opened_region==3&&ml.derp_aux_region==3);
+    assert(derp_conn_for(&ml,k3)==&ml.derp_aux[1]&&opens==2&&opened_region==3&&ml.derp_aux_region[1]==3);
+    assert(derp_conn_for(&ml,k2)==&ml.derp_aux[0]&&opens==2&&ml.derp_aux_region[0]==2);   /* both kept */
+    /* A third region while both are busy: old path, no thrashing. */
+    gone(&ml,&ml.derp,4,1);
+    assert(derp_conn_for(&ml,k4)==&ml.derp&&opens==2&&closes==0);
+    /* Region 2 idle 11 s, region 3 used 5 s ago: region 4 takes the idle one. */
+    fake_ms+=6000;assert(derp_conn_for(&ml,k3)==&ml.derp_aux[1]);fake_ms+=5000;
+    ml.derp_aux[0].rx_parked=true;
+    assert(derp_conn_for(&ml,k4)==&ml.derp_aux[0]&&closes==1&&opens==3&&opened_region==4);
+    assert(ml.derp_aux_region[0]==4&&ml.derp_aux_region[1]==3&&ml.derp_aux[1].connected);
+    /* Idle 60 s: both closed. */
+    fake_ms+=61000;ml.derp_aux[1].rx_parked=true;derp_aux_maintain(&ml,fake_ms);
+    assert(closes==3&&ml.derp_aux[0].sockfd<0&&ml.derp_aux[1].sockfd<0&&!ml.derp_aux_region[0]&&!ml.derp_aux_region[1]);
 
-    /* Receiving on the auxiliary relay keeps it in use; on the home relay it does not. */
-    uint32_t before=ml.derp_aux_used_s;fake_ms+=5000;
+    /* Receiving on an auxiliary relay keeps it in use; on the home relay it does not. */
+    assert(derp_conn_for(&ml,k3)==&ml.derp_aux[0]&&opens==4);
+    uint32_t before=ml.derp_aux_used_s[0];fake_ms+=5000;
     uint8_t *pk=malloc(40);memset(pk,1,40);dispatch_derp_frame(&ml,&ml.derp,0x05,k1,pk,40);
-    assert(ml.derp_aux_used_s==before&&routed==1&&!memcmp(routed_from,k1,32));
-    pk=malloc(40);dispatch_derp_frame(&ml,&ml.derp_aux,0x05,k3,pk,40);
-    assert(ml.derp_aux_used_s==(uint32_t)(fake_ms/1000)&&routed==2);
+    assert(ml.derp_aux_used_s[0]==before&&routed==1&&!memcmp(routed_from,k1,32));
+    pk=malloc(40);dispatch_derp_frame(&ml,&ml.derp_aux[0],0x05,k3,pk,40);
+    assert(ml.derp_aux_used_s[0]==(uint32_t)(fake_ms/1000)&&routed==2&&ml.derp_aux_used_s[1]!=(uint32_t)(fake_ms/1000));
 
     /* Maintenance: busy -> kept; idle 60 s -> closed. */
-    derp_aux_maintain(&ml,fake_ms);assert(closes==1&&ml.derp_aux.connected);
-    fake_ms+=61000;derp_aux_maintain(&ml,fake_ms);assert(closes==2&&ml.derp_aux.sockfd<0&&ml.derp_aux_region==0);
-    derp_aux_maintain(&ml,fake_ms);assert(closes==2);                           /* nothing open */
+    derp_aux_maintain(&ml,fake_ms);assert(closes==3&&ml.derp_aux[0].connected);
+    fake_ms+=61000;derp_aux_maintain(&ml,fake_ms);assert(closes==4&&ml.derp_aux[0].sockfd<0&&ml.derp_aux_region[0]==0);
+    derp_aux_maintain(&ml,fake_ms);assert(closes==4);                           /* nothing open */
     /* Broken by the reader / silent / became home: closed. */
-    assert(derp_conn_for(&ml,k3)==&ml.derp_aux&&opens==3);
-    ml.derp_aux.connected=false;derp_aux_maintain(&ml,fake_ms);assert(closes==3);
-    assert(derp_conn_for(&ml,k3)==&ml.derp_aux&&opens==4);
-    ml.derp_aux.last_recv_ms=fake_ms-91000;derp_aux_maintain(&ml,fake_ms);assert(closes==4);
-    assert(derp_conn_for(&ml,k3)==&ml.derp_aux&&opens==5);
-    ml.derp_home_region=3;derp_aux_maintain(&ml,fake_ms);assert(closes==5);
-    assert(derp_conn_for(&ml,k3)==&ml.derp&&opens==5);                          /* now our own region */
+    assert(derp_conn_for(&ml,k3)==&ml.derp_aux[0]&&opens==5);
+    ml.derp_aux[0].connected=false;derp_aux_maintain(&ml,fake_ms);assert(closes==5);
+    assert(derp_conn_for(&ml,k3)==&ml.derp_aux[0]&&opens==6);
+    ml.derp_aux[0].last_recv_ms=fake_ms-91000;derp_aux_maintain(&ml,fake_ms);assert(closes==6);
+    assert(derp_conn_for(&ml,k3)==&ml.derp_aux[0]&&opens==7);
+    ml.derp_home_region=3;derp_aux_maintain(&ml,fake_ms);assert(closes==7);
+    assert(derp_conn_for(&ml,k3)==&ml.derp&&opens==7);                          /* now our own region */
     ml.derp_home_region=1;
     /* A broken session found by the writer is replaced at once. */
-    assert(derp_conn_for(&ml,k3)==&ml.derp_aux&&opens==6);
-    ml.derp_aux.connected=false;assert(derp_conn_for(&ml,k3)==&ml.derp_aux&&closes==6&&opens==7);
+    assert(derp_conn_for(&ml,k3)==&ml.derp_aux[0]&&opens==8);
+    ml.derp_aux[0].connected=false;assert(derp_conn_for(&ml,k3)==&ml.derp_aux[0]&&closes==8&&opens==9);
 
     /* Failed connect: old path, no retry for 30 s, then the next node. */
     gone(&ml,&ml.derp,4,1);fake_ms+=61000;derp_aux_maintain(&ml,fake_ms);int cl=closes;
-    open_fail=1;assert(derp_conn_for(&ml,k4)==&ml.derp&&opens==8&&!strcmp(opened_host,"derp4a"));
-    assert(ml.derp_aux.sockfd<0&&closes==cl);
-    fake_ms+=10000;assert(derp_conn_for(&ml,k4)==&ml.derp&&opens==8);          /* backing off */
-    fake_ms+=21000;assert(derp_conn_for(&ml,k4)==&ml.derp&&opens==9&&!strcmp(opened_host,"derp4b"));
-    open_fail=0;fake_ms+=31000;assert(derp_conn_for(&ml,k4)==&ml.derp_aux&&opens==10&&!strcmp(opened_host,"derp4a"));
+    open_fail=1;assert(derp_conn_for(&ml,k4)==&ml.derp&&opens==10&&!strcmp(opened_host,"derp4a"));
+    assert(ml.derp_aux[0].sockfd<0&&ml.derp_aux[1].sockfd<0&&closes==cl);
+    fake_ms+=10000;assert(derp_conn_for(&ml,k4)==&ml.derp&&opens==10);          /* backing off */
+    fake_ms+=21000;assert(derp_conn_for(&ml,k4)==&ml.derp&&opens==11&&!strcmp(opened_host,"derp4b"));
+    open_fail=0;fake_ms+=31000;assert(derp_conn_for(&ml,k4)==&ml.derp_aux[0]&&opens==12&&!strcmp(opened_host,"derp4a"));
 
     /* Away notes expire: after 5 min the home relay is tried again. */
     fake_ms+=301000;assert(derp_conn_for(&ml,k4)==&ml.derp);
@@ -187,22 +199,32 @@ int main(void){
     /* Relay PING: answered through the writer queue (front), home relay only, bounded. */
     uint8_t *ping=malloc(8);memcpy(ping,"12345678",8);dispatch_derp_frame(&ml,&ml.derp,0x12,k1,ping,8);
     assert(q.n==1&&q.items[0].frame_type==0x13&&q.items[0].len==8&&!memcmp(q.items[0].data,"12345678",8));
-    ping=malloc(8);dispatch_derp_frame(&ml,&ml.derp_aux,0x12,k1,ping,8);assert(q.n==1);
+    ping=malloc(8);dispatch_derp_frame(&ml,&ml.derp_aux[1],0x12,k1,ping,8);assert(q.n==1);
     ping=malloc(65);memset(ping,0,65);dispatch_derp_frame(&ml,&ml.derp,0x12,k1,ping,65);assert(q.n==1);
     free(q.items[0].data);
 
     /* The pure decision. */
-    assert(derp_route_pick(0,1,false,0,0,0,0)==DERP_ROUTE_HOME);
-    assert(derp_route_pick(1,1,false,0,0,0,0)==DERP_ROUTE_HOME);
-    assert(derp_route_pick(2,1,false,0,UINT64_MAX,0,UINT64_MAX)==DERP_ROUTE_OPEN);
-    assert(derp_route_pick(2,1,true,2,0,0,0)==DERP_ROUTE_AUX);
-    assert(derp_route_pick(2,1,true,3,9999,0,0)==DERP_ROUTE_HOME);
-    assert(derp_route_pick(2,1,true,3,10000,0,0)==DERP_ROUTE_OPEN);
-    assert(derp_route_pick(2,1,false,0,0,2,29999)==DERP_ROUTE_HOME);
-    assert(derp_route_pick(2,1,false,0,0,2,30000)==DERP_ROUTE_OPEN);
-    assert(derp_route_pick(2,1,false,0,0,3,0)==DERP_ROUTE_OPEN);
+    {
+        bool o,u[2];uint16_t rg[2];uint64_t id[2];
+#define PICK(region,home,u0,r0,i0,u1,r1,i1,fr,sf) (u[0]=u0,rg[0]=r0,id[0]=i0,u[1]=u1,rg[1]=r1,id[1]=i1,derp_route_pick(region,home,2,u,rg,id,fr,sf,&o))
+        assert(PICK(0,1, 0,0,0, 0,0,0, 0,0)==-1&&!o);
+        assert(PICK(1,1, 0,0,0, 0,0,0, 0,0)==-1&&!o);
+        assert(PICK(2,1, 0,0,0, 0,0,0, 0,UINT64_MAX)==0&&o);
+        assert(PICK(2,1, 1,2,0, 0,0,0, 0,0)==0&&!o);
+        assert(PICK(2,1, 1,3,0, 1,2,0, 0,0)==1&&!o);
+        assert(PICK(2,1, 1,3,0, 0,0,0, 0,0)==1&&o);              /* a free relay first */
+        assert(PICK(2,1, 1,3,9999, 1,4,9999, 0,0)==-1&&!o);      /* both busy */
+        assert(PICK(2,1, 1,3,10000, 1,4,20000, 0,0)==1&&o);      /* the one idle longest */
+        assert(PICK(2,1, 1,3,30000, 1,4,10000, 0,0)==0&&o);
+        assert(PICK(2,1, 0,0,0, 0,0,0, 2,29999)==-1&&!o);
+        assert(PICK(2,1, 0,0,0, 0,0,0, 2,30000)==0&&o);
+        assert(PICK(2,1, 0,0,0, 0,0,0, 3,0)==0&&o);
+        assert(PICK(2,1, 1,2,0, 0,0,0, 2,0)==0&&!o);             /* connected beats the backoff */
+        u[0]=true;rg[0]=3;id[0]=9999;assert(derp_route_pick(2,1,1,u,rg,id,0,0,&o)==-1&&!o);   /* one relay: as before */
+#undef PICK
+    }
     assert(!crit);
-    puts("PASS: actual relay routing: peers the home relay does not know reach their own region over one on-demand connection; bounded, no thrash, backoff, idle close");
+    puts("PASS: actual relay routing: peers the home relay does not know reach their own region over up to two on-demand connections; free one first, then the idle one, bounded, no thrash, backoff, idle close");
     return 0;
 }
 '''

@@ -72,7 +72,18 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.25
+## What's new in Firmware 3.0.26
+
+- **Fix for tailnets with recently added devices**: their new 64-bit device IDs
+  made the gateway refuse the device list and block the tunnel.
+- **Headscale with a private CA or a self-signed certificate.**
+- **First connection without working DNS**, **ACL "cap:" rules**, two relays
+  to other regions at once.
+- **LAN → Tailnet**: up to 5 allowed devices per rule, and a guide to
+  [share one service with another network](docs/SERVICE-GATEWAY.md).
+- **Configuration profiles** for every first-boot goal.
+
+### Also in 3.0.25
 
 - **Tailscale access fixes:** single-use auth keys no longer take the gateway
   offline after it joined, there is no 16-device limit, and a gateway alone in

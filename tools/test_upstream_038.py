@@ -198,7 +198,7 @@ run('actual DERP TLS policy: trusted verification default, CertName and CA-attac
 typedef struct {char cert_name[80];} ml_derp_node_t;
 static int mode,attach_error,attaches;
 static void mbedtls_ssl_conf_authmode(int *conf,int value){(void)conf;mode=value;}
-static int ml_tls_bundle_attach(int *conf){(void)conf;attaches++;return attach_error;}
+static int ml_tls_tailnet_attach(int *conf){(void)conf;attaches++;return attach_error;}
 static int configure(ml_derp_node_t *derp_node,const char *derp_host){
  struct {int ssl_conf;} conn={0},*c=&conn;
 ''' + tls + r'''

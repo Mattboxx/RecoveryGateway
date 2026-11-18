@@ -14,6 +14,13 @@ on DNS after a restart even though the address was known) and TLS on 443,
 where the address is used while the certificate and SNI still check the
 name (esp-tls common_name). A failed handshake with a custom server fetches
 its key again (it was kept in RAM until a restart).
+
+3.0.26: bootstrap DNS for the first connection, when DNS fails and no
+address is known: a Tailscale DERP relay at a built-in address answers
+/bootstrap-dns over TLS checked for the relay's name; only for the Tailscale
+control server, rate-limited, bounded response, public IPv4 only, kept in
+RAM only; a failing relay falls to the next; refused/malformed answers give
+nothing.
 """
 import os
 from pathlib import Path
@@ -41,7 +48,8 @@ assert 'if (res && !res_cached) ml_freeaddrinfo(res);' in key
 hs = COORD[COORD.index('if (do_noise_handshake(ml, &noise) < 0) {'):]
 hs = hs[:hs.index('state = COORD_RECONNECTING;')]
 assert 'if (ml->ctrl_host[0]) ml->ctrl_noise_pubkey_valid = false;' in hs
-HELPERS = function(COORD, 'static struct addrinfo *ctrl_cached_addr(') + function(COORD, 'static int ctrl_tls_connect(')
+BOOT = COORD[COORD.index('/* Bootstrap DNS, as the official client'):COORD.index('static struct addrinfo *ctrl_cached_addr(')]
+HELPERS = BOOT + function(COORD, 'static struct addrinfo *ctrl_cached_addr(') + function(COORD, 'static int ctrl_tls_connect(')
 assert tcp.count('if (!res_cached) ml_freeaddrinfo(res);') == 3 and '    ml_freeaddrinfo(res);' not in tcp.replace('if (!res_cached) ml_freeaddrinfo(res);', '')
 assert tcp.index('ml_ctrl_addr_save(ml, ml->ctrl_host_parsed') > tcp.index('if (ml_connect(sock, res->ai_addr, res->ai_addrlen) < 0)')
 assert 'if (!res_cached && res->ai_family == AF_INET)' in tcp
@@ -54,6 +62,8 @@ PROGRAM = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
+#include "cJSON.h"
 typedef int esp_err_t;typedef int nvs_handle_t;
 #define ESP_OK 0
 #define ESP_FAIL -1
@@ -90,10 +100,29 @@ static uint32_t htonl(uint32_t v){return ((v&255u)<<24)|((v>>8&255u)<<16)|((v>>1
 static int dns_ok,dns_frees;static struct addrinfo dns_ai;
 static int ml_getaddrinfo(const char *h,const char *p,const struct addrinfo *hi,struct addrinfo **r){(void)h;(void)p;(void)hi;if(!dns_ok){*r=NULL;return -1;}*r=&dns_ai;return 0;}
 static void ml_freeaddrinfo(struct addrinfo *r){assert(r==&dns_ai);dns_frees++;}
-typedef struct{const char *common_name;int timeout_ms;} esp_tls_cfg_t;
+typedef struct{esp_err_t (*crt_bundle_attach)(void *);const char *common_name;int timeout_ms;} esp_tls_cfg_t;
 typedef struct{int fd;} esp_tls_t;
+#define ML_CTRL_HOST "controlplane.tailscale.com"
+static int64_t now_us=1000000;static int64_t esp_timer_get_time(void){return now_us;}
+static uint32_t esp_random(void){return 0;}
+static esp_err_t ml_tls_bundle_attach(void *c){(void)c;return ESP_OK;}
+static void *ml_psram_malloc(size_t n){return malloc(n);}
+static esp_tls_t tls_objs[4];static int tls_live;
+static esp_tls_t *esp_tls_init(void){assert(tls_live<4);return &tls_objs[tls_live++];}
+static void esp_tls_conn_destroy(esp_tls_t *t){(void)t;assert(tls_live>0);tls_live--;}
+/* Bootstrap relays: per attempt, whether TLS works and what they answer. */
+static int boot_calls,boot_ok[8],boot_bytes,boot_read;static const char *boot_resp;static char boot_req[256],boot_cn[64];
+static ssize_t esp_tls_conn_write(esp_tls_t *t,const void *d,size_t n){(void)t;size_t k=n>7?7:n;strncat(boot_req,d,k);return (ssize_t)k;}
+static ssize_t esp_tls_conn_read(esp_tls_t *t,void *d,size_t n){(void)t;size_t left=strlen(boot_resp)-(size_t)boot_bytes;
+    size_t k=left<100?left:100;
+    if(k>n)k=n;
+    memcpy(d,boot_resp+boot_bytes,k);boot_bytes+=(int)k;boot_read=boot_bytes;return (ssize_t)k;}
 static char tls_target[64],tls_cn[64];static int tls_ok,tls_calls;static uint32_t peer_ip;
 static int esp_tls_conn_new_sync(const char *h,int hl,int port,const esp_tls_cfg_t *c,esp_tls_t *t){
+    if(hl&&isdigit((unsigned char)h[0])&&!strncmp(c->common_name?c->common_name:"","derp",4)){   /* a bootstrap relay */
+        assert(port==443&&c->crt_bundle_attach==ml_tls_bundle_attach&&c->timeout_ms==5000);
+        snprintf(boot_cn,sizeof boot_cn,"%s",c->common_name);boot_req[0]=0;boot_bytes=0;
+        return boot_ok[boot_calls++]?1:-1;}
     assert(port==443);tls_calls++;snprintf(tls_target,sizeof tls_target,"%.*s",hl,h);
     snprintf(tls_cn,sizeof tls_cn,"%s",c->common_name?c->common_name:"");t->fd=7;return tls_ok?1:-1;}
 static int esp_tls_get_conn_sockfd(esp_tls_t *t,int *fd){*fd=t->fd;return ESP_OK;}
@@ -124,7 +153,51 @@ static void tls_and_fallback(void){
     assert(ctrl_tls_connect(&ml,&tls,"other.example","443",cfg)==1&&!strcmp(tls_target,"other.example")&&!tls_cn[0]);
     puts("PASS: actual TLS and key fetch paths: last working address when DNS fails, certificate and SNI still checked for the name, other hosts never use it");
 }
+static void bootstrap(void){
+    const char *ok="HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n"
+        "{\"controlplane.tailscale.com\":[\"2606:b740:49::109\",\"10.0.0.1\",\"100.64.1.1\",\"192.200.0.107\",\"192.200.0.108\"],"
+        "\"login.tailscale.com\":[\"192.200.0.104\"]}";
+    /* pick: first public IPv4 for the host; private, CGNAT, IPv6 and junk skipped */
+    assert(bootstrap_pick_ipv4(ok,"controlplane.tailscale.com")==0xC0C8006B);
+    assert(bootstrap_pick_ipv4(ok,"login.tailscale.com")==0xC0C80068);
+    assert(bootstrap_pick_ipv4(ok,"other.example")==0);
+    assert(bootstrap_pick_ipv4("HTTP/1.0 404 Not Found\r\n\r\n{\"controlplane.tailscale.com\":[\"192.200.0.1\"]}","controlplane.tailscale.com")==0);
+    assert(bootstrap_pick_ipv4("HTTP/1.0 200 OK\r\n\r\n{\"controlplane.tailscale.com\":[\"192.200.0.1\"","controlplane.tailscale.com")==0);   /* truncated */
+    assert(bootstrap_pick_ipv4("HTTP/1.0 200 OK\r\n\r\n{\"controlplane.tailscale.com\":\"192.200.0.1\"}","controlplane.tailscale.com")==0); /* not a list */
+    assert(bootstrap_pick_ipv4("HTTP/1.0 200 OK\r\n\r\n{\"controlplane.tailscale.com\":[\"192.200.0.1x\",\"300.1.1.1\",\" 8.8.8.8\",5,\"127.0.0.1\",\"224.0.0.1\",\"169.254.1.1\",\"172.16.1.1\",\"192.168.1.1\",\"0.1.2.3\"]}","controlplane.tailscale.com")==0);
+    assert(bootstrap_pick_ipv4("HTTP/1.0 200 OK no body","controlplane.tailscale.com")==0&&bootstrap_pick_ipv4(NULL,"x")==0&&bootstrap_pick_ipv4("",NULL)==0);
+    /* No DNS and nothing known for the Tailscale control server: the first
+     * relay fails, the second answers; TLS then goes to that address with
+     * certificate and SNI for the name; nothing is written to flash. */
+    microlink_t ml;memset(&ml,0,sizeof ml);blob_len=0;writes=0;fail_open=0;dns_ok=0;tls_ok=1;
+    esp_tls_t tls;esp_tls_cfg_t cfg={0};
+    boot_resp=ok;boot_ok[0]=0;boot_ok[1]=1;
+    assert(ctrl_tls_connect(&ml,&tls,"controlplane.tailscale.com","443",cfg)==1);
+    assert(boot_calls==2&&!strcmp(boot_cn,"derp2.tailscale.com")&&tls_live==0);
+    assert(!strcmp(boot_req,"GET /bootstrap-dns?q=controlplane.tailscale.com HTTP/1.0\r\nHost: derp2.tailscale.com\r\n\r\n"));
+    assert(!strcmp(tls_target,"192.200.0.107")&&!strcmp(tls_cn,"controlplane.tailscale.com")&&writes==0);
+    /* The plain path reuses it from RAM without asking again. */
+    struct addrinfo ai;struct sockaddr_in sa;
+    assert(ctrl_cached_addr(&ml,"controlplane.tailscale.com","80",&ai,&sa)==&ai&&sa.sin_addr.s_addr==htonl(0xC0C8006B)&&boot_calls==2);
+    /* After a restart nothing is known; a retry within 5 minutes asks nobody. */
+    memset(&ml,0,sizeof ml);
+    assert(ctrl_cached_addr(&ml,"controlplane.tailscale.com","80",&ai,&sa)==NULL&&boot_calls==2);
+    /* Later: a refusal from both relays gives nothing. */
+    now_us+=301000000;boot_resp="HTTP/1.0 500 Internal Server Error\r\n\r\n";boot_ok[2]=1;boot_ok[3]=1;
+    assert(ctrl_cached_addr(&ml,"controlplane.tailscale.com","80",&ai,&sa)==NULL&&boot_calls==4&&ml.ctrl_addr_ip==0&&tls_live==0);
+    /* An oversized answer is read only up to the bound (and is not JSON there). */
+    static char huge[9000];strcpy(huge,"HTTP/1.0 200 OK\r\n\r\n{\"controlplane.tailscale.com\":[\"192.200.0.9\"");
+    memset(huge+strlen(huge),' ',8990-strlen(huge));strcpy(huge+8990,"]}");
+    now_us+=301000000;boot_resp=huge;boot_ok[4]=1;boot_ok[5]=0;
+    assert(ctrl_cached_addr(&ml,"controlplane.tailscale.com","80",&ai,&sa)==NULL&&boot_read==4096&&boot_calls==6);
+    /* Another login server is never looked up through Tailscale's relays. */
+    now_us+=301000000;
+    assert(ctrl_cached_addr(&ml,"hs.example","80",&ai,&sa)==NULL&&boot_calls==6);
+    assert(writes==0);
+    puts("PASS: actual bootstrap DNS: relay fallback, name-checked TLS, RAM only, rate-limited, bounded, refusals and junk give nothing, Tailscale host only");
+}
 int main(void){
+    bootstrap();
     microlink_t ml;memset(&ml,0,sizeof ml);
     assert(ml_ctrl_addr_load(&ml,"controlplane.tailscale.com")==0);
     ml_ctrl_addr_save(&ml,"controlplane.tailscale.com",0x12345678);assert(writes==1);
@@ -145,6 +218,9 @@ int main(void){
     return 0;
 }
 '''
+dep = os.environ.get('CJSON_SOURCE')
+cj = [dep, '-I', str(Path(dep).parent)] if dep else \
+    subprocess.check_output(['pkg-config', '--cflags', '--libs', 'libcjson'], text=True).split()
 with tempfile.TemporaryDirectory(prefix='ctrl-addr-') as tmp:
     c = Path(tmp) / 't.c'
     c.write_text(PROGRAM.replace('@@REC@@', rec).replace('@@HELPERS@@', HELPERS), encoding='utf-8')
@@ -152,7 +228,7 @@ with tempfile.TemporaryDirectory(prefix='ctrl-addr-') as tmp:
     flags = ['-std=gnu11', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function']
     if os.environ.get('POLICY_SANITIZE') == '1':
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
-    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(c), '-o', str(exe)], check=True)
+    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(c), *cj, '-o', str(exe)], check=True)
     out = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
     print(out.stdout.strip())
     if out.returncode:

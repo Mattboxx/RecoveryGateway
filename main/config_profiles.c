@@ -7,6 +7,7 @@
 #include "health_monitor.h"
 #include "history.h"
 #include "tailnet_names.h"
+#include "ap_traffic.h"
 #include "json_guard.h"
 #include "nvs.h"
 #include "nvs_params.h"
@@ -22,7 +23,7 @@
 typedef struct {
     uint32_t magic, version;
     uint8_t active, previous, has_backup, applied_mask;
-    uint8_t previous_values[PK_COUNT], reserved[8 - PK_COUNT];
+    uint8_t previous_values[8];   /* PK_COUNT used; older records have zeros after their keys */
     uint32_t generation, checksum;
 } profile_record_t;
 /* Platform hooks; the core below is also compiled against host fixtures. */
@@ -34,19 +35,35 @@ static esp_err_t record_save(const profile_record_t *r);
 
 static profile_record_t record;
 static const char *const profile_names[PROFILE_COUNT] =
-    {"none", "gateway", "recovery", "iot", "monitoring", "advanced"};
+    {"none", "gateway", "recovery", "iot", "monitoring", "advanced", "lan-tailnet", "home-assistant"};
 static const char *const key_names[PK_COUNT] =
     {"device_monitoring", "service_expiry_notifications", "health_monitor",
-     "event_history", "trends", "settings_copy_before_update", "tailnet_names"};
+     "event_history", "trends", "settings_copy_before_update", "tailnet_names",
+     "ap_client_traffic"};
 /* Only low-risk, local switches: nothing here opens access or sends data
- * anywhere (notification channels and routes stay as configured). */
+ * anywhere (notification channels, routes, listeners and uplinks stay as
+ * configured; those are the guided steps of each profile). */
 static const uint8_t profile_wants[PROFILE_COUNT] = {
-    [PROFILE_GATEWAY] = 1u << PK_LEASE_NOTIFY | 1u << PK_SNAPSHOTS,
+    [PROFILE_GATEWAY] = 1u << PK_LEASE_NOTIFY | 1u << PK_SNAPSHOTS | 1u << PK_HIST_EVENTS,
     [PROFILE_RECOVERY] = 1u << PK_OPS_MONITORING | 1u << PK_HIST_EVENTS,
-    [PROFILE_IOT] = 1u << PK_TAILNET_NAMES,
+    [PROFILE_IOT] = 1u << PK_TAILNET_NAMES | 1u << PK_AP_TRAFFIC | 1u << PK_HIST_EVENTS,
     [PROFILE_MONITORING] = 1u << PK_OPS_MONITORING | 1u << PK_HEALTH | 1u << PK_HIST_EVENTS | 1u << PK_HIST_TRENDS,
+    [PROFILE_LAN_TAILNET] = 1u << PK_LEASE_NOTIFY | 1u << PK_SNAPSHOTS | 1u << PK_HIST_EVENTS,
+    [PROFILE_HOME_ASSISTANT] = 1u << PK_OPS_MONITORING | 1u << PK_HIST_EVENTS | 1u << PK_SNAPSHOTS,
 };
 _Static_assert(PK_COUNT <= 8, "profile record holds 8 values");
+/* First-boot goals (first_boot.c "roles") and the profile of each. */
+static const struct {const char *role; profile_id_t profile;} setup_roles[] = {
+    {"lan-tailnet", PROFILE_LAN_TAILNET}, {"subnet-router", PROFILE_GATEWAY}, {"iot-ap", PROFILE_IOT},
+    {"wol", PROFILE_RECOVERY}, {"home-assistant", PROFILE_HOME_ASSISTANT}, {"monitoring", PROFILE_MONITORING},
+    {"advanced", PROFILE_ADVANCED}};
+
+profile_id_t config_profile_for_setup_role(const char *role)
+{
+    for (unsigned i = 0; role && i < sizeof setup_roles / sizeof setup_roles[0]; i++)
+        if (!strcmp(role, setup_roles[i].role)) return setup_roles[i].profile;
+    return PROFILE_NONE;
+}
 
 const char *config_profile_name(profile_id_t profile)
 {
@@ -77,8 +94,8 @@ static bool record_valid(const profile_record_t *r)
     if (r->magic != PROFILE_MAGIC || r->version != 1 || r->checksum != record_checksum(r)
         || r->active >= PROFILE_COUNT || r->previous >= PROFILE_COUNT
         || r->has_backup > 1 || r->applied_mask >> PK_COUNT) return false;
-    for (unsigned k = 0; k < PK_COUNT; k++) if (r->previous_values[k] > 1) return false;
-    for (unsigned i = 0; i < sizeof r->reserved; i++) if (r->reserved[i]) return false;
+    for (unsigned k = 0; k < sizeof r->previous_values; k++)
+        if (r->previous_values[k] > (k < PK_COUNT ? 1 : 0)) return false;
     return true;
 }
 
@@ -135,7 +152,7 @@ static esp_err_t apply_locked(profile_id_t profile, uint32_t token, profile_resu
     next.active = (uint8_t)profile;
     next.has_backup = 1;
     next.applied_mask = plan.change_mask;
-    memcpy(next.previous_values, current.value, sizeof next.previous_values);
+    memcpy(next.previous_values, current.value, sizeof current.value);
     next.generation = record.generation + 1;
     esp_err_t err = save_record(&next);
     if (err != ESP_OK) return err;               /* nothing changed yet */
@@ -228,6 +245,7 @@ static bool values_read(profile_values_t *out)
     out->value[PK_HIST_TRENDS] = metrics;
     out->value[PK_SNAPSHOTS] = snapshots;
     out->value[PK_TAILNET_NAMES] = names;
+    out->value[PK_AP_TRAFFIC] = ap_traffic_on ? 1 : 0;
     return true;
 }
 
@@ -245,6 +263,7 @@ static esp_err_t value_write(profile_key_t key, uint8_t value)
         tailnet_names_get(&names, &lan);
         return tailnet_names_set(value != 0, lan);       /* the LAN listener keeps its own choice */
     }
+    if (key == PK_AP_TRAFFIC) return ap_traffic_set(value != 0);
     ops_settings_t settings;
     homelab_ops_settings(&settings);
     if (key == PK_OPS_MONITORING) settings.monitoring = value;
@@ -299,26 +318,49 @@ void config_profiles_status(profile_id_t *active, bool *rollback_available)
 }
 
 /* --- HTTP --- */
+/* Shown in the order of the first-boot goals. */
+static const profile_id_t display_order[] = {
+    PROFILE_LAN_TAILNET, PROFILE_GATEWAY, PROFILE_IOT, PROFILE_RECOVERY,
+    PROFILE_HOME_ASSISTANT, PROFILE_MONITORING, PROFILE_ADVANCED};
+_Static_assert(sizeof display_order / sizeof display_order[0] == PROFILE_COUNT - 1, "every profile is shown");
 static const char *const profile_titles[PROFILE_COUNT] = {
-    "No profile", "Gateway", "Recovery", "IoT", "Monitoring", "Advanced"};
+    [PROFILE_NONE] = "No profile", [PROFILE_GATEWAY] = "Subnet router and remote access",
+    [PROFILE_RECOVERY] = "Wake-on-LAN and recovery", [PROFILE_IOT] = "IoT Wi-Fi gateway",
+    [PROFILE_MONITORING] = "Monitoring", [PROFILE_ADVANCED] = "Advanced",
+    [PROFILE_LAN_TAILNET] = "LAN → Tailnet services", [PROFILE_HOME_ASSISTANT] = "Home Assistant"};
 static const char *const profile_summaries[PROFILE_COUNT] = {
-    "Settings are exactly as configured.",
-    "Routing, subnet and remote access. Turns on expiry notifications for temporary service rules and a settings copy before each firmware update.",
-    "Wake-on-LAN, Smart Recovery and device control. Turns on device reachability monitoring and the event history.",
-    "Devices without a Tailscale client behind the AP gateway, with integrations. Turns on tailnet names for the gateway's Wi-Fi clients.",
-    "Monitoring and diagnostics first. Turns on device monitoring, the Health Monitor worker, the event history and trends.",
-    "Full configuration access. Changes nothing automatically."};
-static const char *const profile_steps[PROFILE_COUNT][3] = {
-    [PROFILE_GATEWAY] = {"Advertise subnet routes or exit node in the Tailscale tab, then approve them in your admin console.",
-                         "Add LAN to Tailnet rules in the Service Gateway; new rules start disabled.", NULL},
+    [PROFILE_NONE] = "Settings are exactly as configured.",
+    [PROFILE_GATEWAY] = "Tailnet devices reach your home network (subnet routes) or use this gateway as an exit node. Turns on expiry notifications for temporary rules, a settings copy before each firmware update and the event history.",
+    [PROFILE_RECOVERY] = "Wake-on-LAN, Smart Recovery and device control, also from Telegram or ntfy without the tailnet. Turns on device reachability monitoring and the event history.",
+    [PROFILE_IOT] = "Devices without a Tailscale client on the gateway's own Wi-Fi. Turns on tailnet names for them, traffic counting per device and the event history.",
+    [PROFILE_MONITORING] = "Monitoring and diagnostics first. Turns on device monitoring, the Health Monitor worker, the event history and trends.",
+    [PROFILE_ADVANCED] = "Full configuration access. Changes nothing automatically.",
+    [PROFILE_LAN_TAILNET] = "Devices of your home network use chosen tailnet services through this gateway, without a Tailscale client. Turns on expiry notifications for rules with a time limit, a settings copy before each firmware update and the event history.",
+    [PROFILE_HOME_ASSISTANT] = "Gateway, devices and recovery in Home Assistant over MQTT. Turns on device monitoring, the event history and a settings copy before each firmware update."};
+#define PROFILE_STEPS 4
+static const char *const profile_steps[PROFILE_COUNT][PROFILE_STEPS] = {
+    [PROFILE_GATEWAY] = {"Tailscale: advertise your home subnet or offer this gateway as an exit node, then approve it in the admin console.",
+                         "Optionally share the access point network with the tailnet (Tailscale page).",
+                         "System → Access: optionally limit administration to the tailnet and the access point.",
+                         "Headscale with a private CA: paste its certificate under Login server certificate."},
     [PROFILE_RECOVERY] = {"Add devices with MAC and target in Devices & Recovery.",
-                          "Optionally configure ntfy, Telegram, email or MQTT for recovery results.", NULL},
-    [PROFILE_IOT] = {"Enable the AP gateway and review AP-side forwarding rules.",
-                     "Configure MQTT and Home Assistant Discovery for device integrations.", NULL},
+                          "Choose where results go: ntfy, Telegram, email or MQTT (Automation).",
+                          "Optionally add a backup uplink: Ethernet, a USB modem or a SIM (Network).", NULL},
+    [PROFILE_IOT] = {"Network: turn on the access point with a strong password and review AP-side forwarding.",
+                     "Optionally let AP devices resolve tailnet names through the DNS relay (Tailscale page).",
+                     "Optionally share the access point network with the tailnet (Tailscale page).", NULL},
     [PROFILE_MONITORING] = {"Configure Health Monitor targets (gateway, DNS, Internet, Tailnet).",
                             "Health checks are light TCP/DNS probes; they never change routing.",
-                            "Choose where alerts go in Automation: ntfy, Telegram or email."},
-    [PROFILE_ADVANCED] = {"All settings remain available in every profile.", NULL, NULL}};
+                            "Choose where alerts go in Automation: ntfy, Telegram or email.",
+                            "Optionally record the log on a microSD card (Diagnostics)."},
+    [PROFILE_ADVANCED] = {"All settings remain available in every profile.", NULL, NULL, NULL},
+    [PROFILE_LAN_TAILNET] = {"Network → LAN → Tailnet: add a rule with the service address and port, a port on the gateway and the allowed LAN devices (up to 5, or a subnet).",
+                             "Press Test destination, then switch the rule on; choose a time limit for temporary access.",
+                             "Your tailnet ACL must allow this gateway to reach the service.",
+                             "Sharing one service with another network: see docs/SERVICE-GATEWAY.md."},
+    [PROFILE_HOME_ASSISTANT] = {"Automation → MQTT: enter the broker and turn on Home Assistant Discovery.",
+                                "Add devices to monitor or wake in Devices & Recovery; they appear as entities.",
+                                "Optionally allow recovery commands over MQTT (Automation).", NULL}};
 
 static esp_err_t send_json(httpd_req_t *req, cJSON *root)
 {
@@ -361,7 +403,8 @@ static cJSON *snapshot(profile_id_t preview, esp_err_t *err)
         && cJSON_AddBoolToObject(root, "rollback_available", r.has_backup)
         && cJSON_AddStringToObject(root, "rollback_to", profile_names[r.has_backup ? r.previous : r.active])
         && add_keys(root, "rollback_restores", r.has_backup ? r.applied_mask : 0);
-    for (unsigned i = PROFILE_GATEWAY; ok && i < PROFILE_COUNT; i++) {
+    for (unsigned n = 0; ok && n < sizeof display_order / sizeof display_order[0]; n++) {
+        unsigned i = display_order[n];
         cJSON *item = cJSON_CreateObject();
         if (!item || !cJSON_AddItemToArray(list, item)) {cJSON_Delete(item); ok = false; break;}
         ok = cJSON_AddStringToObject(item, "id", profile_names[i])
@@ -386,9 +429,18 @@ static cJSON *snapshot(profile_id_t preview, esp_err_t *err)
                 && cJSON_AddBoolToObject(c, "proposed", true)
                 && cJSON_AddStringToObject(c, "change", plan.change_mask >> k & 1 ? "enable" : "unchanged");
         }
-        for (unsigned i = 0; ok && i < 3 && profile_steps[preview][i]; i++)
+        for (unsigned i = 0; ok && i < PROFILE_STEPS && profile_steps[preview][i]; i++)
             ok = cJSON_AddItemToArray(steps, cJSON_CreateString(profile_steps[preview][i]));
     }
+    /* Profiles of the goals chosen at first boot, as a suggestion. */
+    cJSON *rec = ok ? cJSON_AddArrayToObject(root, "setup_recommended") : NULL;
+    ok = ok && rec;
+    char *roles = ok ? nvs_param_get_str("ui_roles") : NULL;
+    for (char *save = NULL, *t = roles ? strtok_r(roles, ",", &save) : NULL; ok && t; t = strtok_r(NULL, ",", &save)) {
+        profile_id_t p = config_profile_for_setup_role(t);
+        if (p != PROFILE_NONE) ok = cJSON_AddItemToArray(rec, cJSON_CreateString(profile_names[p]));
+    }
+    free(roles);
     if (!ok) {cJSON_Delete(root); *err = ESP_ERR_NO_MEM; return NULL;}
     return root;
 }

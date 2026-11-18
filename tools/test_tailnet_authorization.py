@@ -227,7 +227,7 @@ static void ownership(void) {
 }
 /* Every array of the policy allocation is 16-byte aligned for any number of
  * rules, peers and prefixes: with an odd rule count the peer table started on
- * a 2-byte boundary (106-byte rules), a LoadStoreAlignment restart on the
+ * a 2-byte boundary (106-byte rules at the time), a LoadStoreAlignment restart on the
  * ESP32-S3 and undefined behaviour on the host. */
 static void layout_alignment(void) {
     for (uint32_t e=0;e<9;e++) for (uint32_t pc=1;pc<4;pc++) for (uint32_t pool=1;pool<4;pool++) for (int ix=0;ix<2;ix++) {
@@ -501,27 +501,151 @@ static void session_maps(void) {
     puts("PASS: first map of a session complete without Peers/PacketFilter (empty tailnet, reconnect alone, join), never assumed for deltas or OmitPeers, consumed once");
     ml_policy_reset();
 }
-/* "cap:<name>" sources (node-capability match, capver >= 109) admit nobody
- * here and no longer refuse the whole policy. */
+/* Node IDs above 2^53 (int64 on the wire; new Tailscale nodes have them):
+ * read exactly, also in PeersRemoved and PeersChangedPatch; two IDs that
+ * share one double stay two peers; an ID read from an unscanned message (a
+ * rounded double) or a token of another message is refused, never guessed. */
+static bool apply_scanned(const char *s) {
+    size_t sl=strlen(s);char *t=malloc(sl+1);assert(t);memcpy(t,s,sl+1);assert(ml_json_ids_scan(t,sl));
+    cJSON *v=cJSON_Parse(t);assert(v);bool ok=ml_policy_apply(v);cJSON_Delete(v);free(t);return ok;
+}
+#define BIG_A "{\"ID\":9223372036854775801,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"]}"
+#define BIG_B "{\"ID\":9223372036854775802,\"Key\":\"" KEY_B "\",\"Addresses\":[\"100.64.0.2/32\"]}"
+static void large_ids(void) {
+    ml_policy_reset();
+    /* 9223372036854775801 and ...802 round to the same double. */
+    assert((double)9223372036854775801ULL==(double)9223372036854775802ULL);
+    assert(apply_scanned("{" NODE ",\"Peers\":[" BIG_A "," BIG_B "],\"PacketFilter\":[" ALL_RULE "]}"));
+    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready);
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    uint8_t k[32];
+    assert(ml_policy_peer_key(9223372036854775801ULL,k)==1&&!memcmp(k,key_a,32));
+    assert(ml_policy_peer_key(9223372036854775802ULL,k)==1&&!memcmp(k,key_b,32));
+    /* A removal names exactly one of them. */
+    assert(apply_scanned("{\"PeersRemoved\":[9223372036854775802]}"));
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&!rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    assert(ml_policy_peer_key(9223372036854775802ULL,k)!=1&&ml_policy_peer_key(9223372036854775801ULL,k)==1);
+    /* A patch with the exact ID (expired key) reaches only that peer. */
+    assert(apply_scanned("{\"PeersChanged\":[" BIG_B "]}"));
+    assert(apply_scanned("{\"PeersChangedPatch\":[{\"NodeID\":9223372036854775801,\"KeyExpiry\":\"2001-01-01T00:00:00Z\"}]}"));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    /* Unscanned (rounded) large IDs are refused, as before. */
+    ml_json_ids_clear();ml_policy_reset();
+    assert(!apply("{" NODE ",\"Peers\":[" BIG_A "],\"PacketFilter\":[" ALL_RULE "]}"));
+    /* Typical new Tailscale IDs just above 2^53. */
+    ml_policy_reset();
+    assert(apply_scanned("{" NODE ",\"Peers\":[{\"ID\":9007199254740993,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"]},"
+                         "{\"ID\":9007199254740992,\"Key\":\"" KEY_B "\",\"Addresses\":[\"100.64.0.2/32\"]}],\"PacketFilter\":[" ALL_RULE "]}"));
+    assert(ml_policy_peer_key(9007199254740993ULL,k)==1&&!memcmp(k,key_a,32)&&ml_policy_peer_key(9007199254740992ULL,k)==1&&!memcmp(k,key_b,32));
+    /* Scanner: only integers of 16+ digits outside strings become tokens,
+     * text length unchanged, still valid JSON; floats, exponents, strings,
+     * short and out-of-range numbers are left alone. */
+    const char *src="{\"a\":\"9007199254740993\",\"b\":9007199254740993.5,\"c\":9007199254740993e0,\"d\":123,"
+                    "\"e\":99999999999999999999,\"f\":\"x\\\"9007199254740995\",\"g\":[ 9007199254740997 ,18446744073709551615],"
+                    "\"h\":1234567890123456}";
+    size_t n0=strlen(src);char *t=malloc(n0+1);assert(t);memcpy(t,src,n0+1);assert(ml_json_ids_scan(t,n0)&&strlen(t)==n0);
+    assert(strstr(t,"\"a\":\"9007199254740993\"")&&strstr(t,"9007199254740993.5")&&strstr(t,"9007199254740993e0")
+           &&strstr(t,"99999999999999999999")&&strstr(t,"x\\\"9007199254740995")&&!strstr(t,"9007199254740997")&&!strstr(t,"1234567890123456"));
+    cJSON *j=cJSON_Parse(t);assert(j);uint64_t out;
+    assert(ml_json_u64(cJSON_GetObjectItem(j,"d"),INT64_MAX,&out)&&out==123);
+    cJSON *g=cJSON_GetObjectItem(j,"g");
+    assert(ml_json_u64(cJSON_GetArrayItem(g,0),INT64_MAX,&out)&&out==9007199254740997ULL);
+    assert(!ml_json_u64(cJSON_GetArrayItem(g,1),INT64_MAX,&out)&&ml_json_u64(cJSON_GetArrayItem(g,1),UINT64_MAX,&out)&&out==UINT64_MAX);
+    assert(ml_json_u64(cJSON_GetObjectItem(j,"h"),INT64_MAX,&out)&&out==1234567890123456ULL);
+    assert(!ml_json_u64(cJSON_GetObjectItem(j,"b"),INT64_MAX,&out)&&!ml_json_u64(cJSON_GetObjectItem(j,"c"),INT64_MAX,&out));
+    assert(!ml_json_u64(cJSON_GetObjectItem(j,"e"),UINT64_MAX,&out)&&!ml_json_u64(cJSON_GetObjectItem(j,"a"),INT64_MAX,&out));
+    /* A token is valid only for the message it came from. */
+    cJSON *tok=cJSON_Duplicate(cJSON_GetArrayItem(g,0),0);
+    ml_json_ids_clear();assert(!ml_json_u64(tok,INT64_MAX,&out));
+    cJSON *neg=cJSON_CreateNumber(-5);assert(!ml_json_u64(neg,INT64_MAX,&out));
+    cJSON_Delete(tok);cJSON_Delete(neg);cJSON_Delete(j);free(t);
+    ml_json_ids_clear();
+    puts("PASS: node IDs above 2^53 exact (peers, removals, patches), IDs sharing one double kept apart, rounded or foreign IDs refused, JSON rewritten in place");
+    ml_policy_reset();
+}
+/* "cap:<name>" sources (node-capability match, capver >= 109): packets from
+ * a tailnet address of a peer holding that capability (CapMap key or legacy
+ * Capabilities entry); not from a subnet route behind it, not from peers
+ * without it; a patched CapMap replaces the old one; at most 8 kept (the
+ * smallest hashes, so admitting less, never more); wrong shapes refused. */
+#define CAP_RULES ",\"PacketFilter\":[{\"SrcIPs\":[\"cap:example.com/cap/posture\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":22,\"Last\":22}}]}," \
+    "{\"SrcIPs\":[\"100.64.0.1\",\"cap:other\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"100.64.0.10\",\"Ports\":{\"First\":80,\"Last\":80}}]}]}"
+#define PEER_A_CAP "{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\",\"198.51.100.0/24\"]," \
+    "\"CapMap\":{\"example.com/cap/posture\":[{\"x\":1}],\"funnel\":null}}"
+#define PEER_B_LEGACY "{\"ID\":2,\"Key\":\"" KEY_B "\",\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Capabilities\":[\"other\"]}"
 static void cap_sources(void) {
     ml_policy_reset();
-    assert(apply("{" NODE "," PEER_LIST ",\"PacketFilter\":[{\"SrcIPs\":[\"cap:example.com/cap/posture\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":22,\"Last\":22}}]},"
-                 "{\"SrcIPs\":[\"100.64.0.1\",\"cap:other\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"100.64.0.10\",\"Ports\":{\"First\":80,\"Last\":80}}]}]}"));
-    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready&&st.expanded_rules==1);
-    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
-    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));      /* the cap: rule admits nobody */
-    assert(!rx(4,6,"100.64.0.2","100.64.0.10",40000,22,2,key_b));
-    puts("PASS: cap: sources match nobody, the rest of the policy applies (no whole-policy refusal)");
+    assert(apply("{" NODE ",\"Peers\":[" PEER_A_CAP "," PEER_B_LEGACY "]" CAP_RULES));
+    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready&&st.expanded_rules==3);
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));        /* A holds posture (CapMap) */
+    assert(rx(6,6,"fd7a:115c:a1e0::1","fd7a:115c:a1e0::10",40000,22,2,key_a));
+    assert(!rx(4,6,"198.51.100.7","100.64.0.10",40000,22,2,key_a));     /* a subnet behind A: not A's address */
+    assert(!rx(4,17,"100.64.0.1","100.64.0.10",40000,22,2,key_a));      /* protocol still checked */
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,23,2,key_a));       /* port still checked */
+    assert(!rx(4,6,"100.64.0.2","100.64.0.10",40000,22,2,key_b));       /* B lacks posture */
+    assert(rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));        /* B: legacy "other" */
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));        /* A by address */
+    assert(!rx(4,6,"100.64.0.2","100.64.0.10",40000,22,2,key_a));       /* B's address with A's key: ownership first */
+    /* A patch with a CapMap replaces it: posture gone, nothing else changes. */
+    assert(apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"CapMap\":{\"funnel\":[]}}]}"));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    assert(rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    /* A patch without CapMap keeps it; PeersChanged with it back restores it. */
+    assert(apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"KeyExpiry\":\"2099-01-01T00:00:00Z\"}]}"));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    assert(apply("{\"PeersChanged\":[" PEER_A_CAP "]}"));
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    /* Rules replaced without peers resent: the capabilities stay known. */
+    assert(apply("{\"PacketFilter\":[{\"SrcIPs\":[\"cap:funnel\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}]}]}"));
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,443,2,key_a)&&!rx(4,6,"100.64.0.2","100.64.0.10",40000,443,2,key_b));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    /* More than 8 capabilities: 8 kept, whichever order they come in. */
+    {
+        char map[4096],caps[2048]="";
+        for (unsigned i=0;i<12;i++) {char one[48];snprintf(one,sizeof one,"%s\"c%u\":null",i?",":"",i);strcat(caps,one);}
+        snprintf(map,sizeof map,"{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"CapMap\":{%s}}],"
+                 "\"PacketFilter\":[{\"SrcIPs\":[\"cap:c0\",\"cap:c1\",\"cap:c2\",\"cap:c3\",\"cap:c4\",\"cap:c5\",\"cap:c6\",\"cap:c7\",\"cap:c8\",\"cap:c9\",\"cap:c10\",\"cap:c11\"],"
+                 "\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}]}]}",caps);
+        assert(apply(map));
+        assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,443,2,key_a));
+        unsigned admitted=0;
+        for (unsigned i=0;i<12;i++) {
+            char one[512];snprintf(one,sizeof one,"{\"PacketFilter\":[{\"SrcIPs\":[\"cap:c%u\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}]}]}",i);
+            assert(apply(one));admitted+=rx(4,6,"100.64.0.1","100.64.0.10",40000,443,2,key_a);
+        }
+        assert(admitted==8);
+        const policy *q=current;assert(q);
+        for (uint32_t i=0;i<q->peer_count;i++) if (q->peers[i].active && q->peers[i].id==1) {
+            assert(q->peers[i].cap_count==8);
+            for (unsigned k=1;k<8;k++) assert(q->peers[i].caps[k-1]<q->peers[i].caps[k]);
+        }
+    }
+    /* Wrong shapes are refused (authority withdrawn until a valid map). */
+    const char *bad[]={
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"CapMap\":[\"x\"]}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"CapMap\":{\"\":null}}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"Capabilities\":\"x\"}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"Capabilities\":[1]}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"capmap\":{}}]}",
+        "{\"PeersChangedPatch\":[{\"NodeID\":1,\"CapMap\":\"x\"}]}",
+        "{\"PacketFilter\":[{\"SrcIPs\":[\"cap:\"],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":1,\"Last\":1}}]}]}",
+    };
+    for (unsigned i=0;i<sizeof bad/sizeof bad[0];i++) {
+        assert(apply("{" NODE ",\"Peers\":[" PEER_A_CAP "," PEER_B_LEGACY "]" CAP_RULES));
+        assert(!apply(bad[i]));
+        assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    }
+    puts("PASS: cap: sources: CapMap and legacy capabilities, tailnet addresses only, patch replaces, rules replaced alone, 8 kept deterministically, wrong shapes refused");
     ml_policy_reset();
 }
 int main(void) {
-    layout_alignment();peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();cap_sources();concurrency();
+    layout_alignment();peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();large_ids();cap_sources();concurrency();
     printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); rules, peers, prefixes sized by the map (%zu, %zu, %zu bytes each) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),sizeof(entry),sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
 }
 '''
 
 # Same translation unit exposes implementation sizes/helpers, not a reimplementation.
-PROGRAM = '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n' + HEAD + BODY
+PROGRAM = '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n' + HEAD + BODY
 wg_source=(ML/'components/wireguard_lwip/src/wireguardif.c').read_text(encoding='utf-8')
 # The receive path carries test-only profiling macros (empty unless TSR_PERF_PROFILE).
 # The receive path's saturation counter lives outside this function (tested in forward_drop_counters).
@@ -654,7 +778,7 @@ with tempfile.TemporaryDirectory(prefix='tailnet-authorization-') as directory:
         if os.environ.get('POLICY_NO_PIE') == '1' and os.name != 'nt':
             flags += ['-fno-pie', '-no-pie']
     binary = path / ('test.exe' if os.name == 'nt' else 'test')
-    for program in (PROGRAM, '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+HEAD+WG_FIXTURE+wg_receive+WG_TESTS):
+    for program in (PROGRAM, '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n'+HEAD+WG_FIXTURE+wg_receive+WG_TESTS):
         (path/'test.c').write_text(program,encoding='utf-8')
         subprocess.run([os.environ.get('CC','gcc'), *flags, '-Wno-unused-function', str(path/'test.c'), '-o',str(binary), *libs], check=True)
         with (path/'run.log').open('w+b') as log:
@@ -671,6 +795,8 @@ with tempfile.TemporaryDirectory(prefix='tailnet-authorization-') as directory:
 coord=(ML/'src/ml_coord.c').read_text(encoding='utf-8')
 wg=(ML/'components/wireguard_lwip/src/wireguardif.c').read_text(encoding='utf-8')
 assert 'apply_peer_map(ml,map_json)' in coord and 'apply_peer_map(ml,update_json)' in coord
+assert coord.index('ml_json_ids_scan(parse_start, parse_len)') < coord.index('cJSON *map_json = cJSON_Parse(parse_start);')
+assert coord.index('ml_json_ids_scan(ps, size)') < coord.index('cJSON *update_json = cJSON_Parse(ps);')   # exact node IDs before every map parse
 apply_map=coord[coord.index('static bool apply_peer_map('):].split('\n}',1)[0]
 assert apply_map.index('ml_policy_apply(map)') < apply_map.index('parse_peers_from_map_response(ml,map)')
 assert 'ml_policy_reset()' in apply_map

@@ -282,7 +282,7 @@ int main(int argc,char **argv){assert(argc==2);(void)key_a;(void)key_b;
 }
 '''
 
-program='#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+HEAD+finders+SINK+remove+prune+fill+process+parser+apply_map+TESTS
+program='#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n'+constant('HEAD')+HEAD+finders+SINK+remove+prune+fill+process+parser+apply_map+TESTS
 with tempfile.TemporaryDirectory(prefix='peer-convergence-') as directory:
     path=Path(directory);(path/'lwip').mkdir();(path/'lwip/pbuf.h').write_text(constant('PBUF'),encoding='utf-8');(path/'test.c').write_text(program,encoding='utf-8')
     flags=['-std=c11','-pthread','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-misleading-indentation','-O1','-g',

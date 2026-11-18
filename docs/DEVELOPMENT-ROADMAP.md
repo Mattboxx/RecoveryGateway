@@ -255,6 +255,65 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
    Telegram/SMTP/DuckDNS/Cloudflare accounts, DNS clients, throughput).
 7. Everything already planned stays planned (this roadmap, F01–F49).
 
+## 3.0.26 and later — Tailnet reach (owner decision, 2026-11-18)
+
+Owner: "procedi in tutti i punti" after the 3.0.25 review
+(docs/TAILNET-ACCESS-AUDIT.md). In progress for 3.0.26: private CA for HTTPS
+login servers and custom DERP relays, first connection without DNS, `cap:`
+ACL sources from peer capabilities, a second auxiliary relay, IPv6 tailnet
+addresses, several source addresses per LAN → Tailnet rule with a guide for
+sharing one service with another network, a dated pre-crash log, and the
+MicroLink UDP helpers on the TCPIP thread. Device tests still owed: Leave
+tailnet, relay to another region, USB uplinks.
+
+Status 2026-11-18 (3.0.26-beta.1): done with host tests — private CA,
+bootstrap DNS, `cap:` sources, two auxiliary relays, five sources per rule
+and the guide, dated pre-crash log, UDP helpers/zero-copy. **Deferred: IPv6
+tailnet addresses.** It changes the WireGuard data path on every packet
+(IPv6 address on the tunnel interface, IPv6 output and peer lookup,
+cryptokey source check for IPv6, ICMPv6), so it needs a device A/B for speed
+and loss (owner priority: speed first) and a second real client with IPv6.
+Nearest alternative today: the peer's 100.x address. Next step: a separate
+beta with that change OFF by default and an A/B on board A.
+
+**Next version (owner, 2026-11-18): configuration profiles brought up to
+date.** Owner: "per la prossima versione metti anche in conto di aggiornare
+tutti i profili di configurazione in base anche al setup iniziale e tutti i
+tipi di configurazione aggiunti fino ad ora". Today the profiles
+(`main/config_profiles.c`: gateway, recovery, iot, monitoring, advanced)
+switch only 7 low-risk local settings (record limit 8) and predate the
+first-boot goal choices (`ui_roles`) and most later settings.
+
+To do:
+- align each profile with the first-boot goals;
+- review every setting type added since: USB/cellular/Ethernet uplinks,
+  DNS relay and tailnet names, admin scope, AP options, notification
+  channels, microSD log, LAN → Tailnet time limits, the login server
+  certificate and others;
+- widen the record with a versioned migration;
+- keep the rule that a profile never opens access or sends data anywhere on
+  its own: those become guided steps, not switches;
+- update the preview/rollback, the UI and the tests.
+
+Status 2026-11-18 (branch `feat/profiles-20261118`, for the release after
+3.0.26-beta.1): seven profiles, one per first-boot goal (new: `lan-tailnet`,
+`home-assistant`), shown in the goal order and marked when chosen at setup
+(`setup_recommended`). The 8th local switch is the traffic count per access
+point device. Every profile has up-to-date guided steps (uplinks, time limits,
+share-a-service guide, login server certificate, admin scope, microSD). The
+record keeps its layout: 8 value bytes, so the 7-key records of 3.0.25 read
+unchanged and no migration is needed. Host core/API tests and browser
+scenarios pass; device check pending.
+
+**Deferred, low priority (owner: "ci penseremo in futuro se mi contatteranno
+persone interessate"): very large tailnets.** One map response must fit the
+768 KB buffer (about 250-500 peers in an official map), parsed whole by cJSON.
+The fix is a streaming parser that reads the Peers list one peer at a time
+into the policy and peer tables (PSRAM), so the limit becomes the tables, not
+the text. Nearest alternative today: keep the tailnet under that size or
+reduce what the gateway sees with ACLs. Start only if users with such
+tailnets ask.
+
 ## Overall stabilization — mandatory, not a feature-cut milestone
 
 **F33–F37/F41:** full regression/load/soak, measured resources/performance,

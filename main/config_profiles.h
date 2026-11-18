@@ -12,9 +12,12 @@
 #include "esp_err.h"
 #include "esp_http_server.h"
 
+/* Ids are stored in the saved record: new profiles are only appended. Each
+ * matches a goal of the first-boot setup (ui_roles). */
 typedef enum {
     PROFILE_NONE, PROFILE_GATEWAY, PROFILE_RECOVERY, PROFILE_IOT,
-    PROFILE_MONITORING, PROFILE_ADVANCED, PROFILE_COUNT
+    PROFILE_MONITORING, PROFILE_ADVANCED, PROFILE_LAN_TAILNET, PROFILE_HOME_ASSISTANT,
+    PROFILE_COUNT
 } profile_id_t;
 
 /* Settings a profile may switch ON (never OFF). */
@@ -23,7 +26,7 @@ typedef enum {
 /* At most 8 keys: the saved record keeps a value per key in a fixed 8-byte
  * area, so older records (fewer keys, zeros after them) stay valid. */
 typedef enum {PK_OPS_MONITORING, PK_LEASE_NOTIFY, PK_HEALTH, PK_HIST_EVENTS, PK_HIST_TRENDS,
-              PK_SNAPSHOTS, PK_TAILNET_NAMES, PK_COUNT} profile_key_t;
+              PK_SNAPSHOTS, PK_TAILNET_NAMES, PK_AP_TRAFFIC, PK_COUNT} profile_key_t;
 
 typedef struct {uint8_t value[PK_COUNT];} profile_values_t;
 
@@ -51,3 +54,6 @@ esp_err_t config_profiles_rollback(profile_result_t *out);
 esp_err_t config_profiles_register_http(httpd_handle_t server);
 /* Active profile and whether one rollback level is available. */
 void config_profiles_status(profile_id_t *active, bool *rollback_available);
+/* The profile that matches a first-boot goal id (ui_roles), PROFILE_NONE if
+ * none does. */
+profile_id_t config_profile_for_setup_role(const char *role);

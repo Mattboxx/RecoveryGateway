@@ -119,7 +119,8 @@ async function fixture(browser, options = {}) {
         else {status=input.action==='rollback'?404:409;body={ok:false,error:'rejected'};}
       } else {
         const preview=url.searchParams.get('preview');
-        body={schema:1,active:state.profileActive,rollback_available:!!state.profileRollback,rollback_to:'none',rollback_restores:[],profiles};
+        body={schema:1,active:state.profileActive,rollback_available:!!state.profileRollback,rollback_to:'none',rollback_restores:[],profiles,
+          setup_recommended:state.profileRecommended||[]};
         if(preview)body.preview={profile:preview,token:state.profileToken,disables_anything:false,changes_network_exposure:false,
           changes:preview==='monitoring'?[{setting:'device_monitoring',current:false,proposed:true,change:'enable'},{setting:'health_monitor',current:true,proposed:true,change:'unchanged'}]:[],
           manual_steps:['Fixture manual step']};
@@ -157,11 +158,20 @@ async function fixture(browser, options = {}) {
       else {status=202;body={ok:true,state:'pending'};
         const rule=(state.forwardBody.rules||[]).find(r=>r.index===input.index&&r.rule_token===input.rule_token);
         if(rule)rule.destination_check={state:'reachable',summary:'This gateway completed a TCP handshake with the Tailnet destination',next_step:'Enable the rule, then connect from an allowed LAN client',checked_ip:'100.64.0.9',latency_ms:42,age_s:0};}
+    } else if (url.pathname === '/api/log/precrash') {
+      body = state.precrashBody || {have: false, size: 0, boot_ms: 0, text: ''};
     } else if (url.pathname === '/api/log/raw') {
       const since = Number(url.searchParams.get('since') || 0);
       const data = state.logData || '';
       body = {seq: data.length, lost: false, size: data.length, cap: 16384, boot_ms: state.logBootMs || 0,
         data: data.substring(Math.min(since, data.length))};
+    } else if (url.pathname === '/api/tailscale/ca') {
+      const pem = route.request().postDataJSON().pem;
+      state.caPosts = (state.caPosts || []).concat([pem]);
+      if (state.caLocked) status = 403;
+      else if (pem && !pem.includes('-----END CERTIFICATE-----')) { status = 400; body = 'not a usable certificate'; }
+      else body = pem ? {ok: true, set: true, certificates: 1, fingerprint: 'ab'.repeat(32), subject: 'CN=Private Root', restart_required: true}
+                      : {ok: true, set: false, certificates: 0, restart_required: true};
     } else if (url.pathname === '/api/tailscale/leave') {
       state.leaveCalls = (state.leaveCalls || 0) + 1;
       body = {ok: true, server: state.leaveServer || 'logged_out'};
@@ -941,6 +951,20 @@ async function main() {
     await f.page.waitForFunction(() => document.getElementById('ts-page-badge').textContent === 'Policy pending');
     assert.match(await f.page.locator('#ts-page-badge').getAttribute('class'), /badge-warning/);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // Pre-crash log: dated from the crashed boot's start when it had the
+    // clock; undated (as stored) when it never had it.
+    for (const boot of [new Date(2026, 10, 17, 23, 59, 0).getTime(), 0]) {
+      f = await fixture(browser, {page: 'tools', precrashBody: {have: true, size: 60, boot_ms: boot,
+        text: 'I (1000) test: first\nE (61500) test: last words\nBacktrace: 0x1 0x2\n'}});
+      await f.page.waitForFunction(() => document.getElementById('precrash-body').textContent.includes('last words'));
+      const t = await f.page.evaluate(() => document.getElementById('precrash-body').textContent);
+      if (boot) {
+        assert.match(t, /^I 2026-11-17 23:59:01 \(1000\) test: first$/m);
+        assert.match(t, /^E 2026-11-18 00:00:01 \(61500\) test: last words$/m);
+      } else assert.match(t, /^E \(61500\) test: last words$/m);
+      assert.match(t, /^Backtrace: 0x1 0x2$/m);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Live log: lines show date and time once the device clock is known,
     // also lines that arrived before it (browser time zone).
     {
@@ -954,6 +978,40 @@ async function main() {
       const text = await pre();
       assert.match(text, /^W 2026-11-18 10:01:01 \(61000\) test: before the clock$/m);
       assert.match(text, /^E 2026-11-18 10:02:02 \(122500\) test: after$/m);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Login server certificate: status from the saved one; a paste without a
+    // PEM header never reaches the device; a refusal and the lock are shown;
+    // a saved certificate says it applies after a restart; Remove sends "".
+    {
+      f = await fixture(browser, {page: 'tailscale', tailscaleSettings: {enabled: true, login_server: 'https://hs.example.test',
+        tailnet_ca: {set: true, valid: true, active: true, certificates: 1, fingerprint: 'cd'.repeat(32), subject: 'CN=Old Root'}}});
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent.includes('CN=Old Root'));
+      assert.match(await f.page.locator('#ts-ca-status').textContent(), /SHA-256 cdcdcdcdcdcdcdcd… · In use\./);
+      await f.page.locator('#ts-ca').fill('not a certificate');
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('PEM form'));
+      assert.equal(f.state.caPosts, undefined);
+      await f.page.locator('#ts-ca').fill('-----BEGIN CERTIFICATE-----\nAAAA');
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('not a usable certificate'));
+      const pem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+      await f.page.locator('#ts-ca').fill(pem);
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent.includes('CN=Private Root'));
+      assert.match(await f.page.locator('#ts-ca-status').textContent(), /Used after a restart\./);
+      assert.equal(f.state.caPosts[1], pem);
+      assert.equal(await f.page.locator('#ts-ca').inputValue(), '');
+      await f.page.locator('#ts-ca-remove').click();
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent === 'No certificate saved.');
+      assert.equal(f.state.caPosts[2], ''); assert.equal(f.state.caPosts.length, 3);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+      f = await fixture(browser, {page: 'tailscale', caLocked: true, tailscaleSettings: {enabled: true,
+        tailnet_ca: {set: true, valid: true, active: false, certificates: 1, fingerprint: 'cd'.repeat(32), subject: 'CN=Old Root'}}});
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent.includes('no login server'));
+      await f.page.locator('#ts-ca').fill(pem);
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('web UI lock'));
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
     // Leave tailnet: nothing is sent before the confirmation; Cancel sends
@@ -1078,6 +1136,21 @@ async function main() {
       await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('stay closed until a time limit is applied'));
       assert.equal(f.state.leaseOps.length,1);
       await f.context.close();count++;
+    }
+    // Several allowed devices per rule: a list is saved as typed (the gateway
+    // checks it); more than 5 entries never reach the device.
+    {
+      f=await fixture(browser,{page:'network/services',forwardBody:{...forwardBody,rules:[{...forwardRule,index:0,rule_token:11}]}});
+      await f.page.waitForFunction(()=>document.getElementById('tf-context').textContent.startsWith('Saved configuration'));
+      await f.page.locator('.tf-edit').nth(0).click();
+      await f.page.locator('.tf-cidr').nth(0).fill('192.0.2.1,192.0.2.2,192.0.2.3,192.0.2.4,192.0.2.5,192.0.2.6');
+      await f.page.locator('#tf-save').click();
+      assert.equal(f.state.savedForward,undefined);
+      await f.page.locator('.tf-cidr').nth(0).fill('192.0.2.42 ,192.0.2.43');
+      await f.page.locator('#tf-save').click();
+      await f.page.waitForFunction(()=>document.getElementById('toastContainer').textContent.includes('LAN → Tailnet rules updated.'));
+      assert.equal(f.state.savedForward.rules[0].allowed_source_subnet,'192.0.2.42, 192.0.2.43');
+      assert.deepEqual(f.errors,[]);await f.context.close();count++;
     }
     // Malformed status must not wipe the saved/draft rule table or enable Save.
     f = await fixture(browser, {page: 'network/services', forwardBody: {rules: {}, max: 8}});
@@ -1254,6 +1327,14 @@ async function main() {
     await f.page.waitForFunction(()=>document.getElementById('health-status').textContent.includes('unavailable'));
     assert.equal(await f.page.locator('#health-save').isDisabled(),true);
     assert.equal(await f.page.locator('#ops-settings-save').isDisabled(),false); // Independent read failure.
+    assert.deepEqual(f.errors,[]);await f.context.close();count++;
+    // Profiles of the goals chosen at first boot are marked, not applied.
+    f=await fixture(browser,{page:'system',profileRecommended:['monitoring']});
+    await f.page.waitForFunction(()=>document.getElementById('profile-select').options.length===4);
+    assert.deepEqual(await f.page.evaluate(()=>[...document.getElementById('profile-select').options].map(o=>o.textContent)),
+      ['No profile applied','Gateway','Monitoring · chosen at setup','Advanced']);
+    assert.equal(await f.page.locator('#profile-select').inputValue(),'');
+    assert.equal(f.state.profilePosts,undefined);
     assert.deepEqual(f.errors,[]);await f.context.close();count++;
     // Profiles: token-bound preview, conflict re-preview, apply, rollback.
     f=await fixture(browser,{page:'system'});

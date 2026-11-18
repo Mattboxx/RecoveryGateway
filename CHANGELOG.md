@@ -6,6 +6,77 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.26] - 2026-11-18
+
+### Fixed
+
+- **Tunnel blocked in tailnets with recently added devices.** The log showed
+  "Authorization/peer update needs a full refresh; tunnel data blocked
+  (stage=policy reason=peer-id ...)". Tailscale device IDs are 64-bit numbers;
+  devices added recently have IDs larger than the gateway's JSON reader could
+  hold exactly, so the gateway refused the whole device list and blocked the
+  tunnel. IDs are now read exactly, also in device updates and removals.
+
+### Added
+
+- **Headscale with a private CA or a self-signed certificate**: a *Login
+  server certificate* field on the Tailscale page, trusted only for the login
+  server and its relays (the server name is still checked).
+- **First connection without working DNS**: the Tailscale control server is
+  found through a Tailscale relay at a built-in address, as the official
+  client does.
+- **ACL rules with "cap:" sources** admit the devices that hold that
+  capability.
+- **Two relays to other regions at once** for devices without a direct path.
+- **LAN → Tailnet: up to 5 allowed devices per rule**, and a guide for sharing
+  one service with another network (docs/SERVICE-GATEWAY.md).
+- **Configuration profiles for every first-boot goal** (System → General):
+  two new ones (*LAN → Tailnet services*, *Home Assistant*), shown in the
+  setup's order, the goals chosen at first boot marked "chosen at setup",
+  guided steps for everything added since 3.0, and the IoT profile also
+  counts traffic per access point device. Profiles never open access, change
+  routes or send data by themselves.
+- **Date and time in the pre-crash log.**
+
+### Notes of the 3.0.26 betas
+
+3.0.26-beta.2 (3.0.26-beta.1 was an internal candidate, not published):
+
+- **Fixed: tunnel blocked in tailnets with recently added devices**
+  ("Authorization/peer update needs a full refresh; tunnel data blocked
+  (stage=policy reason=peer-id ...)"). Tailscale device IDs are 64-bit
+  numbers, and devices added recently have IDs larger than the gateway's JSON
+  reader could hold exactly: the gateway refused the whole device list and
+  blocked the tunnel. IDs are now read exactly, also in device updates and
+  removals.
+
+- **Headscale with a private CA or a self-signed certificate.** The Tailscale
+  page has a *Login server certificate* field: paste the CA (or the server
+  certificate) as PEM text. It is trusted only for the login server and its
+  relays, from the next restart and only while a login server is set; the
+  server name and validity are still checked, and firmware updates, MQTT and
+  notifications keep using public certificates only. Saving or removing it
+  needs the admin password.
+- **First connection without working DNS.** When the Tailscale control
+  server's name cannot be resolved and no working address is known yet, the
+  gateway asks a Tailscale relay at a built-in address for it over a verified
+  TLS connection, as the official client does. The address found is kept in
+  memory only and the server is still verified by its certificate and key.
+- **ACL rules with "cap:" sources work.** Such a rule now admits the devices
+  that hold that capability (from their tailnet addresses), instead of nobody.
+- **Two relays to other regions at once.** Devices homed on two different
+  relay regions, both without a direct path, are reachable at the same time
+  (one extra relay before). Each extra relay opens only when needed and closes
+  after a minute without traffic.
+- **LAN → Tailnet: up to 5 allowed devices per rule**
+  ("192.168.1.20, 192.168.1.30"), and a guide for sharing one service with
+  another network through a gateway placed there (docs/SERVICE-GATEWAY.md).
+- **The pre-crash log shows date and time** for the lines of the crashed run
+  when that run had the clock; the crash header no longer shows the time twice.
+- Internal: the optional UDP helpers of the VPN library call the network stack
+  from its own thread, and a full network queue can no longer use up the
+  zero-copy send slots.
+
 ## [3.0.25] - 2026-11-18
 
 ### Fixed: Tailscale and Headscale access

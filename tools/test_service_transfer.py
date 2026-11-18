@@ -53,6 +53,8 @@ bool tailnet_forward_get(int i,tailnet_forward_rule_t *r,tailnet_forward_runtime
 }
 int tailnet_forward_parse_cidr(const char *s,uint32_t *network,uint8_t *prefix){if(strcmp(s,"192.0.2.0/24"))return ESP_ERR_INVALID_ARG;*network=0xc0000200;*prefix=24;return 0;}
 void tailnet_forward_format_cidr(uint32_t n,uint8_t p,char *out,size_t cap){(void)n;(void)p;snprintf(out,cap,"192.0.2.0/24");}
+int tailnet_forward_parse_sources(const char *s,tailnet_forward_rule_t *r){return tailnet_forward_parse_cidr(s,&r->source_network,&r->source_prefix);}
+void tailnet_forward_format_sources(const tailnet_forward_rule_t *r,char *out,size_t cap){tailnet_forward_format_cidr(r->source_network,r->source_prefix,out,cap);}
 int tailnet_forward_replace_guarded(const tailnet_forward_rule_t *r,int count,const char *expected,bool apply,tailnet_forward_preview_t *preview,char *error,size_t cap){
     preview_calls++;for(int i=0;i<count;i++)assert(!r[i].enabled);strcpy(preview->guard,owner_guard);preview->previous_count=1;preview->previous_enabled=1;
     if(owner_error)return owner_error;

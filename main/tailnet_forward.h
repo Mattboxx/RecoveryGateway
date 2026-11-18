@@ -15,6 +15,11 @@
 #define TAILNET_FORWARD_DEST_LEN 96
 #define TAILNET_FORWARD_PROTO_TCP 6
 #define TAILNET_FORWARD_PROTO_UDP 17
+/* Allowed LAN sources of a rule: one network (source_network/prefix) plus up
+ * to this many single addresses in the same /16 ("192.168.1.10,
+ * 192.168.1.11, ..."). */
+#define TAILNET_FORWARD_EXTRA_SOURCES 4
+#define TAILNET_FORWARD_SOURCES_TEXT 96
 
 typedef struct {
     uint8_t valid, enabled, proto, source_prefix;
@@ -22,8 +27,13 @@ typedef struct {
     uint32_t source_network;
     char name[TAILNET_FORWARD_NAME_LEN];
     char destination[TAILNET_FORWARD_DEST_LEN];
-    uint8_t _reserved[8];
+    /* More single source addresses: their low 16 bits (the high 16 bits are
+     * those of source_network), 0 = unused. These were reserved bytes, so the
+     * saved table keeps its layout; older firmware ignores them and then
+     * admits fewer sources, never more. */
+    uint16_t extra_source[TAILNET_FORWARD_EXTRA_SOURCES];
 } tailnet_forward_rule_t;
+_Static_assert(sizeof(tailnet_forward_rule_t) == 148, "saved rule layout");
 
 typedef struct {
     bool installed;
@@ -54,6 +64,13 @@ typedef struct {char guard[TAILNET_TABLE_GUARD_LEN];int previous_count,previous_
 esp_err_t tailnet_forward_replace_guarded(const tailnet_forward_rule_t *rules,int count,const char *expected,bool apply,
                                          tailnet_forward_preview_t *preview,char *error,size_t error_size);
 esp_err_t tailnet_forward_parse_cidr(const char *text, uint32_t *network_hbo, uint8_t *prefix);
+/* "192.168.1.0/24", "192.168.1.50" or a list "192.168.1.50, 192.168.1.51":
+ * the first entry is a network or one address, the others single addresses
+ * in the same /16 (at most TAILNET_FORWARD_EXTRA_SOURCES). Sets
+ * source_network, source_prefix and extra_source of r. */
+esp_err_t tailnet_forward_parse_sources(const char *text, tailnet_forward_rule_t *r);
+void tailnet_forward_format_sources(const tailnet_forward_rule_t *r, char *out, size_t out_size);
+bool tailnet_forward_source_allowed(const tailnet_forward_rule_t *r, uint32_t source_hbo);
 void tailnet_forward_format_cidr(uint32_t network_hbo, uint8_t prefix, char *out, size_t out_size);
 bool tailnet_forward_listen_conflicts(uint8_t proto, uint16_t port);
 bool tailnet_forward_get_mapping(int slot, uint8_t *proto, uint16_t *listen_port, uint32_t *destination_nbo, uint16_t *destination_port);

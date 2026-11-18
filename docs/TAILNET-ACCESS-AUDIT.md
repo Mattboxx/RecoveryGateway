@@ -14,7 +14,7 @@ devices). Each item: what blocks access, status, where.
 | 128 ACL rules | larger policy refused whole | rule table sized by the policy (beta.17) |
 | Node key expiry | factory reset needed | 14-day warning, renewal with OldNodeKey at the next start (beta.17) |
 | First map without Peers (empty tailnet, omitempty) | lone gateway: no peer authority, tunnel blocked, reconnect loop | first map of a session is complete (beta.18) |
-| "cap:" ACL sources | whole policy refused, all traffic blocked | such a source admits nobody, other rules apply (beta.18) |
+| "cap:" ACL sources | whole policy refused, all traffic blocked | such a source admits nobody, other rules apply (beta.18); 3.0.26: matches peers holding the capability |
 | Control only on port 80 | no registration where 80 is blocked/proxied | TLS 443 fallback after two failures, and back (beta.18) |
 | Clock only from pool.ntp.org (audit item 1) | NTP blocked: key expiry checks fail, policy "pending" | clock from MapResponse.ControlTime while unset (beta.18). NTP fallback servers: not added (CONFIG_LWIP_SNTP_MAX_SERVERS=1) |
 | DERP fixed on the first node, DNS only | relay down if that node or DNS fails (mobile/CGNAT: no access) | next node of the region after a failure; DERPMap IPv4 when DNS fails (beta.18) |
@@ -60,13 +60,14 @@ devices). Each item: what blocks access, status, where.
    work. Documented in CONFIGURATION.md; IPv6 allowed IPs and routing would
    be the fix.
 
-Also open: HTTPS login servers and custom DERP relays must have a certificate
-from a public CA (a private CA or self-signed certificate is refused; use
-http:// for a LAN-only Headscale, or a public certificate). The DERP map keeps
-32 regions of 4 nodes (Tailscale's public map has 28 regions; extra nodes of
-a region are only redundancy). One auxiliary relay at a time: two peers in two
-other regions, both without a direct path and both busy, share it in turns
-(a busy relay keeps its region for 10 s).
+3.0.26-beta.1: HTTPS login servers and their DERP relays can use a private CA
+or a self-signed certificate (Login server certificate field; trusted for
+those connections only). The first control connection works without DNS
+(bootstrap DNS through a Tailscale relay at a built-in address, Tailscale
+host only). Two auxiliary relays: a third foreign region while both are busy
+waits up to 10 s. Still open: IPv6 in the tailnet (item 6). The DERP map
+keeps 32 regions of 4 nodes (Tailscale's public map has 28 regions; extra
+nodes of a region are only redundancy).
 
 Also open: on the very first connection with DNS failing there is no known
 control address yet (official clients have baked bootstrap addresses and

@@ -68,6 +68,9 @@ size_t log_capture_read_since(uint64_t since_seq, char *out, size_t out_size,
  * so reading it never races the running capture. */
 bool   log_capture_have_precrash(void);
 size_t log_capture_precrash_size(void);
+/* Wall clock (ms since 1970) when the crashed boot's log counter was 0, so
+ * its "(ms)" lines can be dated; 0 when that boot never had the clock. */
+int64_t log_capture_precrash_boot_ms(void);
 size_t log_capture_read_precrash(char *out, size_t out_size);
 void   log_capture_clear_precrash(void);
 

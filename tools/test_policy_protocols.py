@@ -146,7 +146,7 @@ int main(void){
 '''
 with tempfile.TemporaryDirectory(prefix='policy-protocol-') as directory:
     path=Path(directory);(path/'lwip').mkdir();(path/'lwip/pbuf.h').write_text(constant('PBUF'))
-    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+BODY)
+    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n'+constant('HEAD')+BODY)
     ml=ROOT/'external/microlink/components/microlink'
     flags=['-std=c11','-pthread','-Wall','-Wextra','-Werror','-Wno-unused-function','-O1','-g','-I',str(path),'-I',str(ml/'include'),'-I',str(ml/'src')]
     libs=['-lws2_32'] if os.name=='nt' else ['-lm']

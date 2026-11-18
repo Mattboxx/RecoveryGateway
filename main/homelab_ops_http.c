@@ -89,7 +89,7 @@ static bool export_service_rules(cJSON *root) {
         if(!item||!cJSON_AddItemToArray(rules,item)){cJSON_Delete(item);return false;}
         if(!cJSON_AddNumberToObject(item,"index",i)||!cJSON_AddStringToObject(item,"protocol",r.proto==TAILNET_FORWARD_PROTO_UDP?"udp":"tcp")
             ||!cJSON_AddBoolToObject(item,"enabled",r.enabled)||!cJSON_AddBoolToObject(item,"installed",rt.installed)
-            ||!cJSON_AddBoolToObject(item,"single_source",r.source_prefix==32)||!cJSON_AddBoolToObject(item,"runtime_error",rt.error[0]!=0)
+            ||!cJSON_AddBoolToObject(item,"single_source",r.source_prefix==32&&!r.extra_source[0])||!cJSON_AddBoolToObject(item,"runtime_error",rt.error[0]!=0)
             ||!cJSON_AddStringToObject(item,"diagnostic",d.code)
             ||!cJSON_AddStringToObject(item,"destination_check",service_check_state_name(checked?check.state:SC_NONE))
             ||!cJSON_AddNumberToObject(item,"accepted_packets",rt.accepted_packets)||!cJSON_AddNumberToObject(item,"rejected_packets",rt.blocked_packets)

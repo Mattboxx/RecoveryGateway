@@ -3330,6 +3330,16 @@
               <span class="form-hint">Empty = Tailscale SaaS.</span>
             </div>
           </div>
+          <div class="form-group" id="ts-ca-group">
+            <label class="form-label" for="ts-ca">Login server certificate (optional)</label>
+            <textarea class="textarea input" id="ts-ca" maxlength="3999" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----" style="min-height:4rem; font-family:var(--font-mono); font-size:0.8rem;"></textarea>
+            <span class="form-hint">Only for a Headscale server with a private CA or a self-signed certificate: paste its CA (or the server certificate) as PEM text. Trusted only for the login server and its relays, from the next restart; the server name is still checked.</span>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-top:0.4rem;">
+              <button class="btn btn-secondary btn-sm" id="ts-ca-save" type="button">Save certificate</button>
+              <button class="btn btn-ghost btn-sm" id="ts-ca-remove" type="button">Remove</button>
+              <span class="form-hint" id="ts-ca-status"></span>
+            </div>
+          </div>
 
           <div class="form-group">
             <label class="form-label" for="ts-ipn-version">Reported client version (optional)</label>
@@ -7066,7 +7076,7 @@
       document.getElementById('health-save').disabled=!ready||!s_health_state;
     }
     var s_profiles=null,s_profile_preview=null,s_profile_busy=false,s_profile_sync=false;
-    var PROFILE_SETTING_LABELS={device_monitoring:'Monitor configured devices',service_expiry_notifications:'Notify when temporary service access closes',health_monitor:'Health Monitor worker',event_history:'Record events (history)',trends:'Record trends',settings_copy_before_update:'Settings copy before each firmware update',tailnet_names:'Tailnet names for Wi-Fi clients'};
+    var PROFILE_SETTING_LABELS={device_monitoring:'Monitor configured devices',service_expiry_notifications:'Notify when temporary service access closes',health_monitor:'Health Monitor worker',event_history:'Record events (history)',trends:'Record trends',settings_copy_before_update:'Settings copy before each firmware update',tailnet_names:'Tailnet names for Wi-Fi clients',ap_client_traffic:'Count traffic per access point device'};
     function profileLabel(k){return PROFILE_SETTING_LABELS[k]||k;}
     function profileControls() {
       var select=document.getElementById('profile-select');
@@ -7083,7 +7093,8 @@
       document.getElementById('profile-steps-title').hidden=true;
       if(!d){profileControls();return;}
       if(!select.options.length){var none=document.createElement('option');none.value='';none.disabled=true;none.textContent='No profile applied';select.appendChild(none);
-        d.profiles.forEach(function(p){var o=document.createElement('option');o.value=p.id;o.textContent=p.title;select.appendChild(o);});}
+        var rec=Array.isArray(d.setup_recommended)?d.setup_recommended:[];
+        d.profiles.forEach(function(p){var o=document.createElement('option');o.value=p.id;o.textContent=UT(p.title)+(rec.indexOf(p.id)>=0?' · '+UT('chosen at setup'):'');select.appendChild(o);});}
       /* A fresh read shows the active profile; a preview keeps the choice. */
       if(s_profile_sync)select.value=d.profiles.some(function(p){return p.id===d.active;})?d.active:'';
       else if(keep&&d.profiles.some(function(p){return p.id===keep;}))select.value=keep;
@@ -9364,7 +9375,15 @@
     function tfConfigRules(rules){return rules.map(function(r){return {name:r.name,enabled:r.enabled,protocol:r.protocol,listen_port:r.listen_port,tailnet_destination:r.tailnet_destination,destination_port:r.destination_port,allowed_source_subnet:r.allowed_source_subnet};});}
     function tfEditingDisabled(on){document.querySelectorAll('#tf-list input,#tf-list select,#tf-list .tf-del').forEach(function(el){el.disabled=on;});}
     /* "192.168.1.50" means that one device. */
-    function tfSource(v){v=(v||'').trim();return /^\d+\.\d+\.\d+\.\d+$/.test(v)?v+'/32':v;}
+    /* "192.168.1.50" means that one device; a list "192.168.1.50, 192.168.1.51"
+     * (up to 5, the others single addresses in the same /16) is checked by the
+     * gateway as it is. */
+    function tfSource(v){v=(v||'').trim();return /^\d+\.\d+\.\d+\.\d+$/.test(v)?v+'/32':v.replace(/\s*,\s*/g,', ');}
+    function tfSourcesValid(v){
+      var parts=(v||'').split(/[\s,]+/).filter(Boolean);
+      if(!parts.length||parts.length>5)return false;
+      return parts.every(function(x,i){return i===0?/^\d+\.\d+\.\d+\.\d+(\/([0-9]|[12][0-9]|3[0-2]))?$/.test(x):/^\d+\.\d+\.\d+\.\d+(\/32)?$/.test(x);});
+    }
     function snapshotTf(){document.querySelectorAll('.tf-row').forEach(function(row){var r=s_tf_list[+row.dataset.idx];if(!r)return;r.name=row.querySelector('.tf-name').value.trim();r.enabled=row.querySelector('.tf-enabled').checked;r.protocol=row.querySelector('.tf-proto').value;r.listen_port=Number(row.querySelector('.tf-listen').value);r.tailnet_destination=row.querySelector('.tf-dest').value.trim();r.destination_port=Number(row.querySelector('.tf-dport').value);r.allowed_source_subnet=tfSource(row.querySelector('.tf-cidr').value);
       var t=row.querySelector('.tf-time');if(t)r._time=t.value;var d=row.querySelector('.tf-del-exp');r._delete=!!(d&&d.checked);});}
     /* Time limits. A rule without one forwards while it is switched on. With
@@ -9503,7 +9522,7 @@
           +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-name-'+i+'">Name</label><input class="input tf-name" id="tf-name-'+i+'" maxlength="31" value="'+escapeHtml(r.name||'')+'" placeholder="Remote MQTT"></div><div class="form-group"><label class="form-label" for="tf-proto-'+i+'">Protocol</label><select class="select tf-proto" id="tf-proto-'+i+'"><option value="tcp" '+(r.protocol!=='udp'?'selected':'')+'>TCP</option><option value="udp" '+(r.protocol==='udp'?'selected':'')+'>UDP</option></select></div></div>'
           +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-dest-'+i+'">Tailnet service address</label><input class="input mono tf-dest" id="tf-dest-'+i+'" maxlength="95" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.tailnet_destination||'')+'" placeholder="100.64.0.2 or broker.tailnet.ts.net"><span class="form-hint">A tailnet IP (100.x.y.z) or a MagicDNS name.</span></div><div class="form-group"><label class="form-label" for="tf-dport-'+i+'">Service port</label><input class="input mono tf-dport" id="tf-dport-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.destination_port||'')+'" placeholder="1883"></div></div>'
           +'<div class="grid grid-cols-2"><div class="form-group"><label class="form-label" for="tf-listen-'+i+'">Port on this gateway</label><input class="input mono tf-listen" id="tf-listen-'+i+'" type="number" inputmode="numeric" min="1" max="65535" value="'+escapeHtml(r.listen_port||'')+'" placeholder="18830"></div>'
-          +'<div class="form-group"><label class="form-label" for="tf-cidr-'+i+'">Allowed LAN devices</label><input class="input mono tf-cidr" id="tf-cidr-'+i+'" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.allowed_source_subnet||'')+'" placeholder="192.168.1.50"><span class="form-hint">One device (192.168.1.50) or a whole subnet (192.168.1.0/24). Prefer one device.</span></div></div>'
+          +'<div class="form-group"><label class="form-label" for="tf-cidr-'+i+'">Allowed LAN devices</label><input class="input mono tf-cidr" id="tf-cidr-'+i+'" autocapitalize="off" spellcheck="false" value="'+escapeHtml(r.allowed_source_subnet||'')+'" placeholder="192.168.1.50"><span class="form-hint">One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.</span></div></div>'
           +'<div class="btn-row"><button class="btn btn-ghost btn-sm tf-del" type="button">Delete rule</button><span class="form-hint">Changes apply when you press Save below.</span></div></div>'
           +'<div class="tf-evidence">'+tfCheckHtml(r)+tfActivityHtml(r)+tfDiagnosticHtml(r)+'</div></div>';
       }).join('');
@@ -9573,7 +9592,7 @@
       snapshotTf();var seen={};
       for(var i=0;i<s_tf_list.length;i++){
         var r=s_tf_list[i],lp=+r.listen_port,dp=+r.destination_port,key=r.protocol+':'+lp;
-        if(!r.tailnet_destination||!/^\d+\.\d+\.\d+\.\d+\/([0-9]|[12][0-9]|3[0-2])$/.test((r.allowed_source_subnet||'').trim())
+        if(!r.tailnet_destination||!tfSourcesValid(r.allowed_source_subnet)
           ||!Number.isInteger(lp)||!Number.isInteger(dp)||lp<1||lp>65535||dp<1||dp>65535){
           showToast('error','Invalid rule',UT('Check the service address, the ports and the allowed LAN devices in rule')+' '+(i+1)+'.',5000);return;
         }
@@ -9719,6 +9738,7 @@
           })();
           document.getElementById('ts-hostname').value      = s.hostname     || '';
           document.getElementById('ts-login').value         = s.login_server || '';
+          tsCaStatus(s.tailnet_ca, !!(s.login_server || '').trim());
           document.getElementById('ts-ipn-version').value = s.ipn_version || '';
           document.getElementById('ts-adv-ap').checked = !!s.advertise_ap;
           document.getElementById('ts-effective-routes').textContent = s.effective_routes_valid === false ? 'Invalid route configuration' : (s.effective_routes || 'None');
@@ -10049,6 +10069,39 @@
       not_registered: 'This gateway was not registered in a tailnet.',
       not_running: 'Tailscale was not running: remove the device in the admin console if it is listed.'
     };
+    /* Login server certificate: saved on its own (it needs the password),
+     * shown as subject and fingerprint, used after a restart. */
+    function tsCaStatus(ca, hasServer) {
+      var el = document.getElementById('ts-ca-status');
+      if (!el) return;
+      if (!ca || !ca.set) { el.textContent = UT('No certificate saved.'); return; }
+      if (!ca.valid) { el.textContent = UT('The saved certificate is invalid and not used.'); return; }
+      var fp = ca.fingerprint ? ' · SHA-256 ' + ca.fingerprint.slice(0, 16) + '…' : '';
+      var note = !hasServer ? UT('Not used: no login server set.') : ca.active ? UT('In use.') : UT('Used after a restart.');
+      el.textContent = (ca.subject || '') + fp + ' · ' + note;
+    }
+    function tsCaPost(pem) {
+      return apiFetch('/api/tailscale/ca', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pem: pem }) })
+        .then(function (r) {
+          if (r.status === 403) return { ok: false, reason: LOCK_TEXT };
+          if (r.status === 400) return r.text().then(function (t) { return { ok: false, reason: t }; });
+          return r.json();
+        })
+        .then(function (d) {
+          if (!d.ok) { showToast('error', UT('Certificate not saved'), d.reason || 'unknown', 8000); return; }
+          tsCaStatus({ set: d.set, valid: d.set, active: false, fingerprint: d.fingerprint, subject: d.subject },
+                     !!document.getElementById('ts-login').value.trim());
+          showToast('success', d.set ? UT('Certificate saved') : UT('Certificate removed'), UT('Restart the gateway to apply it.'), 6000);
+          if (d.set) document.getElementById('ts-ca').value = '';
+        })
+        .catch(function () { showToast('error', UT('Certificate not saved'), UT('Network error.'), 5000); });
+    }
+    document.getElementById('ts-ca-save').addEventListener('click', function () {
+      var pem = document.getElementById('ts-ca').value.trim();
+      if (pem.indexOf('-----BEGIN CERTIFICATE-----') < 0) { showToast('error', UT('Certificate not saved'), UT('Paste a certificate in PEM form (-----BEGIN CERTIFICATE-----).'), 6000); return; }
+      tsCaPost(pem);
+    });
+    document.getElementById('ts-ca-remove').addEventListener('click', function () { tsCaPost(''); });
     document.getElementById('ts-leave').addEventListener('click', function () {
       var btn = this;
       showConfirm(
@@ -12351,8 +12404,9 @@
       function nearBottom() { return (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 40; }
 
       /* Date and time of each line: the device sends when its log counter
-       * started (boot_ms, once its clock is set); "I (12345) TAG: ..." is
-       * shown as "I 2026-11-18 11:23:45 (12345) TAG: ..." in this browser's
+       * started (boot_ms, once its clock is set); a line with the level, the
+       * milliseconds since boot and the tag gets the date and time after the
+       * level, in this browser's
        * time zone. Lines that arrived before the clock was known get their
        * date as soon as it is. */
       var bootMs = 0;
@@ -12510,6 +12564,17 @@
      * doesn't reach, so this synthetic header makes up for it; the
      * actual Backtrace text IS in the buffer because it comes from a
      * different object (debug_helpers.c). */
+    /* Lines of the crashed boot get their date and time, in this browser's
+     * time zone, when that boot had the clock (boot_ms), as in the live log. */
+    function precrashDated(text, bootMs) {
+      if (typeof bootMs !== 'number' || bootMs < 1700000000000) return text;
+      function p2(n) { return (n < 10 ? '0' : '') + n; }
+      return text.replace(/^([EWIDV]) \((\d+)\) /gm, function (all, lvl, ms) {
+        var d = new Date(bootMs + Number(ms));
+        return lvl + ' ' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate())
+          + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()) + ' (' + ms + ') ';
+      });
+    }
     function loadPrecrashLog() {
       var btn = document.getElementById('precrash-refresh');
       var pre = document.getElementById('precrash-body');
@@ -12526,11 +12591,11 @@
           if (last.reason && (last.reason.indexOf('PANIC') >= 0 || last.reason.indexOf('WDT') >= 0)) {
             var when = _fmtWallclock(last.wallclock);
             var who  = last.who ? (' from ' + escapeHtml(last.who)) : '';
-            hdr = '<span style="color:#f87171;font-weight:600;">*** Last crash (' + escapeHtml(last.reason) + when + (when === '—' ? '' : ', ' + when) + who + ') ***</span>\n'
+            hdr = '<span style="color:#f87171;font-weight:600;">*** Last crash (' + escapeHtml(last.reason) + (when === '—' ? '' : ', ' + when) + who + ') ***</span>\n'
                 + (last.crash ? '<span style="color:#fca5a5;">' + escapeHtml(last.crash) + '</span>\n\n' : '\n');
           }
           if (d.have && d.size > 0) {
-            pre.innerHTML = hdr + colorizeLog(d.text || '— empty —');
+            pre.innerHTML = hdr + colorizeLog(precrashDated(d.text || '— empty —', d.boot_ms));
             b.className = 'badge badge-warning';
             b.textContent = d.size + ' B';
             pre.scrollTop = pre.scrollHeight;

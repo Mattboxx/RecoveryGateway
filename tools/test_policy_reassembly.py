@@ -186,7 +186,7 @@ int main(void){
 '''
 with tempfile.TemporaryDirectory(prefix='policy-reassembly-') as directory:
     path=Path(directory);(path/'lwip').mkdir();(path/'lwip/pbuf.h').write_text(constant('PBUF'))
-    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+SUPPORT)
+    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n'+constant('HEAD')+SUPPORT)
     flags=['-std=c11','-pthread','-Wall','-Wextra','-Werror','-Wno-unused-function','-O1','-g','-I',str(path),'-I',str(ML/'include'),'-I',str(ML/'src')]
     libs=['-lws2_32'] if os.name=='nt' else ['-lm']
     source=os.environ.get('CJSON_SOURCE')
@@ -208,6 +208,6 @@ with tempfile.TemporaryDirectory(prefix='policy-reassembly-') as directory:
              'static inline void wg_tx_count_drop(volatile uint32_t *c){(*c)++;}\n')+'static void wireguardif_process_data_message'+wg_source.split('static void wireguardif_process_data_message',1)[1].split('\nstatic struct pbuf *wireguardif_initiate_handshake',1)[0]
     helpers=wg_source[wg_source.index('static int peer_allowed_count('):]
     helpers=helpers[:helpers.index('\nbool wireguardif_has_host_route(')]
-    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+constant('HEAD')+constant('WG_FIXTURE')+WG_TEST+WG_MAIN+helpers+receive+WG_BODY)
+    (path/'test.c').write_text('#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n'+constant('HEAD')+constant('WG_FIXTURE')+WG_TEST+WG_MAIN+helpers+receive+WG_BODY)
     subprocess.run([os.environ.get('CC','gcc'),*flags,str(path/'test.c'),'-o',str(binary),*libs],check=True)
     subprocess.run([str(binary)],check=True,timeout=45)

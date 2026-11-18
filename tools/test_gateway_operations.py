@@ -276,6 +276,7 @@ static int esp_netif_get_ip_info(esp_netif_t *n,esp_netif_ip_info_t *ip){assert(
 static bool tailscale_is_connected(void){return control;}
 bool tailnet_forward_get(int i,tailnet_forward_rule_t *r,tailnet_forward_runtime_t *rt){if(i>=rows)return false;*r=rule;*rt=runtime;return true;}
 void tailnet_forward_format_cidr(uint32_t n,uint8_t p,char *out,size_t cap){(void)n;snprintf(out,cap,"192.0.2.42/%u",p);}
+void tailnet_forward_format_sources(const tailnet_forward_rule_t *r,char *out,size_t cap){tailnet_forward_format_cidr(r->source_network,r->source_prefix,out,cap);}
 ''' + handler + r'''
 static void check(const char *code){
  httpd_req_t r={.status=200};assert(tailnet_forward_handler(&r)==send_result&&r.status==200);

@@ -56,6 +56,7 @@ PROGRAM = r'''
 #define ESP_LOGE(...) ((void)0)
 #define ESP_LOGD(...) ((void)0)
 #define TAG "test"
+static int ids_scans; static bool ml_json_ids_scan(char *t, size_t n){(void)t;(void)n;ids_scans++;return true;}   /* exact node IDs: tested in tailnet_authorization */
 #define ML_JSON_BUFFER_SIZE 4096
 #define ML_H2_MAX_FRAME_LEN 16384
 #define SOL_SOCKET 1

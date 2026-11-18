@@ -14,6 +14,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_attr.h"
@@ -34,12 +36,14 @@
  * triggers — so the last few KB of log lines before a PANIC are
  * readable on the next boot. Brown-out / cold power-on wipe it. */
 #define PRECRASH_RING_BYTES   4096
-#define PRECRASH_MAGIC        0xC0DEAFFEu
+#define PRECRASH_MAGIC        0xC0DEAFF3u   /* 3.0.26: boot_ms added (older rings are ignored once) */
 
 typedef struct {
     uint32_t magic;
     uint32_t head;
     uint32_t count;
+    uint32_t _pad;
+    int64_t  boot_ms;     /* wall clock (ms since 1970) when the log counter was 0; 0 = clock never set */
     char     data[PRECRASH_RING_BYTES];
 } precrash_ring_t;
 
@@ -197,6 +201,16 @@ void IRAM_ATTR __wrap_panic_print_dec(int d)
 static char  *s_snapshot       = NULL;
 static size_t s_snapshot_bytes = 0;
 static bool   s_snapshot_valid = false;
+static int64_t s_snapshot_boot_ms = 0;
+static volatile bool s_boot_ms_known = false;
+
+/* When the log counter (esp_log_timestamp, the "(ms)" of each line) was 0,
+ * in ms since 1970; 0 while the clock is not set (before NTP). */
+static int64_t log_boot_ms(time_t sec, long usec, uint32_t log_ms)
+{
+    if (sec < 1700000000) return 0;
+    return (int64_t)sec * 1000 + usec / 1000 - (int64_t)log_ms;
+}
 
 /* Drop ESP_LOG ANSI color escape sequences in-place. Each color marker
  * has the shape ESC '[' ... 'm', emitted whole inside a single vprintf
@@ -245,6 +259,16 @@ int log_capture_store(const char *fmt, va_list args)
             scratch[to_copy++] = '\n';
         }
         buffer_append(scratch, to_copy);
+    }
+    /* Record this boot's start in the RTC ring once the clock is known, so
+     * the next boot can date the pre-crash lines. One clock read per line
+     * until then, none after. */
+    if (!s_boot_ms_known) {
+        struct timeval tv;
+        if (gettimeofday(&tv, NULL) == 0) {
+            int64_t b = log_boot_ms(tv.tv_sec, tv.tv_usec, esp_log_timestamp());
+            if (b) { s_precrash.boot_ms = b; s_boot_ms_known = true; }
+        }
     }
     return n;
 }
@@ -309,6 +333,7 @@ esp_err_t log_capture_init(size_t bytes)
             s_snapshot[cnt] = '\0';
             s_snapshot_bytes = cnt;
             s_snapshot_valid = true;
+            s_snapshot_boot_ms = s_precrash.boot_ms > 0 ? s_precrash.boot_ms : 0;
         }
     }
     /* Reset the RTC ring for this boot's run. The magic seals it so a
@@ -316,6 +341,7 @@ esp_err_t log_capture_init(size_t bytes)
     s_precrash.magic = PRECRASH_MAGIC;
     s_precrash.head  = 0;
     s_precrash.count = 0;
+    s_precrash.boot_ms = 0;
 
     s_orig_vprintf = esp_log_set_vprintf(log_vprintf_hook);
     ESP_LOGI("log_cap", "ring buffer %u bytes installed (precrash snapshot=%u B)",
@@ -341,12 +367,14 @@ size_t log_capture_read_precrash(char *out, size_t out_size)
 
 bool log_capture_have_precrash(void)   { return s_snapshot_valid; }
 size_t log_capture_precrash_size(void) { return s_snapshot_bytes; }
+int64_t log_capture_precrash_boot_ms(void) { return s_snapshot_valid ? s_snapshot_boot_ms : 0; }
 
 void log_capture_clear_precrash(void)
 {
     if (s_snapshot) { free(s_snapshot); s_snapshot = NULL; }
     s_snapshot_bytes = 0;
     s_snapshot_valid = false;
+    s_snapshot_boot_ms = 0;
 }
 
 size_t log_capture_read(char *out, size_t out_size)

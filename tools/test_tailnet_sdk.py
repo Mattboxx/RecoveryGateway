@@ -13,7 +13,8 @@ ROOT=Path(__file__).resolve().parents[1]
 sdk=Path(os.environ['LWIP_SOURCE'])
 assert (sdk/'src/core/ipv4/ip4_napt.c').is_file()
 source=(ROOT/'main/tailnet_forward.c').read_text(encoding='utf-8')
-policy='int tailnet_forward_snapshot_mappings'+source.split('int tailnet_forward_snapshot_mappings',1)[1]
+policy=('bool tailnet_forward_source_allowed'+source.split('bool tailnet_forward_source_allowed',1)[1].split('\n}\n',1)[0]+'\n}\n'
+        +'int tailnet_forward_snapshot_mappings'+source.split('int tailnet_forward_snapshot_mappings',1)[1])
 core=(ROOT/'main/tailnet_input.c').read_text(encoding='utf-8')
 route_source=(ROOT/'main/lwip_route_hook.c').read_text(encoding='utf-8')
 napt_marker='static err_t napt_forward('

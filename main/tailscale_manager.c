@@ -38,6 +38,7 @@
 #include "task_reaper.h"
 #include "boot_timeline.h"
 #include "tailnet_names.h"
+#include "ml_tls_distrust.h"
 
 /* Local helper: load a string from NVS, defaulting to an empty heap
  * buffer when the key isn't there. Other modules assume non-NULL. */
@@ -239,6 +240,16 @@ void tailscale_init(void)
     s_active_hostname = trim_in_place(nvs_str_or_empty("ts_hostname"));
     s_active_login_server = trim_in_place(nvs_str_or_empty("ts_login"));
     s_active_advertise_routes = nvs_str_or_empty("ts_routes");
+    /* The certificate of a Headscale login server with a private CA or a
+     * self-signed certificate: trusted for the login server and its relays
+     * only, loaded once here (connections keep a pointer to it, so it never
+     * changes while they run) and only while a login server is set. */
+    {
+        char *ca = s_active_login_server[0] ? nvs_param_get_str("ts_ca_pem") : NULL;
+        if (ml_tls_set_tailnet_ca(ca) != ESP_OK) ESP_LOGW(TAG, "Saved login server certificate is invalid: not used");
+        else if (ca) ESP_LOGI(TAG, "Login server certificate loaded");
+        free(ca);
+    }
     if (nvs_param_get_int("ts_adv_exit", &v) == ESP_OK) {
         tailscale_advertise_exit_node = (v ? 1 : 0);
     }

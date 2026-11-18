@@ -155,6 +155,78 @@ No static route on the home router is needed **for this selected-port path**.
 That does not apply to arbitrary site-to-site routing. AP SSID, DHCP, client
 membership and AP-side port mappings are independent.
 
+## Share one service with another network
+
+Goal: a friend uses **one** of your services (say Home Assistant on
+`100.101.102.103:8123` in your tailnet) from **a few chosen devices** of
+their home network, and nothing else: they reach no other device of yours,
+and your tailnet does not reach their network.
+
+You place a gateway in the friend's home, on their Wi-Fi, joined to **your**
+tailnet. Two independent limits apply:
+
+- **Your tailnet ACL** decides what the gateway may reach: only that one
+  address and port. It is enforced by your devices, not by the gateway, so it
+  holds even if the gateway were tampered with.
+- **The LAN → Tailnet rule** on the gateway decides which devices of the
+  friend's network may use it: only the listed addresses.
+
+### 1. In your tailnet
+
+Give the gateway a tag, so it is not one of *your* devices (rules for your
+user, such as `autogroup:member`, then do not apply to it), and allow that tag
+only the one service. Example tailnet policy (Tailscale admin console →
+Access controls; the same in a Headscale policy file):
+
+```json
+{
+  "tagOwners": { "tag:friend-gateway": ["autogroup:admin"] },
+  "grants": [
+    { "src": ["tag:friend-gateway"], "dst": ["100.101.102.103"], "ip": ["tcp:8123"] }
+  ]
+}
+```
+
+Keep your other rules: nothing else may name `tag:friend-gateway` as a source.
+Add no rule with the gateway as destination unless you want to manage it over
+the tailnet (then only from your own devices, port 80).
+
+Create an **auth key with that tag** (Settings → Keys → Generate auth key →
+Tags: `tag:friend-gateway`). A single-use key is enough: the gateway logs in
+once and keeps its identity.
+
+### 2. On the gateway (before handing it over)
+
+1. Tailscale page: enter the tagged key, enable, save. Leave **Advertise
+   routes** empty, **Exit node** off and **Accept peer subnet routes** off: the
+   friend's network is not published to your tailnet.
+2. System → Access: limit administration to the tailnet and the access
+   point, so the friend's network cannot open the gateway's pages (the
+   password still protects them while the tailnet is down, when the local
+   network gets access back so nobody is locked out).
+3. LAN → Tailnet: add a rule — service address `100.101.102.103`, service port
+   `8123`, a port on the gateway (for example `8123`) and the friend's devices
+   in **Allowed LAN devices**: `192.168.1.20, 192.168.1.30` (up to 5 devices
+   in the same /16, or one subnet). Ask the friend to give those devices fixed
+   addresses (DHCP reservation on their router) so the list stays right.
+   Optionally choose a time limit.
+4. Test destination, then Save with the rule switched on.
+
+The friend opens `http://<gateway address on their network>:8123`.
+
+### What it does and does not protect
+
+- Other devices of the friend's network are refused by the gateway; other
+  services and devices of yours are refused by your tailnet (ACL).
+- An allowed address is not proof of identity: a device that takes one of
+  those addresses can use the service. Keep the service's own login.
+- The gateway is in the friend's hands. They could reset it; a reset gateway
+  cannot rejoin your tailnet without a new key from you. You can end the
+  sharing at any time: remove the device in the admin console, or use
+  **Leave tailnet** on the Tailscale page.
+- Traffic between the friend's devices and the gateway crosses their network
+  unencrypted unless the service itself uses TLS.
+
 ## Explain status and LAN exposure
 
 In development source 1.14, expand a rule's **Explain status & LAN exposure**.
