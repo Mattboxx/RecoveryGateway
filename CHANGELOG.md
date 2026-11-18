@@ -6,11 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.27] - 2026-11-18
+
+### Fixed
+
 - **Key expiry times with a time zone offset or a late year** (possible with
   some control servers, for example "+01:00") are read correctly; before, one
   such device made the gateway refuse the whole device list and block the
   tunnel, like the 64-bit ID issue fixed in 3.0.26. Malformed times are still
-  refused.
+  refused. The gateway's own key expiry shown on the Tailscale page also
+  honours the offset.
 - The user ID of the registration is read exactly (shown in the log).
 
 ## [3.0.26] - 2026-11-18
