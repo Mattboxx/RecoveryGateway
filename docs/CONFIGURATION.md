@@ -53,7 +53,7 @@ Up to **5** networks, tried in order. Per network:
 | **Enabled** | Master switch for the tailnet client. |
 | **Auth key** | Tailscale auth key (`tskey-…`). Leave empty to keep current. |
 | **Hostname** | Node name on the tailnet. |
-| **Login server** | Custom control plane (Headscale). Empty = hosted Tailscale. Accepts `host`, `host:port`, `http://host[:port]`, `https://host[:port]` (TLS validates against public CAs only — no self-signed). Requires Headscale ≥ 0.26 (validated on v0.28.0). |
+| **Login server** | Custom control plane (Headscale). Empty = hosted Tailscale. Accepts `host`, `host:port`, `http://host[:port]`, `https://host[:port]` (TLS validates against public CAs; for a private CA or a self-signed certificate paste it in **Login server certificate** — trusted for the login server and its relays only, after a restart). Requires Headscale ≥ 0.26 (validated on v0.28.0). |
 | **Reported client version** | Optional control-plane compatibility override (`IPNVersion`), empty by default. Does not upgrade the implementation or its capabilities. Requires restart. |
 | **Advertise the AP subnet** | Compose the configured AP CIDR automatically without changing manual routes. On for fresh installations, opt-in for upgrades from Mattboxx 1.5. Requires restart and Tailscale route approval. |
 | **Additional advertised subnet routes** | One CIDR per line, maximum 400 bytes. Combined and deduplicated with the automatic AP, 4via6 and exit-node routes. The UI shows the saved preview; Status shows the boot's active routes. |

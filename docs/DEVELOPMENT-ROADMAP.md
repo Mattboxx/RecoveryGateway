@@ -266,6 +266,16 @@ sharing one service with another network, a dated pre-crash log, and the
 MicroLink UDP helpers on the TCPIP thread. Device tests still owed: Leave
 tailnet, relay to another region, USB uplinks.
 
+Status 2026-11-18 (3.0.26-beta.1): done with host tests — private CA,
+bootstrap DNS, `cap:` sources, two auxiliary relays, five sources per rule
+and the guide, dated pre-crash log, UDP helpers/zero-copy. **Deferred: IPv6
+tailnet addresses.** It changes the WireGuard data path on every packet
+(IPv6 address on the tunnel interface, IPv6 output and peer lookup,
+cryptokey source check for IPv6, ICMPv6), so it needs a device A/B for speed
+and loss (owner priority: speed first) and a second real client with IPv6.
+Nearest alternative today: the peer's 100.x address. Next step: a separate
+beta with that change OFF by default and an A/B on board A.
+
 **Deferred, low priority (owner: "ci penseremo in futuro se mi contatteranno
 persone interessate"): very large tailnets.** One map response must fit the
 768 KB buffer (about 250-500 peers in an official map), parsed whole by cJSON.

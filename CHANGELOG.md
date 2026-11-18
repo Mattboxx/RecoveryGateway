@@ -6,6 +6,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.26-beta.1 adds to 3.0.25:
+
+- **Headscale with a private CA or a self-signed certificate.** The Tailscale
+  page has a *Login server certificate* field: paste the CA (or the server
+  certificate) as PEM text. It is trusted only for the login server and its
+  relays, from the next restart and only while a login server is set; the
+  server name and validity are still checked, and firmware updates, MQTT and
+  notifications keep using public certificates only. Saving or removing it
+  needs the admin password.
+- **First connection without working DNS.** When the Tailscale control
+  server's name cannot be resolved and no working address is known yet, the
+  gateway asks a Tailscale relay at a built-in address for it over a verified
+  TLS connection, as the official client does. The address found is kept in
+  memory only and the server is still verified by its certificate and key.
+- **ACL rules with "cap:" sources work.** Such a rule now admits the devices
+  that hold that capability (from their tailnet addresses), instead of nobody.
+- **Two relays to other regions at once.** Devices homed on two different
+  relay regions, both without a direct path, are reachable at the same time
+  (one extra relay before). Each extra relay opens only when needed and closes
+  after a minute without traffic.
+- **LAN → Tailnet: up to 5 allowed devices per rule**
+  ("192.168.1.20, 192.168.1.21"), and a guide for sharing one service with
+  another network through a gateway placed there (docs/SERVICE-GATEWAY.md).
+- **The pre-crash log shows date and time** for the lines of the crashed run
+  when that run had the clock; the crash header no longer shows the time twice.
+- Internal: the optional UDP helpers of the VPN library call the network stack
+  from its own thread, and a full network queue can no longer use up the
+  zero-copy send slots.
+
 ## [3.0.25] - 2026-11-18
 
 ### Fixed: Tailscale and Headscale access

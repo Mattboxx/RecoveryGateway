@@ -1,5 +1,17 @@
 # Maintainer continuation
 
+## Active — 3.0.26-beta.1 tailnet reach (2026-11-18)
+
+- Branch `feat/3026-20261118` (worktree `.codex/workspaces/tailnet-b17-20261118`), MicroLink branch `feat/3026-20261118`.
+  The owner authorized publishing it as a beta pre-release if every check passes ("se tutto passa puoi pubblicarla come beta"); not Latest.
+- In it: private CA for Headscale (`POST /api/tailscale/ca`, NVS `ts_ca_pem`), bootstrap DNS via DERP, `cap:` sources, two auxiliary relays, five sources per LAN → Tailnet rule plus docs/SERVICE-GATEWAY.md guide, dated pre-crash log, UDP helpers on the TCPIP thread.
+  Host tests: tls_distrust, ctrl_addr_cache, tailnet_authorization, derp_aux, derp_rx_wait, ml_udp_tcpip, log_capture, lan_sources and browser.
+- Deferred with reason: IPv6 tailnet addresses (DEVELOPMENT-ROADMAP).
+- Owed:
+  - board B tests (Leave tailnet, DERP region relay): need the owner to set board B's admin password and enter an auth key;
+  - Linux sanitizer run in Docker: needs the owner's permission to download the image;
+  - USB devices.
+
 ## Tailnet access audit (2026-11-18)
 
 Fixed items and the open ones (map size/zstd, PingRequest types other than
