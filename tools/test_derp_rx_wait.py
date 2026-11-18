@@ -66,7 +66,9 @@ typedef struct { unsigned bits; } fd_set;
 struct timeval { long tv_sec, tv_usec; };
 #define ML_DERP_AUX 1
 typedef struct { int sockfd; bool connected; bool rx_parked; uint64_t last_recv_ms; } ml_derp_conn_t;
-typedef struct { ml_derp_conn_t derp, derp_aux; int events; } microlink_t;
+typedef struct { ml_derp_conn_t derp, derp_aux[2]; int events; } microlink_t;
+#define ML_DERP_AUX 1
+#define ML_DERP_AUX_N 2
 static int delays, delay_ms, selects, sel_nfds, sel_bits, sel_us, sel_rc, reconnects;
 static uint64_t now_ms = 1000;
 static uint32_t s_derp_frames_rx;
@@ -82,7 +84,7 @@ static int poll_derp_read(microlink_t *ml, ml_derp_conn_t *c) { if (c != &ml->de
 @@WAIT@@
 static void one_pass(microlink_t *ml, uint64_t *rx_busy_since_p, bool *readable_idle_p) {
     uint64_t rx_busy_since = *rx_busy_since_p; bool readable_idle = *readable_idle_p;
-    ml_derp_conn_t *conns[2] = { &ml->derp, &ml->derp_aux };
+    ml_derp_conn_t *conns[3] = { &ml->derp, &ml->derp_aux[0], &ml->derp_aux[1] };
     do {   /* one pass of the task's while loop; its continue ends the pass */
 @@LOOP@@
     } while (0);
@@ -90,7 +92,7 @@ static void one_pass(microlink_t *ml, uint64_t *rx_busy_since_p, bool *readable_
 }
 #define CHECK(c) do { if (!(c)) { printf("FAIL %d\n", __LINE__); return 1; } } while (0)
 int main(void) {
-    microlink_t ml = { .derp = { .sockfd = 7, .connected = true }, .derp_aux = { .sockfd = -1 } };
+    microlink_t ml = { .derp = { .sockfd = 7, .connected = true }, .derp_aux = { { .sockfd = -1, .rx_parked = true }, { .sockfd = -1, .rx_parked = true } } };
     sel_rc = 0; CHECK(derp_wait_readable(&ml.derp, DERP_RX_IDLE_WAIT_US) == 0);
     CHECK(selects == 1 && delays == 0 && sel_nfds == 8 && sel_bits == (1 << 7) && sel_us == 20000);
     sel_rc = -1; CHECK(derp_wait_readable(&ml.derp, 20000) == -1 && delays == 1 && delay_ms == 10);
@@ -99,18 +101,18 @@ int main(void) {
     /* both relays: one select over both sockets; none connected: a tick, no select */
     sel_rc = 0; selects = delays = 0;
     CHECK(derp_wait_readable_any(&ml, 20000) == 0 && sel_bits == (1 << 7) && sel_nfds == 8);
-    ml.derp_aux.sockfd = 9; ml.derp_aux.connected = true;
+    ml.derp_aux[1].sockfd = 9; ml.derp_aux[1].connected = true;
     CHECK(derp_wait_readable_any(&ml, 20000) == 0 && sel_bits == ((1 << 7) | (1 << 9)) && sel_nfds == 10);
-    ml.derp.connected = false; ml.derp_aux.connected = false;
+    ml.derp.connected = false; ml.derp_aux[1].connected = false;
     CHECK(derp_wait_readable_any(&ml, 20000) == -1 && selects == 2 && delays == 1);
     ml.derp.connected = true;
     /* the reader serves the auxiliary relay too; its read error drops only it */
-    { uint64_t sn = 0; bool r = false; ml.derp_aux.connected = true; poll_n = 0; poll_i = 0; aux_polls = 0;
-      one_pass(&ml, &sn, &r); CHECK(aux_polls == 1 && ml.derp_aux.rx_parked && !ml.derp.rx_parked);
+    { uint64_t sn = 0; bool r = false; ml.derp_aux[1].connected = true; poll_n = 0; poll_i = 0; aux_polls = 0;
+      one_pass(&ml, &sn, &r); CHECK(aux_polls == 1 && ml.derp_aux[1].rx_parked && !ml.derp.rx_parked);
       poll_rc[0] = 0; poll_rc[1] = -1; poll_n = 2; poll_i = 0; reconnects = 0;
-      one_pass(&ml, &sn, &r); CHECK(reconnects == 0 && !ml.derp_aux.connected && ml.derp.connected && ml.derp_aux.rx_parked);
+      one_pass(&ml, &sn, &r); CHECK(reconnects == 0 && !ml.derp_aux[1].connected && ml.derp.connected && ml.derp_aux[1].rx_parked);
       one_pass(&ml, &sn, &r); CHECK(aux_polls == 2);   /* not read again once down */
-      ml.derp_aux.sockfd = -1; s_derp_frames_rx = 0; poll_n = 0; poll_i = 0; }
+      ml.derp_aux[1].sockfd = -1; s_derp_frames_rx = 0; poll_n = 0; poll_i = 0; }
     selects = delays = 0;
 
     /* a socket that stays readable and yields nothing: every second pass sleeps */
