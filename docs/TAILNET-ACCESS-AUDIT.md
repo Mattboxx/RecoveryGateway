@@ -49,7 +49,10 @@ devices). Each item: what blocks access, status, where.
    work. Documented in CONFIGURATION.md; IPv6 allowed IPs and routing would
    be the fix.
 
-Also open: no DNS fallback for the control host (official clients have baked
+Also open: a peer's key rotation sent as a patch (PeersChangedPatch with a
+new Key, more frequent with seamless renewal) is refused and answered with a
+full map refresh: safe, but a short interruption for that peer (about once
+per key lifetime). No DNS fallback for the control host (official clients have baked
 bootstrap addresses); an explicit "controlplane.tailscale.com" login server is
 treated as custom (no port fallback); in keep mode a lone gateway can need one
 extra reconnect when a stream starts with OmitPeers.
