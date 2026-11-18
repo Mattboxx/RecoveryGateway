@@ -295,6 +295,16 @@ To do:
   its own: those become guided steps, not switches;
 - update the preview/rollback, the UI and the tests.
 
+Status 2026-11-18 (branch `feat/profiles-20261118`, for the release after
+3.0.26-beta.1): seven profiles, one per first-boot goal (new: `lan-tailnet`,
+`home-assistant`), shown in the goal order and marked when chosen at setup
+(`setup_recommended`). The 8th local switch is the traffic count per access
+point device. Every profile has up-to-date guided steps (uplinks, time limits,
+share-a-service guide, login server certificate, admin scope, microSD). The
+record keeps its layout: 8 value bytes, so the 7-key records of 3.0.25 read
+unchanged and no migration is needed. Host core/API tests and browser
+scenarios pass; device check pending.
+
 **Deferred, low priority (owner: "ci penseremo in futuro se mi contatteranno
 persone interessate"): very large tailnets.** One map response must fit the
 768 KB buffer (about 250-500 peers in an official map), parsed whole by cJSON.

@@ -119,7 +119,8 @@ async function fixture(browser, options = {}) {
         else {status=input.action==='rollback'?404:409;body={ok:false,error:'rejected'};}
       } else {
         const preview=url.searchParams.get('preview');
-        body={schema:1,active:state.profileActive,rollback_available:!!state.profileRollback,rollback_to:'none',rollback_restores:[],profiles};
+        body={schema:1,active:state.profileActive,rollback_available:!!state.profileRollback,rollback_to:'none',rollback_restores:[],profiles,
+          setup_recommended:state.profileRecommended||[]};
         if(preview)body.preview={profile:preview,token:state.profileToken,disables_anything:false,changes_network_exposure:false,
           changes:preview==='monitoring'?[{setting:'device_monitoring',current:false,proposed:true,change:'enable'},{setting:'health_monitor',current:true,proposed:true,change:'unchanged'}]:[],
           manual_steps:['Fixture manual step']};
@@ -1326,6 +1327,14 @@ async function main() {
     await f.page.waitForFunction(()=>document.getElementById('health-status').textContent.includes('unavailable'));
     assert.equal(await f.page.locator('#health-save').isDisabled(),true);
     assert.equal(await f.page.locator('#ops-settings-save').isDisabled(),false); // Independent read failure.
+    assert.deepEqual(f.errors,[]);await f.context.close();count++;
+    // Profiles of the goals chosen at first boot are marked, not applied.
+    f=await fixture(browser,{page:'system',profileRecommended:['monitoring']});
+    await f.page.waitForFunction(()=>document.getElementById('profile-select').options.length===4);
+    assert.deepEqual(await f.page.evaluate(()=>[...document.getElementById('profile-select').options].map(o=>o.textContent)),
+      ['No profile applied','Gateway','Monitoring · chosen at setup','Advanced']);
+    assert.equal(await f.page.locator('#profile-select').inputValue(),'');
+    assert.equal(f.state.profilePosts,undefined);
     assert.deepEqual(f.errors,[]);await f.context.close();count++;
     // Profiles: token-bound preview, conflict re-preview, apply, rollback.
     f=await fixture(browser,{page:'system'});

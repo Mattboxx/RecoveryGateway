@@ -411,6 +411,7 @@
 "Could not save TCP checks",
 "Could not write — edit manually on the Tailscale tab.",
 "Count the traffic of each device",
+"Count traffic per access point device",
 "Counts mobile data in both directions, as most carriers do. Approximate: up to 1 MB or 10 minutes of use can be missed after a power cut. Off (0) by default: nothing is counted or stored.",
 "Crash",
 "Crash detected on last boot",

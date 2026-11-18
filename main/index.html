@@ -7076,7 +7076,7 @@
       document.getElementById('health-save').disabled=!ready||!s_health_state;
     }
     var s_profiles=null,s_profile_preview=null,s_profile_busy=false,s_profile_sync=false;
-    var PROFILE_SETTING_LABELS={device_monitoring:'Monitor configured devices',service_expiry_notifications:'Notify when temporary service access closes',health_monitor:'Health Monitor worker',event_history:'Record events (history)',trends:'Record trends',settings_copy_before_update:'Settings copy before each firmware update',tailnet_names:'Tailnet names for Wi-Fi clients'};
+    var PROFILE_SETTING_LABELS={device_monitoring:'Monitor configured devices',service_expiry_notifications:'Notify when temporary service access closes',health_monitor:'Health Monitor worker',event_history:'Record events (history)',trends:'Record trends',settings_copy_before_update:'Settings copy before each firmware update',tailnet_names:'Tailnet names for Wi-Fi clients',ap_client_traffic:'Count traffic per access point device'};
     function profileLabel(k){return PROFILE_SETTING_LABELS[k]||k;}
     function profileControls() {
       var select=document.getElementById('profile-select');
@@ -7093,7 +7093,8 @@
       document.getElementById('profile-steps-title').hidden=true;
       if(!d){profileControls();return;}
       if(!select.options.length){var none=document.createElement('option');none.value='';none.disabled=true;none.textContent='No profile applied';select.appendChild(none);
-        d.profiles.forEach(function(p){var o=document.createElement('option');o.value=p.id;o.textContent=p.title;select.appendChild(o);});}
+        var rec=Array.isArray(d.setup_recommended)?d.setup_recommended:[];
+        d.profiles.forEach(function(p){var o=document.createElement('option');o.value=p.id;o.textContent=UT(p.title)+(rec.indexOf(p.id)>=0?' · '+UT('chosen at setup'):'');select.appendChild(o);});}
       /* A fresh read shows the active profile; a preview keeps the choice. */
       if(s_profile_sync)select.value=d.profiles.some(function(p){return p.id===d.active;})?d.active:'';
       else if(keep&&d.profiles.some(function(p){return p.id===keep;}))select.value=keep;

@@ -40,6 +40,14 @@ because a rule's exposure depends on today's network.
 - Guided setups snapshot the settings they touch and offer *Restore previous
   settings* without reading secrets.
 - Profiles keep one rollback level (System → General → Configuration profile).
+  Since 3.0.26 there is one profile per first-boot goal (LAN → Tailnet
+  services, subnet router and remote access, IoT Wi-Fi gateway, Wake-on-LAN
+  and recovery, Home Assistant, monitoring, advanced); the goals chosen at
+  first boot are marked "chosen at setup" and never applied by themselves.
+  A profile only switches on local settings after a preview (now also the
+  traffic count per access point device); access, uplinks, routes and
+  notification channels stay guided steps. A record saved by a newer version
+  with one of the new profiles reads as "no profile" on older firmware.
 - Settings copies (System → Backup & reset) keep up to three full copies on
   the gateway itself, by hand or before each update; see [CHANGELOG](../CHANGELOG.md).
 - Physical NVS power-loss behavior during restore is not qualified.

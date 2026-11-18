@@ -62,11 +62,28 @@ int main(void){
     assert(preview_locked(PROFILE_NONE,&plan)==ESP_ERR_INVALID_ARG&&preview_locked(PROFILE_COUNT,&plan)==ESP_ERR_INVALID_ARG);
     assert(preview_locked(PROFILE_MONITORING,&plan)==ESP_OK);
     assert(plan.change_mask==MON_MASK&&plan.token);
-    assert(preview_locked(PROFILE_GATEWAY,&plan)==ESP_OK&&plan.change_mask==(1u<<PK_LEASE_NOTIFY|1u<<PK_SNAPSHOTS));
+    assert(preview_locked(PROFILE_GATEWAY,&plan)==ESP_OK&&plan.change_mask==(1u<<PK_LEASE_NOTIFY|1u<<PK_SNAPSHOTS|1u<<PK_HIST_EVENTS));
     assert(preview_locked(PROFILE_RECOVERY,&plan)==ESP_OK&&plan.change_mask==(1u<<PK_OPS_MONITORING|1u<<PK_HIST_EVENTS));
-    assert(preview_locked(PROFILE_IOT,&plan)==ESP_OK&&plan.change_mask==1u<<PK_TAILNET_NAMES&&plan.proposed_mask==plan.change_mask);
-    settings.value[PK_TAILNET_NAMES]=1;assert(preview_locked(PROFILE_IOT,&plan)==ESP_OK&&!plan.change_mask&&plan.proposed_mask);   /* already on */
-    settings.value[PK_TAILNET_NAMES]=0;
+    #define IOT_MASK (1u<<PK_TAILNET_NAMES|1u<<PK_AP_TRAFFIC|1u<<PK_HIST_EVENTS)
+    assert(preview_locked(PROFILE_IOT,&plan)==ESP_OK&&plan.change_mask==IOT_MASK&&plan.proposed_mask==plan.change_mask);
+    settings.value[PK_TAILNET_NAMES]=1;assert(preview_locked(PROFILE_IOT,&plan)==ESP_OK&&plan.change_mask==(IOT_MASK&~(1u<<PK_TAILNET_NAMES)));
+    settings.value[PK_AP_TRAFFIC]=1;settings.value[PK_HIST_EVENTS]=1;
+    assert(preview_locked(PROFILE_IOT,&plan)==ESP_OK&&!plan.change_mask&&plan.proposed_mask==IOT_MASK);   /* already on */
+    settings.value[PK_TAILNET_NAMES]=settings.value[PK_AP_TRAFFIC]=settings.value[PK_HIST_EVENTS]=0;
+    /* 3.0.26: a profile for every first-boot goal. */
+    assert(preview_locked(PROFILE_LAN_TAILNET,&plan)==ESP_OK&&plan.change_mask==(1u<<PK_LEASE_NOTIFY|1u<<PK_SNAPSHOTS|1u<<PK_HIST_EVENTS));
+    assert(preview_locked(PROFILE_HOME_ASSISTANT,&plan)==ESP_OK&&plan.change_mask==(1u<<PK_OPS_MONITORING|1u<<PK_HIST_EVENTS|1u<<PK_SNAPSHOTS));
+    assert(config_profile_parse("lan-tailnet",&id)&&id==PROFILE_LAN_TAILNET&&config_profile_parse("home-assistant",&id)&&id==PROFILE_HOME_ASSISTANT);
+    {
+        const char *roles[]={"lan-tailnet","subnet-router","iot-ap","wol","home-assistant","monitoring","advanced"};
+        const profile_id_t want[]={PROFILE_LAN_TAILNET,PROFILE_GATEWAY,PROFILE_IOT,PROFILE_RECOVERY,PROFILE_HOME_ASSISTANT,PROFILE_MONITORING,PROFILE_ADVANCED};
+        unsigned seen=0;
+        for(unsigned i=0;i<7;i++){assert(config_profile_for_setup_role(roles[i])==want[i]);seen|=1u<<want[i];}
+        assert(seen==((1u<<PROFILE_COUNT)-2));   /* every profile but "none" matches a goal */
+        assert(config_profile_for_setup_role("first-boot")==PROFILE_NONE&&config_profile_for_setup_role("")==PROFILE_NONE&&config_profile_for_setup_role(NULL)==PROFILE_NONE);
+    }
+    /* No profile ever asks for more than the local switches it may turn on. */
+    for(unsigned p=0;p<PROFILE_COUNT;p++)assert(!(profile_wants[p]&~((1u<<PK_COUNT)-1)));
     assert(preview_locked(PROFILE_ADVANCED,&plan)==ESP_OK&&!plan.change_mask);
     for(unsigned p=0;p<PROFILE_COUNT;p++)assert(!(profile_wants[p]>>PK_COUNT));
     for(unsigned k=0;k<PK_COUNT;k++)assert(key_names[k]&&key_names[k][0]);
@@ -148,9 +165,12 @@ int main(void){
     profile_record_t bad=v;bad.checksum^=1;assert(!record_valid(&bad));
     bad=v;bad.active=PROFILE_COUNT;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
     bad=v;bad.previous=200;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
-    bad=v;bad.applied_mask=1u<<PK_COUNT;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
+    /* applied_mask: all 8 bits are keys now (PK_COUNT == 8), none can be out of range. */
     bad=v;bad.previous_values[0]=2;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
-    bad=v;bad.reserved[0]=1;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
+    bad=v;bad.previous_values[PK_COUNT-1]=2;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
+    /* A record of 3.0.25 (7 keys, a reserved zero byte after them) keeps its meaning. */
+    {profile_record_t old;record_defaults(&old);old.active=PROFILE_IOT;old.has_backup=1;old.applied_mask=1u<<PK_TAILNET_NAMES;
+     old.previous_values[PK_SNAPSHOTS]=1;old.checksum=record_checksum(&old);assert(record_valid(&old)&&sizeof old.previous_values==8);}
     bad=v;bad.has_backup=2;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
     bad=v;bad.version=2;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
     bad=v;bad.magic=0;bad.checksum=record_checksum(&bad);assert(!record_valid(&bad));
@@ -187,8 +207,8 @@ HTTP = r'''
 #define ESP_ERR_NO_MEM 0x101
 #define ESP_ERR_NOT_FOUND 0x105
 struct httpd_req {int content_len,offset,status;const char *body;bool authorized;char reply[300];};
-static const char *const key_names[PK_COUNT]={"device_monitoring","service_expiry_notifications","health_monitor","event_history","trends","settings_copy_before_update","tailnet_names"};
-static const char *const profile_names[PROFILE_COUNT]={"none","gateway","recovery","iot","monitoring","advanced"};
+static const char *const key_names[PK_COUNT]={"device_monitoring","service_expiry_notifications","health_monitor","event_history","trends","settings_copy_before_update","tailnet_names","ap_client_traffic"};
+static const char *const profile_names[PROFILE_COUNT]={"none","gateway","recovery","iot","monitoring","advanced","lan-tailnet","home-assistant"};
 const char *config_profile_name(profile_id_t p){return p<PROFILE_COUNT?profile_names[p]:"unknown";}
 bool config_profile_parse(const char *n,profile_id_t *o){for(unsigned i=1;n&&i<PROFILE_COUNT;i++)if(!strcmp(n,profile_names[i])){*o=(profile_id_t)i;return true;}return false;}
 static int applies,rollbacks;static uint32_t last_token;static profile_id_t last_profile;static esp_err_t apply_result,rollback_result;static profile_result_t canned;

@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+Next (after 3.0.26-beta.2), in progress:
+
+- **Configuration profiles brought up to date** (System → General): one
+  profile per first-boot goal, with two new ones (*LAN → Tailnet services*,
+  *Home Assistant*), in the same order as the setup; the goals chosen at first
+  boot are marked "chosen at setup". Each profile's guided steps now cover
+  what was added since (backup uplinks, time limits and several devices per
+  LAN → Tailnet rule, sharing a service with another network, the login
+  server certificate, administration scope, the microSD log). The IoT profile
+  also turns on the traffic count per access point device. Profiles still
+  never open access, change routes or send data by themselves.
+
+3.0.26-beta.1 adds to 3.0.25:
+
 3.0.26-beta.2 adds to 3.0.25 (3.0.26-beta.1 was an internal candidate, not published):
 
 - **Fixed: tunnel blocked in tailnets with recently added devices**
