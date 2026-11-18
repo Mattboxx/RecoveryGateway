@@ -227,7 +227,7 @@ static void ownership(void) {
 }
 /* Every array of the policy allocation is 16-byte aligned for any number of
  * rules, peers and prefixes: with an odd rule count the peer table started on
- * a 2-byte boundary (106-byte rules), a LoadStoreAlignment restart on the
+ * a 2-byte boundary (106-byte rules at the time), a LoadStoreAlignment restart on the
  * ESP32-S3 and undefined behaviour on the host. */
 static void layout_alignment(void) {
     for (uint32_t e=0;e<9;e++) for (uint32_t pc=1;pc<4;pc++) for (uint32_t pool=1;pool<4;pool++) for (int ix=0;ix<2;ix++) {
@@ -501,17 +501,79 @@ static void session_maps(void) {
     puts("PASS: first map of a session complete without Peers/PacketFilter (empty tailnet, reconnect alone, join), never assumed for deltas or OmitPeers, consumed once");
     ml_policy_reset();
 }
-/* "cap:<name>" sources (node-capability match, capver >= 109) admit nobody
- * here and no longer refuse the whole policy. */
+/* "cap:<name>" sources (node-capability match, capver >= 109): packets from
+ * a tailnet address of a peer holding that capability (CapMap key or legacy
+ * Capabilities entry); not from a subnet route behind it, not from peers
+ * without it; a patched CapMap replaces the old one; at most 8 kept (the
+ * smallest hashes, so admitting less, never more); wrong shapes refused. */
+#define CAP_RULES ",\"PacketFilter\":[{\"SrcIPs\":[\"cap:example.com/cap/posture\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":22,\"Last\":22}}]}," \
+    "{\"SrcIPs\":[\"100.64.0.1\",\"cap:other\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"100.64.0.10\",\"Ports\":{\"First\":80,\"Last\":80}}]}]}"
+#define PEER_A_CAP "{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\"],\"AllowedIPs\":[\"100.64.0.1/32\",\"fd7a:115c:a1e0::1/128\",\"198.51.100.0/24\"]," \
+    "\"CapMap\":{\"example.com/cap/posture\":[{\"x\":1}],\"funnel\":null}}"
+#define PEER_B_LEGACY "{\"ID\":2,\"Key\":\"" KEY_B "\",\"Addresses\":[\"100.64.0.2/32\",\"fd7a:115c:a1e0::2/128\"],\"Capabilities\":[\"other\"]}"
 static void cap_sources(void) {
     ml_policy_reset();
-    assert(apply("{" NODE "," PEER_LIST ",\"PacketFilter\":[{\"SrcIPs\":[\"cap:example.com/cap/posture\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":22,\"Last\":22}}]},"
-                 "{\"SrcIPs\":[\"100.64.0.1\",\"cap:other\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"100.64.0.10\",\"Ports\":{\"First\":80,\"Last\":80}}]}]}"));
-    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready&&st.expanded_rules==1);
-    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
-    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));      /* the cap: rule admits nobody */
-    assert(!rx(4,6,"100.64.0.2","100.64.0.10",40000,22,2,key_b));
-    puts("PASS: cap: sources match nobody, the rest of the policy applies (no whole-policy refusal)");
+    assert(apply("{" NODE ",\"Peers\":[" PEER_A_CAP "," PEER_B_LEGACY "]" CAP_RULES));
+    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready&&st.expanded_rules==3);
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));        /* A holds posture (CapMap) */
+    assert(rx(6,6,"fd7a:115c:a1e0::1","fd7a:115c:a1e0::10",40000,22,2,key_a));
+    assert(!rx(4,6,"198.51.100.7","100.64.0.10",40000,22,2,key_a));     /* a subnet behind A: not A's address */
+    assert(!rx(4,17,"100.64.0.1","100.64.0.10",40000,22,2,key_a));      /* protocol still checked */
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,23,2,key_a));       /* port still checked */
+    assert(!rx(4,6,"100.64.0.2","100.64.0.10",40000,22,2,key_b));       /* B lacks posture */
+    assert(rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));        /* B: legacy "other" */
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));        /* A by address */
+    assert(!rx(4,6,"100.64.0.2","100.64.0.10",40000,22,2,key_a));       /* B's address with A's key: ownership first */
+    /* A patch with a CapMap replaces it: posture gone, nothing else changes. */
+    assert(apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"CapMap\":{\"funnel\":[]}}]}"));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    assert(rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    /* A patch without CapMap keeps it; PeersChanged with it back restores it. */
+    assert(apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"KeyExpiry\":\"2099-01-01T00:00:00Z\"}]}"));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    assert(apply("{\"PeersChanged\":[" PEER_A_CAP "]}"));
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    /* Rules replaced without peers resent: the capabilities stay known. */
+    assert(apply("{\"PacketFilter\":[{\"SrcIPs\":[\"cap:funnel\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}]}]}"));
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,443,2,key_a)&&!rx(4,6,"100.64.0.2","100.64.0.10",40000,443,2,key_b));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    /* More than 8 capabilities: 8 kept, whichever order they come in. */
+    {
+        char map[4096],caps[2048]="";
+        for (unsigned i=0;i<12;i++) {char one[48];snprintf(one,sizeof one,"%s\"c%u\":null",i?",":"",i);strcat(caps,one);}
+        snprintf(map,sizeof map,"{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"CapMap\":{%s}}],"
+                 "\"PacketFilter\":[{\"SrcIPs\":[\"cap:c0\",\"cap:c1\",\"cap:c2\",\"cap:c3\",\"cap:c4\",\"cap:c5\",\"cap:c6\",\"cap:c7\",\"cap:c8\",\"cap:c9\",\"cap:c10\",\"cap:c11\"],"
+                 "\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}]}]}",caps);
+        assert(apply(map));
+        assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,443,2,key_a));
+        unsigned admitted=0;
+        for (unsigned i=0;i<12;i++) {
+            char one[512];snprintf(one,sizeof one,"{\"PacketFilter\":[{\"SrcIPs\":[\"cap:c%u\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":443,\"Last\":443}}]}]}",i);
+            assert(apply(one));admitted+=rx(4,6,"100.64.0.1","100.64.0.10",40000,443,2,key_a);
+        }
+        assert(admitted==8);
+        const policy *q=current;assert(q);
+        for (uint32_t i=0;i<q->peer_count;i++) if (q->peers[i].active && q->peers[i].id==1) {
+            assert(q->peers[i].cap_count==8);
+            for (unsigned k=1;k<8;k++) assert(q->peers[i].caps[k-1]<q->peers[i].caps[k]);
+        }
+    }
+    /* Wrong shapes are refused (authority withdrawn until a valid map). */
+    const char *bad[]={
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"CapMap\":[\"x\"]}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"CapMap\":{\"\":null}}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"Capabilities\":\"x\"}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"Capabilities\":[1]}]}",
+        "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"],\"capmap\":{}}]}",
+        "{\"PeersChangedPatch\":[{\"NodeID\":1,\"CapMap\":\"x\"}]}",
+        "{\"PacketFilter\":[{\"SrcIPs\":[\"cap:\"],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":1,\"Last\":1}}]}]}",
+    };
+    for (unsigned i=0;i<sizeof bad/sizeof bad[0];i++) {
+        assert(apply("{" NODE ",\"Peers\":[" PEER_A_CAP "," PEER_B_LEGACY "]" CAP_RULES));
+        assert(!apply(bad[i]));
+        assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));
+    }
+    puts("PASS: cap: sources: CapMap and legacy capabilities, tailnet addresses only, patch replaces, rules replaced alone, 8 kept deterministically, wrong shapes refused");
     ml_policy_reset();
 }
 int main(void) {

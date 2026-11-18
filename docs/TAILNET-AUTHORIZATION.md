@@ -148,7 +148,11 @@ remain. An empty effective union denies new inbound traffic.
 Supported network match forms: literal IPv4/IPv6, CIDR, inclusive IP ranges,
 wildcard; TCP/UDP destination-port ranges and protocol numbers. Omitted/empty
 IPProto uses TCP, UDP and ICMP. Pure application CapGrant records do not grant
-IP access. Deprecated SrcBits/Bits, source `cap:` matching, unknown network-rule
+IP access. Source `cap:<name>` (3.0.26) matches packets from a tailnet
+address (not a subnet route) of a peer whose CapMap or legacy Capabilities
+holds that name; a peer keeps at most 8 capabilities (64-bit hashes, the
+smallest kept), so an unusual peer with more can be admitted less, never more;
+a patched CapMap replaces the old one. Deprecated SrcBits/Bits, unknown network-rule
 fields and malformed combinations are not silently widened; unsupported
 network rules invalidate the snapshot. This is deliberately **not full policy
 parity** with Tailscale/Headscale or the official filter.

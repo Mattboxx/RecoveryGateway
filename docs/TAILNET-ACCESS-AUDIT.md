@@ -14,7 +14,7 @@ devices). Each item: what blocks access, status, where.
 | 128 ACL rules | larger policy refused whole | rule table sized by the policy (beta.17) |
 | Node key expiry | factory reset needed | 14-day warning, renewal with OldNodeKey at the next start (beta.17) |
 | First map without Peers (empty tailnet, omitempty) | lone gateway: no peer authority, tunnel blocked, reconnect loop | first map of a session is complete (beta.18) |
-| "cap:" ACL sources | whole policy refused, all traffic blocked | such a source admits nobody, other rules apply (beta.18) |
+| "cap:" ACL sources | whole policy refused, all traffic blocked | such a source admits nobody, other rules apply (beta.18); 3.0.26: matches peers holding the capability |
 | Control only on port 80 | no registration where 80 is blocked/proxied | TLS 443 fallback after two failures, and back (beta.18) |
 | Clock only from pool.ntp.org (audit item 1) | NTP blocked: key expiry checks fail, policy "pending" | clock from MapResponse.ControlTime while unset (beta.18). NTP fallback servers: not added (CONFIG_LWIP_SNTP_MAX_SERVERS=1) |
 | DERP fixed on the first node, DNS only | relay down if that node or DNS fails (mobile/CGNAT: no access) | next node of the region after a failure; DERPMap IPv4 when DNS fails (beta.18) |
