@@ -52,6 +52,14 @@ assert WEB.count('save_trimmed_str_if_present(root, "auth_key", "ts_authkey");')
 assert 'save_str_if_present(s, "auth_key"' not in WEB and 'save_str_if_present(root, "auth_key"' not in WEB
 assert 's_active_auth_key = trim_in_place(nvs_str_or_empty("ts_authkey"));' in MGR
 assert "document.getElementById('ts-auth-key').value.trim()" in HTML
+# Approval granted later arrives in the map (reconnects do not register).
+amap = function(COORD, 'static bool apply_peer_map(')
+assert 'if (cJSON_IsTrue(ma) && ml->reg_state==ML_REG_STATE_APPROVAL) ml->reg_state=ML_REG_STATE_OK;' in amap
+# A registered identity starts without a saved auth key; host/login trimmed.
+conn = function(MGR, 'static esp_err_t tailscale_connect_locked(')
+assert '!s_active_auth_key[0] ||' not in conn and 'No auth key saved: connecting with the registered identity' in conn
+assert 's_active_login_server = trim_in_place(nvs_str_or_empty("ts_login"));' in MGR
+assert 'save_trimmed_str_if_present(s, "login_server", "ts_login");' in WEB
 
 C_CODE = (function(COORD, 'static void ctrl_transport_failed(') + function(COORD, 'static uint32_t first_ipv4(const cJSON *addresses) {')
           + function(COORD, 'static void clock_from_control(') + function(WEB, 'static void save_trimmed_str_if_present(')

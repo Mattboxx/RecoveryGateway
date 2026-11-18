@@ -3734,8 +3734,8 @@ static esp_err_t tailscale_save_handler(httpd_req_t *req)
             nvs_save_int("ts_enabled", cJSON_IsTrue(enabled) ? 1 : 0);
         }
         save_trimmed_str_if_present(s, "auth_key", "ts_authkey");
-        save_str_if_present(s, "hostname",         "ts_hostname");
-        save_str_if_present(s, "login_server",     "ts_login");
+        save_trimmed_str_if_present(s, "hostname", "ts_hostname");
+        save_trimmed_str_if_present(s, "login_server", "ts_login");
         save_str_if_present(s, "ipn_version",      "ts_ipn_ver");
         save_str_if_present(s, "advertise_routes", "ts_routes");
 

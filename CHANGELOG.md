@@ -27,6 +27,10 @@ be used at all:
   and the node's address from the DERP map is used when DNS fails.
 - **Auth keys pasted with a space or a line break** are saved and used
   without them (they were refused as "invalid key").
+- **A registered gateway starts without a saved auth key** (the key is only
+  needed to log in; it can be removed after registration), and the
+  "waiting for approval" state clears when the approval arrives in the map.
+  Control server ping requests are logged (not answered yet).
 - Own and peer tailnet addresses are the first IPv4 of the list, not item 0
   (IPv6-first lists); map responses up to 768 KB (about 250-500 peers in an
   official map, was 512 KB); registration that needs a new auth key or a

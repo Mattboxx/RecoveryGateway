@@ -58,7 +58,8 @@ typedef struct {
     struct {uint32_t ip;uint16_t port;bool is_ipv6;} endpoints[ML_MAX_ENDPOINTS];
 } ml_peer_t;
 typedef struct {ml_peer_update_t *items[256];unsigned head,tail;} queue;
-typedef struct {ml_peer_t peers[ML_MAX_PEERS];int peer_count;void *peer_update_queue,*wg_netif;bool tailnet_lock;} microlink_t;
+enum {ML_REG_STATE_OK=0,ML_REG_STATE_APPROVAL=4};
+typedef struct {ml_peer_t peers[ML_MAX_PEERS];int peer_count;void *peer_update_queue,*wg_netif;bool tailnet_lock;unsigned char reg_state;} microlink_t;
 struct netif {unsigned dummy;};
 static unsigned calls,fail_alloc,fail_send,send_calls,rejected_adds,cache_removes,wg_removes;
 static bool sync_fail;
