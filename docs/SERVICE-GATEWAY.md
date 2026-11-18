@@ -206,7 +206,7 @@ once and keeps its identity.
    network gets access back so nobody is locked out).
 3. LAN → Tailnet: add a rule — service address `100.101.102.103`, service port
    `8123`, a port on the gateway (for example `8123`) and the friend's devices
-   in **Allowed LAN devices**: `192.168.1.20, 192.168.1.21` (up to 5 devices
+   in **Allowed LAN devices**: `192.168.1.20, 192.168.1.30` (up to 5 devices
    in the same /16, or one subnet). Ask the friend to give those devices fixed
    addresses (DHCP reservation on their router) so the list stays right.
    Optionally choose a time limit.

@@ -27,7 +27,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (one extra relay before). Each extra relay opens only when needed and closes
   after a minute without traffic.
 - **LAN → Tailnet: up to 5 allowed devices per rule**
-  ("192.168.1.20, 192.168.1.21"), and a guide for sharing one service with
+  ("192.168.1.20, 192.168.1.30"), and a guide for sharing one service with
   another network through a gateway placed there (docs/SERVICE-GATEWAY.md).
 - **The pre-crash log shows date and time** for the lines of the crashed run
   when that run had the clock; the crash header no longer shows the time twice.
