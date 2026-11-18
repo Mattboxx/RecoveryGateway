@@ -44,7 +44,7 @@ STABLE_TAG = 'v' + STABLE_VERSION
 # Current firmware: keep NEXT_PUBLISHED False until the qualified release
 # exists. When True, website/firmware/<NEXT_VERSION>/ must hold the exact
 # released files (see website/firmware/README.md); the build verifies them.
-NEXT_VERSION = '3.0.24'
+NEXT_VERSION = '3.0.25'
 NEXT_PUBLISHED = True
 FIRMWARE_DIR = SRC / 'firmware'
 EWT_VERSION = '10.4.0'   # ESP Web Tools bundle vendored in website/assets/esp-web-tools/
@@ -131,6 +131,11 @@ def changelog_html(limit_releases: int = 3) -> str:
             out.append('<h2>' + inline_md(line[3:]) + '</h2>')
             continue
         if not stable:
+            continue
+        # The notes of a release's betas stay in CHANGELOG.md; the page shows
+        # the release summary above them.
+        if line.startswith('### Notes of the '):
+            flush(); stable = False
             continue
         if line.startswith('### '):
             flush(); sections += 1
