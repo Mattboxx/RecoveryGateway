@@ -6,7 +6,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-3.0.26-beta.1 adds to 3.0.25:
+3.0.26-beta.2 adds to 3.0.25 (3.0.26-beta.1 was an internal candidate, not published):
 
 - **Fixed: tunnel blocked in tailnets with recently added devices**
   ("Authorization/peer update needs a full refresh; tunnel data blocked
