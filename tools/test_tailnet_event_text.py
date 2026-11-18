@@ -51,7 +51,9 @@ for close in ('control server closed the connection', 'control connection error 
               'control server reset the map stream', 'map stream out of frame', 'map message buffer full'):
     assert f'note_poll_close(ml, "{close}", ' in coord, close
 assert 'ml->ctrl_loss_code = ml->ctrl_close_detail ? ml->ctrl_close_code : -1;' in coord
-assert coord.count('note_ctrl_retry(ml, "') == 7
+assert coord.count('note_ctrl_retry(ml, "') == 6
+# A refused Noise upgrade carries what the server answered (test_noise_upgrade).
+assert 'note_ctrl_retry(ml, ml->noise_note ? ml->noise_note : "Noise handshake failed");' in coord
 # Registration failures carry their own short reason (fits the 48-byte field).
 assert 'note_ctrl_retry(ml, ml->reg_note ? ml->reg_note : "registration failed");' in coord
 

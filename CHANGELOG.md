@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.23 adds to beta.22:
+
+- **Why the control server refused the connection is shown.** The Tailscale
+  page and the event history now say what the server answered (client
+  version not supported, wrong URL or a proxy that does not pass the
+  upgrade, access refused, rate limit, server or proxy error) instead of
+  "Noise handshake failed". The answer is accepted only with status 101:
+  before, "101" anywhere in an error page passed the check and the failure
+  showed up later with a misleading message.
+
 3.0.25-beta.22 adds to beta.21:
 
 - **Headscale and HTTPS login servers reachable when DNS fails.** The last
