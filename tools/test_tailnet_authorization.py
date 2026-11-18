@@ -501,6 +501,68 @@ static void session_maps(void) {
     puts("PASS: first map of a session complete without Peers/PacketFilter (empty tailnet, reconnect alone, join), never assumed for deltas or OmitPeers, consumed once");
     ml_policy_reset();
 }
+/* Node IDs above 2^53 (int64 on the wire; new Tailscale nodes have them):
+ * read exactly, also in PeersRemoved and PeersChangedPatch; two IDs that
+ * share one double stay two peers; an ID read from an unscanned message (a
+ * rounded double) or a token of another message is refused, never guessed. */
+static bool apply_scanned(const char *s) {
+    char *t=strdup(s);assert(t&&ml_json_ids_scan(t,strlen(t)));
+    cJSON *v=cJSON_Parse(t);assert(v);bool ok=ml_policy_apply(v);cJSON_Delete(v);free(t);return ok;
+}
+#define BIG_A "{\"ID\":9223372036854775801,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"]}"
+#define BIG_B "{\"ID\":9223372036854775802,\"Key\":\"" KEY_B "\",\"Addresses\":[\"100.64.0.2/32\"]}"
+static void large_ids(void) {
+    ml_policy_reset();
+    /* 9223372036854775801 and ...802 round to the same double. */
+    assert((double)9223372036854775801ULL==(double)9223372036854775802ULL);
+    assert(apply_scanned("{" NODE ",\"Peers\":[" BIG_A "," BIG_B "],\"PacketFilter\":[" ALL_RULE "]}"));
+    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready);
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    uint8_t k[32];
+    assert(ml_policy_peer_key(9223372036854775801ULL,k)==1&&!memcmp(k,key_a,32));
+    assert(ml_policy_peer_key(9223372036854775802ULL,k)==1&&!memcmp(k,key_b,32));
+    /* A removal names exactly one of them. */
+    assert(apply_scanned("{\"PeersRemoved\":[9223372036854775802]}"));
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&!rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    assert(ml_policy_peer_key(9223372036854775802ULL,k)!=1&&ml_policy_peer_key(9223372036854775801ULL,k)==1);
+    /* A patch with the exact ID (expired key) reaches only that peer. */
+    assert(apply_scanned("{\"PeersChanged\":[" BIG_B "]}"));
+    assert(apply_scanned("{\"PeersChangedPatch\":[{\"NodeID\":9223372036854775801,\"KeyExpiry\":\"2001-01-01T00:00:00Z\"}]}"));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    /* Unscanned (rounded) large IDs are refused, as before. */
+    ml_json_ids_clear();ml_policy_reset();
+    assert(!apply("{" NODE ",\"Peers\":[" BIG_A "],\"PacketFilter\":[" ALL_RULE "]}"));
+    /* Typical new Tailscale IDs just above 2^53. */
+    ml_policy_reset();
+    assert(apply_scanned("{" NODE ",\"Peers\":[{\"ID\":9007199254740993,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"]},"
+                         "{\"ID\":9007199254740992,\"Key\":\"" KEY_B "\",\"Addresses\":[\"100.64.0.2/32\"]}],\"PacketFilter\":[" ALL_RULE "]}"));
+    assert(ml_policy_peer_key(9007199254740993ULL,k)==1&&!memcmp(k,key_a,32)&&ml_policy_peer_key(9007199254740992ULL,k)==1&&!memcmp(k,key_b,32));
+    /* Scanner: only integers of 16+ digits outside strings become tokens,
+     * text length unchanged, still valid JSON; floats, exponents, strings,
+     * short and out-of-range numbers are left alone. */
+    const char *src="{\"a\":\"9007199254740993\",\"b\":9007199254740993.5,\"c\":9007199254740993e0,\"d\":123,"
+                    "\"e\":99999999999999999999,\"f\":\"x\\\"9007199254740995\",\"g\":[ 9007199254740997 ,18446744073709551615],"
+                    "\"h\":1234567890123456}";
+    char *t=strdup(src);size_t n0=strlen(t);assert(ml_json_ids_scan(t,n0)&&strlen(t)==n0);
+    assert(strstr(t,"\"a\":\"9007199254740993\"")&&strstr(t,"9007199254740993.5")&&strstr(t,"9007199254740993e0")
+           &&strstr(t,"99999999999999999999")&&strstr(t,"x\\\"9007199254740995")&&!strstr(t,"9007199254740997")&&!strstr(t,"1234567890123456"));
+    cJSON *j=cJSON_Parse(t);assert(j);uint64_t out;
+    assert(ml_json_u64(cJSON_GetObjectItem(j,"d"),INT64_MAX,&out)&&out==123);
+    cJSON *g=cJSON_GetObjectItem(j,"g");
+    assert(ml_json_u64(cJSON_GetArrayItem(g,0),INT64_MAX,&out)&&out==9007199254740997ULL);
+    assert(!ml_json_u64(cJSON_GetArrayItem(g,1),INT64_MAX,&out)&&ml_json_u64(cJSON_GetArrayItem(g,1),UINT64_MAX,&out)&&out==UINT64_MAX);
+    assert(ml_json_u64(cJSON_GetObjectItem(j,"h"),INT64_MAX,&out)&&out==1234567890123456ULL);
+    assert(!ml_json_u64(cJSON_GetObjectItem(j,"b"),INT64_MAX,&out)&&!ml_json_u64(cJSON_GetObjectItem(j,"c"),INT64_MAX,&out));
+    assert(!ml_json_u64(cJSON_GetObjectItem(j,"e"),UINT64_MAX,&out)&&!ml_json_u64(cJSON_GetObjectItem(j,"a"),INT64_MAX,&out));
+    /* A token is valid only for the message it came from. */
+    cJSON *tok=cJSON_Duplicate(cJSON_GetArrayItem(g,0),0);
+    ml_json_ids_clear();assert(!ml_json_u64(tok,INT64_MAX,&out));
+    cJSON *neg=cJSON_CreateNumber(-5);assert(!ml_json_u64(neg,INT64_MAX,&out));
+    cJSON_Delete(tok);cJSON_Delete(neg);cJSON_Delete(j);free(t);
+    ml_json_ids_clear();
+    puts("PASS: node IDs above 2^53 exact (peers, removals, patches), IDs sharing one double kept apart, rounded or foreign IDs refused, JSON rewritten in place");
+    ml_policy_reset();
+}
 /* "cap:<name>" sources (node-capability match, capver >= 109): packets from
  * a tailnet address of a peer holding that capability (CapMap key or legacy
  * Capabilities entry); not from a subnet route behind it, not from peers
@@ -577,13 +639,13 @@ static void cap_sources(void) {
     ml_policy_reset();
 }
 int main(void) {
-    layout_alignment();peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();cap_sources();concurrency();
+    layout_alignment();peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();large_ids();cap_sources();concurrency();
     printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); rules, peers, prefixes sized by the map (%zu, %zu, %zu bytes each) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),sizeof(entry),sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
 }
 '''
 
 # Same translation unit exposes implementation sizes/helpers, not a reimplementation.
-PROGRAM = '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n' + HEAD + BODY
+PROGRAM = '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n' + HEAD + BODY
 wg_source=(ML/'components/wireguard_lwip/src/wireguardif.c').read_text(encoding='utf-8')
 # The receive path carries test-only profiling macros (empty unless TSR_PERF_PROFILE).
 # The receive path's saturation counter lives outside this function (tested in forward_drop_counters).
@@ -716,7 +778,7 @@ with tempfile.TemporaryDirectory(prefix='tailnet-authorization-') as directory:
         if os.environ.get('POLICY_NO_PIE') == '1' and os.name != 'nt':
             flags += ['-fno-pie', '-no-pie']
     binary = path / ('test.exe' if os.name == 'nt' else 'test')
-    for program in (PROGRAM, '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n'+HEAD+WG_FIXTURE+wg_receive+WG_TESTS):
+    for program in (PROGRAM, '#define ML_POLICY_HOST_TEST 1\n#include "ml_policy.c"\n#include "ml_json_id.c"\n'+HEAD+WG_FIXTURE+wg_receive+WG_TESTS):
         (path/'test.c').write_text(program,encoding='utf-8')
         subprocess.run([os.environ.get('CC','gcc'), *flags, '-Wno-unused-function', str(path/'test.c'), '-o',str(binary), *libs], check=True)
         with (path/'run.log').open('w+b') as log:
@@ -733,6 +795,8 @@ with tempfile.TemporaryDirectory(prefix='tailnet-authorization-') as directory:
 coord=(ML/'src/ml_coord.c').read_text(encoding='utf-8')
 wg=(ML/'components/wireguard_lwip/src/wireguardif.c').read_text(encoding='utf-8')
 assert 'apply_peer_map(ml,map_json)' in coord and 'apply_peer_map(ml,update_json)' in coord
+assert coord.index('ml_json_ids_scan(parse_start, parse_len)') < coord.index('cJSON *map_json = cJSON_Parse(parse_start);')
+assert coord.index('ml_json_ids_scan(ps, size)') < coord.index('cJSON *update_json = cJSON_Parse(ps);')   # exact node IDs before every map parse
 apply_map=coord[coord.index('static bool apply_peer_map('):].split('\n}',1)[0]
 assert apply_map.index('ml_policy_apply(map)') < apply_map.index('parse_peers_from_map_response(ml,map)')
 assert 'ml_policy_reset()' in apply_map

@@ -8,6 +8,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 3.0.26-beta.1 adds to 3.0.25:
 
+- **Fixed: tunnel blocked in tailnets with recently added devices**
+  ("Authorization/peer update needs a full refresh; tunnel data blocked
+  (stage=policy reason=peer-id ...)"). Tailscale device IDs are 64-bit
+  numbers, and devices added recently have IDs larger than the gateway's JSON
+  reader could hold exactly: the gateway refused the whole device list and
+  blocked the tunnel. IDs are now read exactly, also in device updates and
+  removals.
+
 - **Headscale with a private CA or a self-signed certificate.** The Tailscale
   page has a *Login server certificate* field: paste the CA (or the server
   certificate) as PEM text. It is trusted only for the login server and its
