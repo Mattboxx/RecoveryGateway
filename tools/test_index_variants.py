@@ -92,7 +92,10 @@ with tempfile.TemporaryDirectory(prefix='index-variants-') as d:
     # power clearly); then from 178500 for the monthly data limit, the access
     # scope, traffic per device, the write-only SNMP community and the
     # aligned Telegram/ntfy command sections (about 1.1 KB, owner 2026-11-17:
-    # "Tutte"); the 3584 KiB app slots keep more than 1 MiB free.
-    assert page_gz < 180000, page_gz
+    # "Tutte"); then from 180000 for the Tailscale registration state, node
+    # key expiry, Tailnet Lock and tunnel counts (about 0.8 KB, owner
+    # 2026-11-18: "io procederei a fare tutte le 10 cose"); the 3584 KiB
+    # app slots keep more than 1 MiB free.
+    assert page_gz < 182000, page_gz
 print(f'PASS: actual page generator: page with {len(langs)} languages as separate scripts ({page_gz} gzip bytes), '
       f'English-only page without them and otherwise identical, C arrays decode to the page and scripts (host)')
