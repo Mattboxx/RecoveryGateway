@@ -2414,5 +2414,19 @@
  "This gateway was not registered in a tailnet.": "Este gateway no estaba registrado en ninguna tailnet.",
  "Turns Tailscale off and restarts the gateway": "Apaga Tailscale y reinicia el gateway",
  "The gateway is restarting.": "El gateway se está reiniciando.",
- "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "Un dispositivo (192.168.1.50), hasta 5 dispositivos (192.168.1.50, 192.168.1.51) o una subred entera (192.168.1.0/24). Mejor dispositivos sueltos."
+ "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "Un dispositivo (192.168.1.50), hasta 5 dispositivos (192.168.1.50, 192.168.1.51) o una subred entera (192.168.1.0/24). Mejor dispositivos sueltos.",
+ "-----BEGIN CERTIFICATE-----": "-----BEGIN CERTIFICATE-----",
+ "Certificate not saved": "Certificado no guardado",
+ "Certificate removed": "Certificado eliminado",
+ "Certificate saved": "Certificado guardado",
+ "In use.": "En uso.",
+ "Login server certificate (optional)": "Certificado del servidor de inicio de sesión (opcional)",
+ "No certificate saved.": "No hay ningún certificado guardado.",
+ "Not used: no login server set.": "No se usa: no hay servidor de inicio de sesión.",
+ "Only for a Headscale server with a private CA or a self-signed certificate: paste its CA (or the server certificate) as PEM text. Trusted only for the login server and its relays, from the next restart; the server name is still checked.": "Solo para un servidor Headscale con una CA privada o un certificado autofirmado: pega su CA (o el certificado del servidor) en formato PEM. Se confía en él solo para el servidor de inicio de sesión y sus relés, desde el próximo reinicio; el nombre del servidor se sigue comprobando.",
+ "Paste a certificate in PEM form (-----BEGIN CERTIFICATE-----).": "Pega un certificado en formato PEM (-----BEGIN CERTIFICATE-----).",
+ "Restart the gateway to apply it.": "Reinicia la pasarela para aplicarlo.",
+ "Save certificate": "Guardar certificado",
+ "The saved certificate is invalid and not used.": "El certificado guardado no es válido y no se usa.",
+ "Used after a restart.": "Se usa tras un reinicio."
 }

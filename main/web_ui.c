@@ -3398,6 +3398,25 @@ static esp_err_t tailscale_handler(httpd_req_t *req)
     }
     if (tailscale_hostname)         cJSON_AddStringToObject(settings, "hostname",       tailscale_hostname);
     if (tailscale_login_server)     cJSON_AddStringToObject(settings, "login_server",   tailscale_login_server);
+    {
+        /* The saved login server certificate (public data): what it is and
+         * whether the running tunnel uses it. */
+        char *pem = nvs_param_get_str("ts_ca_pem");
+        cJSON *ca = cJSON_AddObjectToObject(settings, "tailnet_ca");
+        if (ca) {
+            char fp[65], subject[128];
+            int n = pem ? ml_tls_check_tailnet_ca(pem, fp, subject, sizeof subject) : 0;
+            cJSON_AddBoolToObject(ca, "set", pem && pem[0]);
+            cJSON_AddBoolToObject(ca, "valid", n > 0);
+            cJSON_AddBoolToObject(ca, "active", ml_tls_tailnet_ca_set());
+            cJSON_AddNumberToObject(ca, "certificates", n);
+            if (n) {
+                cJSON_AddStringToObject(ca, "fingerprint", fp);
+                cJSON_AddStringToObject(ca, "subject", subject);
+            }
+        }
+        free(pem);
+    }
     if (tailscale_ipn_version)      cJSON_AddStringToObject(settings, "ipn_version", tailscale_ipn_version);
     cJSON_AddBoolToObject(settings, "advertise_ap", tailscale_advertise_ap != 0);
     {
@@ -3983,6 +4002,77 @@ static esp_err_t tailscale_leave_handler(httpd_req_t *req)
     xTaskNotify(reboot, WEB_RESTART_COMMIT, eSetValueWithOverwrite);
     return response;
 }
+
+/* POST /api/tailscale/ca {"pem":"..."} -- the private CA (or self-signed
+ * certificate) of a Headscale login server over HTTPS, PEM, 1 to 4
+ * certificates, at most ML_TLS_TAILNET_CA_MAX bytes. It is checked as
+ * MicroLink will use it, saved, and used from the next restart for the login
+ * server and its relays only (never for updates, MQTT or notifications), and
+ * only while a login server is set. "" removes it. It changes whom the
+ * gateway trusts for the tailnet, so it needs the password like Leave. */
+static esp_err_t tailscale_ca_handler(httpd_req_t *req)
+{
+    if (require_password_session(req) != ESP_OK) return ESP_FAIL;
+    size_t buf_size = ML_TLS_TAILNET_CA_MAX + 1024;   /* JSON escapes every line break */
+    char *buf = malloc_body_buf(buf_size);
+    if (!buf) { httpd_resp_send_500(req); return ESP_FAIL; }
+    if (recv_body(req, buf, buf_size, NULL) != ESP_OK) { free(buf); return ESP_FAIL; }
+    cJSON *root = json_guard_parse(buf);
+    free(buf);
+    const cJSON *pem = root ? cJSON_GetObjectItem(root, "pem") : NULL;
+    if (!cJSON_IsString(pem)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "pem must be a string");
+        return ESP_FAIL;
+    }
+    const char *text = pem->valuestring;
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
+    char fp[65] = "", subject[128] = "";
+    int n = 0;
+    esp_err_t err;
+    if (!text[0]) {
+        err = nvs_param_erase("ts_ca_pem");
+        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+    } else {
+        n = ml_tls_check_tailnet_ca(text, fp, subject, sizeof subject);
+        if (!n) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "not a usable certificate: PEM text, 1 to 4 certificates, at most 3999 bytes");
+            return ESP_FAIL;
+        }
+        err = nvs_param_set_str("ts_ca_pem", text);
+    }
+    cJSON_Delete(root);
+    cJSON *out = cJSON_CreateObject();
+    if (!out) { httpd_resp_send_500(req); return ESP_FAIL; }
+    cJSON_AddBoolToObject(out, "ok", err == ESP_OK);
+    if (err != ESP_OK) cJSON_AddStringToObject(out, "reason", esp_err_to_name(err));
+    else {
+        cJSON_AddBoolToObject(out, "set", n > 0);
+        cJSON_AddNumberToObject(out, "certificates", n);
+        if (n) {
+            cJSON_AddStringToObject(out, "fingerprint", fp);
+            cJSON_AddStringToObject(out, "subject", subject);
+        }
+        cJSON_AddBoolToObject(out, "restart_required", true);
+        ESP_LOGI(TAG, "Login server certificate %s (applies after a restart)", n ? "saved" : "removed");
+    }
+    char *body = cJSON_PrintUnformatted(out);
+    cJSON_Delete(out);
+    if (!body) { httpd_resp_send_500(req); return ESP_FAIL; }
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t sent = httpd_resp_sendstr(req, body);
+    free(body);
+    return sent;
+}
+
+static const httpd_uri_t uri_tailscale_ca = {
+    .uri      = "/api/tailscale/ca",
+    .method   = HTTP_POST,
+    .handler  = tailscale_ca_handler,
+    .user_ctx = NULL,
+};
 
 static const httpd_uri_t uri_tailscale_leave = {
     .uri      = "/api/tailscale/leave",
@@ -6514,6 +6604,7 @@ esp_err_t web_ui_init(void)
     reg_uri(server, &uri_tailscale_save);
     reg_uri(server, &uri_tailscale_reset_identity);
     reg_uri(server, &uri_tailscale_leave);
+    reg_uri(server, &uri_tailscale_ca);
     reg_uri(server, &uri_system);
     reg_uri(server, &uri_system_save);
 #if CONFIG_TSR_SNMP

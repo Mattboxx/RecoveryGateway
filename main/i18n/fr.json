@@ -2367,5 +2367,19 @@
  "This gateway was not registered in a tailnet.": "Cette passerelle n'était inscrite dans aucun tailnet.",
  "Turns Tailscale off and restarts the gateway": "Désactive Tailscale et redémarre la passerelle",
  "The gateway is restarting.": "La passerelle redémarre.",
- "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "Un appareil (192.168.1.50), jusqu’à 5 appareils (192.168.1.50, 192.168.1.51) ou un sous-réseau entier (192.168.1.0/24). Préférez des appareils précis."
+ "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "Un appareil (192.168.1.50), jusqu’à 5 appareils (192.168.1.50, 192.168.1.51) ou un sous-réseau entier (192.168.1.0/24). Préférez des appareils précis.",
+ "-----BEGIN CERTIFICATE-----": "-----BEGIN CERTIFICATE-----",
+ "Certificate not saved": "Certificat non enregistré",
+ "Certificate removed": "Certificat supprimé",
+ "Certificate saved": "Certificat enregistré",
+ "In use.": "Utilisé.",
+ "Login server certificate (optional)": "Certificat du serveur de connexion (facultatif)",
+ "No certificate saved.": "Aucun certificat enregistré.",
+ "Not used: no login server set.": "Non utilisé : aucun serveur de connexion défini.",
+ "Only for a Headscale server with a private CA or a self-signed certificate: paste its CA (or the server certificate) as PEM text. Trusted only for the login server and its relays, from the next restart; the server name is still checked.": "Uniquement pour un serveur Headscale avec une CA privée ou un certificat auto-signé : collez sa CA (ou le certificat du serveur) au format PEM. Approuvé uniquement pour le serveur de connexion et ses relais, à partir du prochain redémarrage ; le nom du serveur est toujours vérifié.",
+ "Paste a certificate in PEM form (-----BEGIN CERTIFICATE-----).": "Collez un certificat au format PEM (-----BEGIN CERTIFICATE-----).",
+ "Restart the gateway to apply it.": "Redémarrez la passerelle pour l’appliquer.",
+ "Save certificate": "Enregistrer le certificat",
+ "The saved certificate is invalid and not used.": "Le certificat enregistré n’est pas valide et n’est pas utilisé.",
+ "Used after a restart.": "Utilisé après un redémarrage."
 }

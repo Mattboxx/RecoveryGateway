@@ -2415,5 +2415,19 @@
  "This gateway was not registered in a tailnet.": "Questo gateway non era registrato in una tailnet.",
  "Turns Tailscale off and restarts the gateway": "Spegne Tailscale e riavvia il gateway",
  "The gateway is restarting.": "Il gateway si sta riavviando.",
- "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "Un dispositivo (192.168.1.50), fino a 5 dispositivi (192.168.1.50, 192.168.1.51) o una sottorete intera (192.168.1.0/24). Meglio singoli dispositivi."
+ "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "Un dispositivo (192.168.1.50), fino a 5 dispositivi (192.168.1.50, 192.168.1.51) o una sottorete intera (192.168.1.0/24). Meglio singoli dispositivi.",
+ "-----BEGIN CERTIFICATE-----": "-----BEGIN CERTIFICATE-----",
+ "Certificate not saved": "Certificato non salvato",
+ "Certificate removed": "Certificato rimosso",
+ "Certificate saved": "Certificato salvato",
+ "In use.": "In uso.",
+ "Login server certificate (optional)": "Certificato del server di login (facoltativo)",
+ "No certificate saved.": "Nessun certificato salvato.",
+ "Not used: no login server set.": "Non usato: nessun server di login impostato.",
+ "Only for a Headscale server with a private CA or a self-signed certificate: paste its CA (or the server certificate) as PEM text. Trusted only for the login server and its relays, from the next restart; the server name is still checked.": "Solo per un server Headscale con una CA privata o un certificato autofirmato: incolla la sua CA (o il certificato del server) in formato PEM. È considerato attendibile solo per il server di login e i suoi relay, dal prossimo riavvio; il nome del server viene comunque verificato.",
+ "Paste a certificate in PEM form (-----BEGIN CERTIFICATE-----).": "Incolla un certificato in formato PEM (-----BEGIN CERTIFICATE-----).",
+ "Restart the gateway to apply it.": "Riavvia il gateway per applicarlo.",
+ "Save certificate": "Salva certificato",
+ "The saved certificate is invalid and not used.": "Il certificato salvato non è valido e non viene usato.",
+ "Used after a restart.": "Usato dopo un riavvio."
 }

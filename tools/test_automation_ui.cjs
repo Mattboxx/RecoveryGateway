@@ -162,6 +162,13 @@ async function fixture(browser, options = {}) {
       const data = state.logData || '';
       body = {seq: data.length, lost: false, size: data.length, cap: 16384, boot_ms: state.logBootMs || 0,
         data: data.substring(Math.min(since, data.length))};
+    } else if (url.pathname === '/api/tailscale/ca') {
+      const pem = route.request().postDataJSON().pem;
+      state.caPosts = (state.caPosts || []).concat([pem]);
+      if (state.caLocked) status = 403;
+      else if (pem && !pem.includes('-----END CERTIFICATE-----')) { status = 400; body = 'not a usable certificate'; }
+      else body = pem ? {ok: true, set: true, certificates: 1, fingerprint: 'ab'.repeat(32), subject: 'CN=Private Root', restart_required: true}
+                      : {ok: true, set: false, certificates: 0, restart_required: true};
     } else if (url.pathname === '/api/tailscale/leave') {
       state.leaveCalls = (state.leaveCalls || 0) + 1;
       body = {ok: true, server: state.leaveServer || 'logged_out'};
@@ -954,6 +961,40 @@ async function main() {
       const text = await pre();
       assert.match(text, /^W 2026-11-18 10:01:01 \(61000\) test: before the clock$/m);
       assert.match(text, /^E 2026-11-18 10:02:02 \(122500\) test: after$/m);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
+    // Login server certificate: status from the saved one; a paste without a
+    // PEM header never reaches the device; a refusal and the lock are shown;
+    // a saved certificate says it applies after a restart; Remove sends "".
+    {
+      f = await fixture(browser, {page: 'tailscale', tailscaleSettings: {enabled: true, login_server: 'https://hs.example.test',
+        tailnet_ca: {set: true, valid: true, active: true, certificates: 1, fingerprint: 'cd'.repeat(32), subject: 'CN=Old Root'}}});
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent.includes('CN=Old Root'));
+      assert.match(await f.page.locator('#ts-ca-status').textContent(), /SHA-256 cdcdcdcdcdcdcdcd… · In use\./);
+      await f.page.locator('#ts-ca').fill('not a certificate');
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('PEM form'));
+      assert.equal(f.state.caPosts, undefined);
+      await f.page.locator('#ts-ca').fill('-----BEGIN CERTIFICATE-----\nAAAA');
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('not a usable certificate'));
+      const pem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+      await f.page.locator('#ts-ca').fill(pem);
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent.includes('CN=Private Root'));
+      assert.match(await f.page.locator('#ts-ca-status').textContent(), /Used after a restart\./);
+      assert.equal(f.state.caPosts[1], pem);
+      assert.equal(await f.page.locator('#ts-ca').inputValue(), '');
+      await f.page.locator('#ts-ca-remove').click();
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent === 'No certificate saved.');
+      assert.equal(f.state.caPosts[2], ''); assert.equal(f.state.caPosts.length, 3);
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+      f = await fixture(browser, {page: 'tailscale', caLocked: true, tailscaleSettings: {enabled: true,
+        tailnet_ca: {set: true, valid: true, active: false, certificates: 1, fingerprint: 'cd'.repeat(32), subject: 'CN=Old Root'}}});
+      await f.page.waitForFunction(() => document.getElementById('ts-ca-status').textContent.includes('no login server'));
+      await f.page.locator('#ts-ca').fill(pem);
+      await f.page.locator('#ts-ca-save').click();
+      await f.page.waitForFunction(() => document.getElementById('toastContainer').textContent.includes('web UI lock'));
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
     // Leave tailnet: nothing is sent before the confirmation; Cancel sends

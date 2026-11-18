@@ -3330,6 +3330,16 @@
               <span class="form-hint">Empty = Tailscale SaaS.</span>
             </div>
           </div>
+          <div class="form-group" id="ts-ca-group">
+            <label class="form-label" for="ts-ca">Login server certificate (optional)</label>
+            <textarea class="textarea input" id="ts-ca" maxlength="3999" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----" style="min-height:4rem; font-family:var(--font-mono); font-size:0.8rem;"></textarea>
+            <span class="form-hint">Only for a Headscale server with a private CA or a self-signed certificate: paste its CA (or the server certificate) as PEM text. Trusted only for the login server and its relays, from the next restart; the server name is still checked.</span>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-top:0.4rem;">
+              <button class="btn btn-secondary btn-sm" id="ts-ca-save" type="button">Save certificate</button>
+              <button class="btn btn-ghost btn-sm" id="ts-ca-remove" type="button">Remove</button>
+              <span class="form-hint" id="ts-ca-status"></span>
+            </div>
+          </div>
 
           <div class="form-group">
             <label class="form-label" for="ts-ipn-version">Reported client version (optional)</label>
@@ -9727,6 +9737,7 @@
           })();
           document.getElementById('ts-hostname').value      = s.hostname     || '';
           document.getElementById('ts-login').value         = s.login_server || '';
+          tsCaStatus(s.tailnet_ca, !!(s.login_server || '').trim());
           document.getElementById('ts-ipn-version').value = s.ipn_version || '';
           document.getElementById('ts-adv-ap').checked = !!s.advertise_ap;
           document.getElementById('ts-effective-routes').textContent = s.effective_routes_valid === false ? 'Invalid route configuration' : (s.effective_routes || 'None');
@@ -10057,6 +10068,39 @@
       not_registered: 'This gateway was not registered in a tailnet.',
       not_running: 'Tailscale was not running: remove the device in the admin console if it is listed.'
     };
+    /* Login server certificate: saved on its own (it needs the password),
+     * shown as subject and fingerprint, used after a restart. */
+    function tsCaStatus(ca, hasServer) {
+      var el = document.getElementById('ts-ca-status');
+      if (!el) return;
+      if (!ca || !ca.set) { el.textContent = UT('No certificate saved.'); return; }
+      if (!ca.valid) { el.textContent = UT('The saved certificate is invalid and not used.'); return; }
+      var fp = ca.fingerprint ? ' · SHA-256 ' + ca.fingerprint.slice(0, 16) + '…' : '';
+      var note = !hasServer ? UT('Not used: no login server set.') : ca.active ? UT('In use.') : UT('Used after a restart.');
+      el.textContent = (ca.subject || '') + fp + ' · ' + note;
+    }
+    function tsCaPost(pem) {
+      return apiFetch('/api/tailscale/ca', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pem: pem }) })
+        .then(function (r) {
+          if (r.status === 403) return { ok: false, reason: LOCK_TEXT };
+          if (r.status === 400) return r.text().then(function (t) { return { ok: false, reason: t }; });
+          return r.json();
+        })
+        .then(function (d) {
+          if (!d.ok) { showToast('error', UT('Certificate not saved'), d.reason || 'unknown', 8000); return; }
+          tsCaStatus({ set: d.set, valid: d.set, active: false, fingerprint: d.fingerprint, subject: d.subject },
+                     !!document.getElementById('ts-login').value.trim());
+          showToast('success', d.set ? UT('Certificate saved') : UT('Certificate removed'), UT('Restart the gateway to apply it.'), 6000);
+          if (d.set) document.getElementById('ts-ca').value = '';
+        })
+        .catch(function () { showToast('error', UT('Certificate not saved'), UT('Network error.'), 5000); });
+    }
+    document.getElementById('ts-ca-save').addEventListener('click', function () {
+      var pem = document.getElementById('ts-ca').value.trim();
+      if (pem.indexOf('-----BEGIN CERTIFICATE-----') < 0) { showToast('error', UT('Certificate not saved'), UT('Paste a certificate in PEM form (-----BEGIN CERTIFICATE-----).'), 6000); return; }
+      tsCaPost(pem);
+    });
+    document.getElementById('ts-ca-remove').addEventListener('click', function () { tsCaPost(''); });
     document.getElementById('ts-leave').addEventListener('click', function () {
       var btn = this;
       showConfirm(

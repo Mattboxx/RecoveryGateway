@@ -2414,5 +2414,19 @@
  "This gateway was not registered in a tailnet.": "本网关未在任何 tailnet 中注册。",
  "Turns Tailscale off and restarts the gateway": "关闭 Tailscale 并重启网关",
  "The gateway is restarting.": "网关正在重启。",
- "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "单个设备（192.168.1.50）、最多 5 个设备（192.168.1.50, 192.168.1.51）或整个子网（192.168.1.0/24）。建议填写具体设备。"
+ "One device (192.168.1.50), up to 5 devices (192.168.1.50, 192.168.1.51) or a whole subnet (192.168.1.0/24). Prefer single devices.": "单个设备（192.168.1.50）、最多 5 个设备（192.168.1.50, 192.168.1.51）或整个子网（192.168.1.0/24）。建议填写具体设备。",
+ "-----BEGIN CERTIFICATE-----": "-----BEGIN CERTIFICATE-----",
+ "Certificate not saved": "证书未保存",
+ "Certificate removed": "证书已删除",
+ "Certificate saved": "证书已保存",
+ "In use.": "使用中。",
+ "Login server certificate (optional)": "登录服务器证书（可选）",
+ "No certificate saved.": "未保存证书。",
+ "Not used: no login server set.": "未使用：未设置登录服务器。",
+ "Only for a Headscale server with a private CA or a self-signed certificate: paste its CA (or the server certificate) as PEM text. Trusted only for the login server and its relays, from the next restart; the server name is still checked.": "仅适用于使用私有 CA 或自签名证书的 Headscale 服务器：以 PEM 文本粘贴其 CA（或服务器证书）。仅对登录服务器及其中继受信任，下次重启后生效；仍会检查服务器名称。",
+ "Paste a certificate in PEM form (-----BEGIN CERTIFICATE-----).": "请粘贴 PEM 格式的证书（-----BEGIN CERTIFICATE-----）。",
+ "Restart the gateway to apply it.": "重启网关以应用。",
+ "Save certificate": "保存证书",
+ "The saved certificate is invalid and not used.": "已保存的证书无效，未被使用。",
+ "Used after a restart.": "重启后使用。"
 }
