@@ -6,6 +6,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.25 adds to beta.24:
+
+- **WireGuard handshakes and keepalives are sent from the network thread**
+  (from upstream MicroLink 0.1.39). The WireGuard manager sent some packets
+  (handshakes it started, handshake responses, cookies, the keepalive after a
+  handshake) on the network stack directly, next to the network thread; an
+  upstream router rebooted there (ARP table). They are now handed to the
+  network thread as a copy; the data path is unchanged.
+- **A direct path that stopped working is given up after 30 s** even when the
+  peer is quiet (from upstream MicroLink 0.1.39; the case where the peer keeps
+  talking through the relay was already handled since an earlier fix).
+- The **Max peers** field is gone from the Tailscale page: it limited nothing
+  since beta.16 (tailnet size is unlimited, 20 tunnels rotate automatically,
+  both shown on the page). Saved values and backups are still accepted.
+
 3.0.25-beta.24 adds to beta.23:
 
 - **LAN → Tailnet tab redesigned.** Three short steps explain what a rule

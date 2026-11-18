@@ -32,6 +32,8 @@ devices). Each item: what blocks access, status, where.
 | Peer cache flash writes | 7.7 KB rewritten per peer per map (about 140 KB per reconnect with 18 peers) | written only when a peer changes; wrap-safe LRU (beta.22) |
 | Control server refuses the Noise upgrade | "101" anywhere passed; every refusal shown as "Noise handshake failed" | status 101 only; the server's answer named (version, URL/proxy, access, rate limit, 5xx) (beta.23) |
 | Peer homed on another DERP region, no direct path | traffic the gateway starts toward it lost (relays deliver only to their own clients) | after the home relay's PeerGone "not here", one on-demand relay connection to the peer's region, closed after 60 s idle (beta.24) |
+| WireGuard handshakes/keepalives sent off the network thread | race in lwIP's ARP table (upstream field reboot) | posted to the TCPIP thread as a copy (upstream 0.1.39) (beta.25) |
+| Kept direct endpoint, quiet peer | never re-checked, packets lost | re-checked every tick, relay after 30 s without direct traffic (upstream 0.1.39) (beta.25) |
 | LAN → Tailnet rule edited after a timer was used | silently stopped forwarding until confirmed in a separate timer section | time limit chosen on the rule and confirmed on Save; a closed rule says why (beta.24) |
 
 ### Audit items 2-6
