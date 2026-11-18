@@ -61,7 +61,6 @@ Up to **5** networks, tried in order. Per network:
 | **Exit node** | Route AP-client public traffic through this tailnet exit node. Fails closed if unreachable. |
 | **Advertise this ESP32 as an exit node** | Opt-in server mode, mutually exclusive with choosing another exit node. Requires restart and Tailscale admin approval. IPv4 Internet egress is masqueraded; IPv6 remains fail-closed. |
 | **Tailnet IPv6** | Tunnels carry IPv4 (plus 4via6 inbound). A peer's tailnet IPv6 address (`fd7a:115c:a1e0:…`) is not reachable from or through the gateway; use its 100.x address. |
-| **Max peers** | Upper bound on tracked peers. |
 | **Accept peer subnet routes** | Install routes other nodes advertise. |
 | **LAN bypass when using an exit node** | RFC1918 destinations stay on the local LAN even with an exit node selected. |
 

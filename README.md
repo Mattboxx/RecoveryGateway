@@ -72,19 +72,17 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.24
+## What's new in Firmware 3.0.25
 
-- Gateway Wi-Fi validates the network name and password before saving.
-- Backup restore applies encrypted AP passwords with their security mode
-  and stops on a rejected write before issuing a reboot.
-
-### Also in 3.0.23
-
-- **Network → Gateway Wi-Fi** can make the gateway's own Wi-Fi an open network
-  and close it again with a password, as first boot can.
-- On phones and tablets the idle timer stays inside the top bar.
-- The clearer first boot of 3.0.22 is included: functions grouped by goal,
-  one Tailscale question and the `.local` name.
+- **Tailscale access fixes:** single-use auth keys no longer take the gateway
+  offline after it joined, there is no 16-device limit, and a gateway alone in
+  its tailnet, networks that block port 80 or NTP, DNS failures and ACL rules
+  with node capabilities no longer block the tailnet.
+- **Clear Tailscale status:** why the gateway is not connected, node key
+  expiry, Tailnet Lock, peers and tunnels in use; a **Leave tailnet** button.
+- **LAN → Tailnet** tab redesigned, with a simple time limit per rule.
+- **Logs with date and time.**
+- **USB modems, 4G sticks and Ethernet adapters** (experimental, see below).
 
 [Install the current firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
 · [Full changelog](CHANGELOG.md)
@@ -122,7 +120,7 @@ quad flash**:
 
 Details and community reports: [Hardware](docs/HARDWARE.md).
 
-### USB modems, 4G sticks and Ethernet adapters (beta, from 3.0.25)
+### USB modems, 4G sticks and Ethernet adapters (experimental, from 3.0.25)
 
 Besides a W5500 module or a modem wired to the pins, the gateway can use one
 USB device on the board's **USB** port (not the COM port): a USB LTE modem or

@@ -6,17 +6,76 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.25] - 2026-11-18
+
+### Fixed: Tailscale and Headscale access
+
+- **Single-use auth keys no longer take the gateway offline.** The default key
+  of the Tailscale admin console is single-use; the gateway presented it again
+  at every reconnect and restart, the control server refused it ("invalid
+  key") and the device stayed offline. The key is now used only to log in, as
+  the official client does.
+- **No 16-peer limit.** A tailnet with more than 16 other devices (stale ones
+  count) was refused as a whole and every tunnel was blocked. Maps, policy and
+  peer table are sized by the tailnet; 20 tunnels are in use at a time and are
+  given to the peers that need them.
+- **Other cases where the tailnet could not be used:** a gateway alone in its
+  tailnet, ACL rules with "cap:" sources, more than 128 expanded ACL rules,
+  peers with more than one advertised subnet, networks that block port 80
+  (TLS on 443 is used) or NTP (time from the control server), DNS failures
+  (last working control address, DERP map addresses), auth keys pasted with
+  spaces, an expired node key that looped, peers homed on another relay region
+  without a direct path, peer key renewal, a Headscale server that changed
+  its key.
+- WireGuard handshakes and keepalives are sent from the network thread (a
+  race in the network stack could restart the device); a direct path that
+  stopped working is given up after 30 s.
+- Large DNS answers no longer reach access-point clients cut (DNS over TCP,
+  proper truncation).
+- Far fewer flash writes for the peer cache.
+
+### Added
+
+- **Clear Tailscale status**: why the gateway is not connected (key refused or
+  needed, waiting for approval, key expired), node key expiry with a warning
+  14 days ahead and renewal with a new auth key, Tailnet Lock with the signing
+  command, messages from the control server, peers and tunnels in use, and why
+  the control server refused a connection.
+- **Leave tailnet** button: logs out at the control server (as `tailscale
+  logout`), deletes the auth key and identity, turns Tailscale off.
+- **Logs with date and time** (live view and microSD files).
+- **USB uplinks** (experimental, not yet tested with real devices): USB LTE
+  modems and 4G sticks with a SIM, USB Ethernet adapters and phone tethering,
+  chosen in first-boot setup or on the Network page; connection and power
+  guide in the README and on the website. Off by default.
+- Monthly mobile data limit, traffic per access-point device, administration
+  limited to the tailnet and the access point (all off by default).
+
+### Changed
+
+- **LAN → Tailnet tab redesigned**: three steps explain a rule; each rule has a
+  "Stays open" choice (no time limit, 15 minutes … 7 days) applied with Save,
+  so an edited rule no longer silently stops forwarding after a timer was
+  used; clearer field names; a plain address means one device.
+- Web sessions are bound to the address that logged in; the SNMP community is
+  write-only.
+- The **Max peers** setting is gone: it no longer limited anything.
+- Health & resources moved to Diagnostics → Hardware; Telegram and ntfy
+  commands laid out the same way; every string translated.
+
+### Notes of the 3.0.25 betas
+
 3.0.25-beta.25 adds to beta.24:
 
-- **WireGuard handshakes and keepalives are sent from the network thread**
-  (from upstream MicroLink 0.1.39). The WireGuard manager sent some packets
+- **WireGuard handshakes and keepalives are sent from the network thread.**
+  The WireGuard manager sent some packets
   (handshakes it started, handshake responses, cookies, the keepalive after a
-  handshake) on the network stack directly, next to the network thread; an
-  upstream router rebooted there (ARP table). They are now handed to the
+  handshake) on the network stack directly, next to the network thread, a
+  race that can restart the device (ARP table). They are now handed to the
   network thread as a copy; the data path is unchanged.
 - **A direct path that stopped working is given up after 30 s** even when the
-  peer is quiet (from upstream MicroLink 0.1.39; the case where the peer keeps
-  talking through the relay was already handled since an earlier fix).
+  peer is quiet (the case where the peer keeps talking through the relay was
+  already handled since an earlier fix).
 - **Leave tailnet** button on the Tailscale page: logs the gateway out of the
   control server as `tailscale logout` does (its node key expires there),
   then deletes the saved auth key and the gateway's tailnet identity, turns
