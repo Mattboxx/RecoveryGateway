@@ -501,6 +501,40 @@ static void session_maps(void) {
     puts("PASS: first map of a session complete without Peers/PacketFilter (empty tailnet, reconnect alone, join), never assumed for deltas or OmitPeers, consumed once");
     ml_policy_reset();
 }
+/* Key expiry times: RFC 3339 as Go writes it. Tailscale sends UTC ("Z");
+ * other control servers may send an offset (+01:00), and a late year is
+ * valid: one such peer used to make the whole map refused (tunnel blocked).
+ * Malformed times still fail closed. */
+static void expiry_times(void) {
+    int64_t t;
+    assert(ml_rfc3339_utc("2026-11-18T21:00:00Z",&t)&&t==1795035600);
+    assert(ml_rfc3339_utc("2026-11-18T22:00:00+01:00",&t)&&t==1795035600);
+    assert(ml_rfc3339_utc("2026-11-18T16:30:00-04:30",&t)&&t==1795035600);
+    assert(ml_rfc3339_utc("2026-11-18T21:00:00.123456789Z",&t)&&t==1795035600);
+    assert(ml_rfc3339_utc("2026-11-18T21:00:00.5+00:00",&t)&&t==1795035600);
+    assert(ml_rfc3339_utc("1970-01-01T00:00:00Z",&t)&&t==0);
+    assert(ml_rfc3339_utc("2000-02-29T00:00:00Z",&t)&&t==951782400);
+    assert(ml_rfc3339_utc("2100-03-01T00:00:00Z",&t)&&t==4107542400LL);
+    assert(ml_rfc3339_utc("9999-12-31T23:59:59Z",&t)&&t==253402300799LL);
+    assert(ml_rfc3339_utc("0001-01-01T00:00:00Z",&t)&&t==0);
+    const char *bad[]={"","2026-11-18","2026-11-18T21:00:00","2026-11-18T21:00:00z","2026-11-18 21:00:00Z",
+        "2026-11-18T21:00:00+0100","2026-11-18T21:00:00+01","2026-11-18T21:00:00+24:00","2026-11-18T21:00:00+01:60",
+        "2026-11-18T21:00:00.Z","2026-11-18T21:00:00Zjunk","2026-13-01T00:00:00Z","2026-02-29T00:00:00Z","2100-02-29T00:00:00Z",
+        "2026-11-18T24:00:00Z","1969-12-31T23:59:59Z","0001-01-01T00:00:00+01:00","0001-01-01T00:00:00.999Z","x026-11-18T21:00:00Z",NULL};
+    for(unsigned i=0;i<sizeof bad/sizeof bad[0];i++)assert(!ml_rfc3339_utc(bad[i],&t));
+    /* A peer whose expiry has an offset or a late year no longer blocks the tunnel. */
+    ml_policy_reset();
+    assert(apply("{" NODE ",\"Peers\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"KeyExpiry\":\"2099-06-01T12:00:00+02:00\",\"Addresses\":[\"100.64.0.1/32\"]},"
+                 "{\"ID\":2,\"Key\":\"" KEY_B "\",\"KeyExpiry\":\"2150-01-01T00:00:00Z\",\"Addresses\":[\"100.64.0.2/32\"]}],\"PacketFilter\":[" ALL_RULE "]}"));
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    /* An offset expiry in the past still expires the peer. */
+    assert(apply("{\"PeersChangedPatch\":[{\"NodeID\":1,\"KeyExpiry\":\"2001-01-01T02:00:00+02:00\"}]}"));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a)&&rx(4,6,"100.64.0.2","100.64.0.10",40000,80,2,key_b));
+    /* Malformed still refuses the update (fail closed). */
+    assert(!apply("{\"PeersChangedPatch\":[{\"NodeID\":2,\"KeyExpiry\":\"2026-11-18T21:00:00+0100\"}]}"));
+    puts("PASS: key expiry times with offsets and late years accepted and converted to UTC, malformed ones refused; such a peer no longer blocks the tunnel");
+    ml_policy_reset();
+}
 /* Node IDs above 2^53 (int64 on the wire; new Tailscale nodes have them):
  * read exactly, also in PeersRemoved and PeersChangedPatch; two IDs that
  * share one double stay two peers; an ID read from an unscanned message (a
@@ -639,7 +673,7 @@ static void cap_sources(void) {
     ml_policy_reset();
 }
 int main(void) {
-    layout_alignment();peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();large_ids();cap_sources();concurrency();
+    layout_alignment();peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();large_ids();expiry_times();cap_sources();concurrency();
     printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); rules, peers, prefixes sized by the map (%zu, %zu, %zu bytes each) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),sizeof(entry),sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
 }
 '''
