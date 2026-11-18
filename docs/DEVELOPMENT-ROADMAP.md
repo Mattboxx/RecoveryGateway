@@ -255,6 +255,26 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
    Telegram/SMTP/DuckDNS/Cloudflare accounts, DNS clients, throughput).
 7. Everything already planned stays planned (this roadmap, F01–F49).
 
+## 3.0.26 and later — Tailnet reach (owner decision, 2026-11-18)
+
+Owner: "procedi in tutti i punti" after the 3.0.25 review
+(docs/TAILNET-ACCESS-AUDIT.md). In progress for 3.0.26: private CA for HTTPS
+login servers and custom DERP relays, first connection without DNS, `cap:`
+ACL sources from peer capabilities, a second auxiliary relay, IPv6 tailnet
+addresses, several source addresses per LAN → Tailnet rule with a guide for
+sharing one service with another network, a dated pre-crash log, and the
+MicroLink UDP helpers on the TCPIP thread. Device tests still owed: Leave
+tailnet, relay to another region, USB uplinks.
+
+**Deferred, low priority (owner: "ci penseremo in futuro se mi contatteranno
+persone interessate"): very large tailnets.** One map response must fit the
+768 KB buffer (about 250-500 peers in an official map), parsed whole by cJSON.
+The fix is a streaming parser that reads the Peers list one peer at a time
+into the policy and peer tables (PSRAM), so the limit becomes the tables, not
+the text. Nearest alternative today: keep the tailnet under that size or
+reduce what the gateway sees with ACLs. Start only if users with such
+tailnets ask.
+
 ## Overall stabilization — mandatory, not a feature-cut milestone
 
 **F33–F37/F41:** full regression/load/soak, measured resources/performance,
