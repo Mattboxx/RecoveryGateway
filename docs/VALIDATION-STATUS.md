@@ -1,5 +1,16 @@
 # Validation records
 
+3.0.27 stable (release source `8a51c84`, MicroLink `9b0a70e`; BIN 4eef32c83e38b594bd6d832e57caaedb86f03c45dc89976adb12d487521328d2; bootloader, partition table and esptool as 3.0.26). Content:
+- RFC 3339 key expiry times with offsets and late years (a peer with "+01:00" used to make the whole map refused);
+- exact registration user ID.
+
+- **Offline:**
+  - clean build, image provenance PASS, USB RAM placement PASS;
+  - `validate_all.py --build --browser` 168/168 PASS on `8a51c84` (built in a separate folder);
+  - the release is packaged from the archived, board-tested image.
+- **Board A over Tailscale, 19/19:** the 18 checks of 3.0.26 plus the key expiry report.
+- **Not run:** a control server that sends offset times (host tests only).
+
 3.0.26 stable (release source `a52d5af`, MicroLink `719139e`; BIN 7411d91ed72a2872a8a8c2cd8791f6b0d9b1f8d276462f2c2d2096861513a01d; bootloader, partition table and esptool as 3.0.25). Content: everything in 3.0.26-beta.2 plus the configuration profiles for every first-boot goal. The reporting user confirmed that the beta connects to the tailnet.
 - **Offline:** clean build, image provenance PASS, USB RAM placement PASS; `validate_all.py --build --browser` 168/168 PASS on `a52d5af`. The campaign rebuilt the same source into a byte-different image (710b3f8e…): builds are not bit-reproducible. The released image is the board-A-tested 7411d91e…, packaged by `package_v2.py` from an input folder holding that exact image.
 - **Board A over Tailscale (owner-started lab runner), 18/18:** the 14 checks of beta.2, plus the profiles:
