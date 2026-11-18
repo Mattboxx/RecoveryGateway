@@ -1,6 +1,9 @@
 # Maintainer continuation
 
-## Active — 3.0.26-beta.1 tailnet reach (2026-11-18)
+## Active — 3.0.26-beta.2 tailnet reach (2026-11-18)
+
+- Published 2026-11-18 as the pre-release `v3.0.26-beta.2` (source `e80270f`, MicroLink `719139e`; branches `feat/3026-20261118` pushed to both forks; 3.0.25 stays Latest). It includes the fix for "reason=peer-id": node IDs above 2^53 (`ml_json_id.c`).
+- Waiting on the reporting user's confirmation. Next: configuration profiles (branch `feat/profiles-20261118`, worktree `.codex/workspaces/tailnet-profiles-20261118`, rebase onto `e80270f`).
 
 - Branch `feat/3026-20261118` (worktree `.codex/workspaces/tailnet-b17-20261118`), MicroLink branch `feat/3026-20261118`.
   The owner authorized publishing it as a beta pre-release if every check passes ("se tutto passa puoi pubblicarla come beta"); not Latest.
