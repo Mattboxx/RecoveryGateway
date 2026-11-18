@@ -27,6 +27,9 @@ devices). Each item: what blocks access, status, where.
 | Peer key rotation in a patch | refused, full map refresh, short interruption | applied, old key revoked, tunnel replaced at once (beta.21) |
 | Peer without a tunnel slot reaching out | its DISCO dropped until the 30 s refill | gets a slot at once (rate-limited lookup) (beta.21) |
 | DNS failure for the control host | no connection | last working address (NVS, written on change) (beta.21) |
+| DNS failure: Headscale key fetch and HTTPS (443) | still resolved by name: no access after a restart | same last working address; TLS still verifies the name (beta.22) |
+| Custom server Noise key changed | every handshake failed until a restart | fetched again after a failed handshake (beta.22) |
+| Peer cache flash writes | 7.7 KB rewritten per peer per map (about 140 KB per reconnect with 18 peers) | written only when a peer changes; wrap-safe LRU (beta.22) |
 
 ### Audit items 2-6
 
@@ -54,6 +57,6 @@ devices). Each item: what blocks access, status, where.
 
 Also open: on the very first connection with DNS failing there is no known
 control address yet (official clients have baked bootstrap addresses and
-DERP bootstrap DNS); the TLS 443 path resolves the control host by name only.
+DERP bootstrap DNS).
 In keep mode a lone gateway can need one extra reconnect when a stream starts
 with OmitPeers.

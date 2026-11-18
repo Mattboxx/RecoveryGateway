@@ -6,6 +6,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.22 adds to beta.21:
+
+- **Headscale and HTTPS login servers reachable when DNS fails.** The last
+  working address of the control server is now used on every path: the
+  server key request (which comes first after a restart with Headscale and
+  still needed DNS) and HTTPS on port 443, where the certificate is still
+  checked for the server name.
+- **A Headscale server that got a new key is picked up without a restart.**
+  The key was fetched once and kept: after a server reinstall every
+  connection failed until the gateway restarted. A failed handshake now
+  fetches it again.
+- **Far fewer flash writes for the peer cache.** Every map update rewrote
+  the whole cache (about 7.7 KB) once per peer, around 140 KB per reconnect
+  with 18 peers. Now only a peer whose data really changed is written.
+  With a full cache the least recently used peer is replaced, also after
+  the internal counter wraps (before, recent peers could be replaced).
+
 3.0.25-beta.21 adds to beta.20:
 
 - **Peer key rotation without interruption.** A peer that renews its key
