@@ -506,7 +506,7 @@ static void session_maps(void) {
  * share one double stay two peers; an ID read from an unscanned message (a
  * rounded double) or a token of another message is refused, never guessed. */
 static bool apply_scanned(const char *s) {
-    char *t=strdup(s);assert(t&&ml_json_ids_scan(t,strlen(t)));
+    size_t sl=strlen(s);char *t=malloc(sl+1);assert(t);memcpy(t,s,sl+1);assert(ml_json_ids_scan(t,sl));
     cJSON *v=cJSON_Parse(t);assert(v);bool ok=ml_policy_apply(v);cJSON_Delete(v);free(t);return ok;
 }
 #define BIG_A "{\"ID\":9223372036854775801,\"Key\":\"" KEY_A "\",\"Addresses\":[\"100.64.0.1/32\"]}"
@@ -543,7 +543,7 @@ static void large_ids(void) {
     const char *src="{\"a\":\"9007199254740993\",\"b\":9007199254740993.5,\"c\":9007199254740993e0,\"d\":123,"
                     "\"e\":99999999999999999999,\"f\":\"x\\\"9007199254740995\",\"g\":[ 9007199254740997 ,18446744073709551615],"
                     "\"h\":1234567890123456}";
-    char *t=strdup(src);size_t n0=strlen(t);assert(ml_json_ids_scan(t,n0)&&strlen(t)==n0);
+    size_t n0=strlen(src);char *t=malloc(n0+1);assert(t);memcpy(t,src,n0+1);assert(ml_json_ids_scan(t,n0)&&strlen(t)==n0);
     assert(strstr(t,"\"a\":\"9007199254740993\"")&&strstr(t,"9007199254740993.5")&&strstr(t,"9007199254740993e0")
            &&strstr(t,"99999999999999999999")&&strstr(t,"x\\\"9007199254740995")&&!strstr(t,"9007199254740997")&&!strstr(t,"1234567890123456"));
     cJSON *j=cJSON_Parse(t);assert(j);uint64_t out;

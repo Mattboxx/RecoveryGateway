@@ -110,6 +110,7 @@ self_signed = (x509.CertificateBuilder().subject_name(self_name).issuer_name(sel
 PRIV_FP = hashlib.sha256(priv_root.public_bytes(serialization.Encoding.DER)).hexdigest()
 
 PROGRAM = r'''
+#define _POSIX_C_SOURCE 200809L   /* strnlen with -std=c11 on glibc */
 #define ML_TLS_HOST_TEST 1
 #include "ml_tls_distrust.c"
 #include <assert.h>
