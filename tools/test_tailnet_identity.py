@@ -166,14 +166,17 @@ int main(void){
 start = HTML.index('    var TS_REG_TEXT = {')
 end = HTML.index('\n    }\n', HTML.index('function renderTsRegistration(r)')) + 7
 ui = HTML[start:end]
-ids = ['ts-reg-notice', 'ts-reg-notice-text', 'ts-reg-notice-key', 'ts-key-expiry-row', 'ts-key-expiry', 'ts-key-expiry-hint',
+ids = ['ts-display-messages', 'ts-reg-notice', 'ts-reg-notice-text', 'ts-reg-notice-key', 'ts-key-expiry-row', 'ts-key-expiry', 'ts-key-expiry-hint',
        'ts-tunnels-row', 'ts-tunnels-row2', 'ts-map-peers', 'ts-tunnels', 'ts-lock-notice', 'ts-lock-cmd', 'ts-auth-key']
 for i in ids:
     assert f'id="{i}"' in HTML, i
 NODE = r'''
 const els = {};
-for (const id of IDS) els[id] = {style: {display: 'none'}, textContent: '', onclick: null, focus(){this.focused=true;}, scrollIntoView(){}};
-const document = {getElementById: id => els[id] || null};
+for (const id of IDS) els[id] = {style: {display: 'none'}, textContent: '', onclick: null, focus(){this.focused=true;}, scrollIntoView(){},
+  children: [], appendChild(c){this.children.push(c);}, set innerHTML(v){throw new Error('innerHTML used');}};
+const document = {getElementById: id => els[id] || null,
+  createElement: tag => ({tag, style: {}, className: '', textContent: '', children: [], appendChild(c){this.children.push(c);}}),
+  createTextNode: t => ({text: t})};
 @@UI@@
 const shown = id => els[id].style.display !== 'none';
 const check = (c, m) => { if (!c) { console.error('FAIL ' + m); process.exit(1); } };
@@ -196,6 +199,14 @@ renderTsRegistration({reg_state: 'ok', key_expiry: Math.floor(now + 5 * 86400)})
 check(shown('ts-key-expiry-hint'), 'expiry soon hint');
 renderTsRegistration({reg_state: 'ok', tailnet_lock: true, node_key: 'nodekey:abcd'});
 check(shown('ts-lock-notice') && els['ts-lock-cmd'].textContent === 'tailscale lock sign nodekey:abcd', 'lock command');
+renderTsRegistration({reg_state: 'ok', display_messages: [{title: '<img src=x onerror=alert(1)>', text: 'Key expires', severity: 'high'}, {title: 'Info', severity: 'low'}]});
+check(shown('ts-display-messages'), 'messages shown');
+els['ts-display-messages'].children = [];
+renderTsRegistration({reg_state: 'ok', display_messages: [{title: '<b>x</b>', text: 'y', severity: 'high'}]});
+const shownMsg = els['ts-display-messages'].children[0];
+check(shownMsg.className.includes('alert-warning') && shownMsg.children[0].textContent === '<b>x</b>' && shownMsg.children[1].text === ' — y', 'message as plain text');
+renderTsRegistration({reg_state: 'ok', display_messages: []});
+check(!shown('ts-display-messages'), 'no messages hidden');
 renderTsRegistration({});
 check(!shown('ts-reg-notice') && !shown('ts-tunnels-row'), 'older firmware fields absent');
 console.log('PASS: actual Tailscale page registration notice, auth-key link, expiry/hint, counts, Tailnet Lock command (Node, stub DOM)');

@@ -3478,6 +3478,19 @@ static esp_err_t tailscale_handler(httpd_req_t *req)
                 cJSON_AddNumberToObject(runtime, "map_peers", diag.map_peers);
                 cJSON_AddNumberToObject(runtime, "tunnels_active", diag.tunnels_active);
                 cJSON_AddNumberToObject(runtime, "tunnel_slots", diag.tunnel_slots);
+                /* Health messages from the control server (plain text). */
+                microlink_display_message_t msgs[MICROLINK_MAX_DISPLAY_MESSAGES];
+                int nmsg = microlink_get_display_messages(mlh, msgs, MICROLINK_MAX_DISPLAY_MESSAGES);
+                cJSON *dm = cJSON_AddArrayToObject(runtime, "display_messages");
+                for (int i = 0; dm && i < nmsg; i++) {
+                    cJSON *o = cJSON_CreateObject();
+                    if (!o) break;
+                    cJSON_AddStringToObject(o, "title", msgs[i].title);
+                    cJSON_AddStringToObject(o, "text", msgs[i].text);
+                    cJSON_AddStringToObject(o, "severity", msgs[i].severity);
+                    cJSON_AddBoolToObject(o, "impacts_connectivity", msgs[i].impacts_connectivity);
+                    cJSON_AddItemToArray(dm, o);
+                }
                 /* DERP region diagnostics (ported from the old http_server UI,
                  * 2026-05-28). derp_home_region = the region the ESP actually
                  * connects to (netcheck may override the default); derp_rtts =

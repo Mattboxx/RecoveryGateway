@@ -61,7 +61,11 @@ assert '!s_active_auth_key[0] ||' not in conn and 'No auth key saved: connecting
 assert 's_active_login_server = trim_in_place(nvs_str_or_empty("ts_login"));' in MGR
 assert 'save_trimmed_str_if_present(s, "login_server", "ts_login");' in WEB
 
-C_CODE = (function(COORD, 'static void ctrl_transport_failed(') + function(COORD, 'static uint32_t first_ipv4(const cJSON *addresses) {')
+assert 'answer_ping_request(ml, noise);' in COORD and 'note_ping_request(ml,' in amap and 'apply_display_messages(ml,' in amap
+assert 'if (ctrl_is_tailscale(ml)) {' in tcp
+C_CODE = (function(COORD, 'static bool ctrl_is_tailscale(const microlink_t *ml)\n{') + function(COORD, 'static void ctrl_transport_failed(')
+          + function(COORD, 'static void note_ping_request(') + function(COORD, 'static void apply_display_messages(')
+          + function(COORD, 'int microlink_get_display_messages(') + function(COORD, 'static uint32_t first_ipv4(const cJSON *addresses) {')
           + function(COORD, 'static void clock_from_control(') + function(WEB, 'static void save_trimmed_str_if_present(')
           + function(MGR, 'static char *trim_in_place('))
 PROGRAM = r'''
@@ -74,7 +78,14 @@ PROGRAM = r'''
 #include "cJSON.h"
 #define ESP_LOGW(...) ((void)0)
 static const char *TAG = "t";
-typedef struct {char ctrl_host[64];bool ctrl_saas_tls;uint8_t ctrl_transport_failures;} microlink_t;
+#include <strings.h>
+#define ML_CTRL_HOST "controlplane.tailscale.com"
+#define MICROLINK_MAX_DISPLAY_MESSAGES 4
+typedef struct {char id[48];char title[96];char text[320];char severity[8];bool impacts_connectivity;} microlink_display_message_t;
+typedef struct {char ctrl_host[64];char ctrl_host_parsed[64];char ctrl_port_str[8];bool ctrl_saas_tls;uint8_t ctrl_transport_failures;
+    microlink_display_message_t display_msgs[MICROLINK_MAX_DISPLAY_MESSAGES];uint8_t display_msg_count;char ping_path[200];char ping_last[200];} microlink_t;
+static uint64_t ml_get_time_ms(void){return 1;}
+static size_t strlcpy(char *d,const char *s,size_t n){size_t l=strlen(s);if(n){size_t c=l<n-1?l:n-1;memcpy(d,s,c);d[c]=0;}return l;}
 #define timeval test_timeval   /* host headers may define their own */
 struct timeval {time_t tv_sec;long tv_usec;};
 static time_t fake_now, set_to;static int sets;
@@ -92,8 +103,28 @@ int main(void){
     ctrl_transport_failed(&ml);assert(!ml.ctrl_saas_tls);
     ctrl_transport_failed(&ml);assert(ml.ctrl_saas_tls&&ml.ctrl_transport_failures==0);
     ctrl_transport_failed(&ml);ctrl_transport_failed(&ml);assert(!ml.ctrl_saas_tls);     /* back to 80 */
-    strcpy(ml.ctrl_host,"https://headscale.example");
+    strcpy(ml.ctrl_host,"https://headscale.example");strcpy(ml.ctrl_host_parsed,"headscale.example");strcpy(ml.ctrl_port_str,"443");
     for(int i=0;i<6;i++)ctrl_transport_failed(&ml);assert(!ml.ctrl_saas_tls);          /* custom server untouched */
+    strcpy(ml.ctrl_host,"https://controlplane.tailscale.com/");strcpy(ml.ctrl_host_parsed,"controlplane.tailscale.com");
+    assert(ctrl_is_tailscale(&ml));ctrl_transport_failed(&ml);ctrl_transport_failed(&ml);assert(ml.ctrl_saas_tls);   /* typed by hand: same fallback */
+    strcpy(ml.ctrl_port_str,"8443");assert(!ctrl_is_tailscale(&ml));                  /* explicit port kept */
+    /* PingRequest: liveness over Noise recorded once per URL; others not. */
+    cJSON *pr=cJSON_Parse("{\"URL\":\"https://controlplane.tailscale.com/machine/ping/abc\",\"URLIsNoise\":true}");
+    note_ping_request(&ml,pr);assert(!strcmp(ml.ping_path,"/machine/ping/abc"));
+    strcpy(ml.ping_last,ml.ping_path);ml.ping_path[0]=0;note_ping_request(&ml,pr);assert(!ml.ping_path[0]);cJSON_Delete(pr);   /* duplicate */
+    pr=cJSON_Parse("{\"URL\":\"https://x/y\",\"URLIsNoise\":true,\"Types\":\"disco\",\"IP\":\"100.64.0.2\"}");note_ping_request(&ml,pr);assert(!ml.ping_path[0]);cJSON_Delete(pr);
+    pr=cJSON_Parse("{\"URL\":\"https://log.example/z\"}");note_ping_request(&ml,pr);assert(!ml.ping_path[0]);cJSON_Delete(pr);   /* plain TLS: not here */
+    note_ping_request(&ml,NULL);
+    /* DisplayMessages patch semantics, bounded. */
+    cJSON *dm=cJSON_Parse("{\"a\":{\"Title\":\"Key expiring\",\"Text\":\"Renew soon\",\"Severity\":\"medium\"},\"b\":{\"Title\":\"B\",\"ImpactsConnectivity\":true}}");
+    apply_display_messages(&ml,dm);cJSON_Delete(dm);assert(ml.display_msg_count==2&&!strcmp(ml.display_msgs[0].title,"Key expiring")&&ml.display_msgs[1].impacts_connectivity);
+    dm=cJSON_Parse("{\"a\":null,\"c\":{\"Title\":\"C\"},\"d\":{\"Title\":\"D\"},\"e\":{\"Title\":\"E\"},\"f\":{\"Title\":\"F\"}}");
+    apply_display_messages(&ml,dm);cJSON_Delete(dm);assert(ml.display_msg_count==4&&!strcmp(ml.display_msgs[0].id,"b"));   /* a deleted, f over the bound */
+    microlink_display_message_t out[4];assert(microlink_get_display_messages(&ml,out,4)==4&&microlink_get_display_messages(&ml,out,2)==2);
+    dm=cJSON_Parse("{\"*\":null,\"g\":{\"Title\":\"G\"}}");apply_display_messages(&ml,dm);cJSON_Delete(dm);
+    assert(ml.display_msg_count==1&&!strcmp(ml.display_msgs[0].id,"g"));
+    char longtext[1000];memset(longtext,'x',999);longtext[999]=0;cJSON *big=cJSON_CreateObject(),*one=cJSON_AddObjectToObject(big,"g");
+    cJSON_AddStringToObject(one,"Text",longtext);apply_display_messages(&ml,big);cJSON_Delete(big);assert(strlen(ml.display_msgs[0].text)==319);
     /* Clock from the control server. */
     fake_now=0;ct("2026-11-18T09:30:15.123456789Z");assert(sets==1&&set_to==1794994215);
     ct("2027-01-01T00:00:00Z");assert(sets==1);                                        /* clock already set */
@@ -113,7 +144,7 @@ int main(void){
     strcpy(saved,"unchanged");o=cJSON_Parse("{\"auth_key\":5}");save_trimmed_str_if_present(o,"auth_key","k");assert(!strcmp(saved,"unchanged"));cJSON_Delete(o);
     char k1[]=" \tabc-def\r\n",k2[]="abc",k3[]="   ";
     assert(!strcmp(trim_in_place(k1),"abc-def")&&!strcmp(trim_in_place(k2),"abc")&&!strcmp(trim_in_place(k3),"")&&trim_in_place(NULL)==NULL);
-    puts("PASS: actual TLS-443 fallback for Tailscale control (custom servers untouched), clock from ControlTime only while unset and only valid UTC, first IPv4 of Addresses, auth key trimmed on save and load");
+    puts("PASS: actual TLS-443 fallback for Tailscale control (also when typed by hand; custom servers untouched), liveness PingRequest recorded once, DisplayMessages patch/bound/truncation, clock from ControlTime only while unset and only valid UTC, first IPv4 of Addresses, auth key trimmed on save and load");
     return 0;
 }
 '''

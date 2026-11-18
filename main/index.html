@@ -3253,6 +3253,7 @@
             <span class="stat-label">Tunnels in use</span>
             <span class="stat-value mono" id="ts-tunnels">—</span>
           </div>
+          <div id="ts-display-messages" data-no-i18n style="display:none; margin:0 0 0.5rem 0;"></div>
           <div class="alert alert-warning" id="ts-lock-notice" style="display:none; margin:0 0 0.5rem 0;">
             <div>Tailnet Lock is on. Sign this gateway from a signing device:</div>
             <code class="mono" id="ts-lock-cmd" data-no-i18n style="word-break:break-all;"></code>
@@ -9560,6 +9561,21 @@
         document.getElementById('ts-map-peers').textContent = String(r.map_peers);
         document.getElementById('ts-tunnels').textContent = r.tunnels_active + ' / ' + r.tunnel_slots;
       }
+      /* Messages from the control server, as received (plain text). */
+      var box = document.getElementById('ts-display-messages');
+      var msgs = Array.isArray(r.display_messages) ? r.display_messages : [];
+      box.textContent = '';
+      msgs.forEach(function (m) {
+        var div = document.createElement('div');
+        div.className = 'alert ' + (m.severity === 'high' || m.impacts_connectivity ? 'alert-warning' : 'alert-info');
+        div.style.marginBottom = '.5rem';
+        var b = document.createElement('b');
+        b.textContent = m.title || '';
+        div.appendChild(b);
+        if (m.text) div.appendChild(document.createTextNode((m.title ? ' — ' : '') + m.text));
+        box.appendChild(div);
+      });
+      box.style.display = msgs.length ? '' : 'none';
       var lock = document.getElementById('ts-lock-notice');
       lock.style.display = r.tailnet_lock ? '' : 'none';
       document.getElementById('ts-lock-cmd').textContent = r.tailnet_lock && r.node_key ? 'tailscale lock sign ' + r.node_key : '';

@@ -89,6 +89,8 @@ static int wireguardif_remove_peer(struct netif *n,u8_t slot){(void)n;assert(slo
 finders=function(manager,'static int find_peer_by_key(')+function(manager,'static int find_peer_by_node_id(')
 SINK=r'''
 static void clock_from_control(const cJSON *m){(void)m;}   /* tested in test_tailnet_access */
+static void note_ping_request(microlink_t *ml,const cJSON *p){(void)ml;(void)p;}
+static void apply_display_messages(microlink_t *ml,const cJSON *d){(void)ml;(void)d;}
 static uint64_t fake_ms=1;
 static uint64_t ml_get_time_ms(void){return fake_ms;}
 /* Only WG installation is replaced: explicit bounded sink, not actual crypto. */

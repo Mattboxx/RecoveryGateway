@@ -1,5 +1,11 @@
 # Maintainer continuation
 
+## Tailnet access audit (2026-11-18)
+
+Fixed items and the open ones (map size/zstd, PingRequest types other than
+liveness, capability version claims, IPv6 in the tailnet, DNS fallback for
+the control host) are in [TAILNET-ACCESS-AUDIT.md](TAILNET-ACCESS-AUDIT.md).
+
 ## Active — 3.0.25-beta.1 USB modems, sticks, adapters and tethering
 
 - 2026-11-17: beta.15 (`a217099`, pre-release `v3.0.25-beta.15`) is current and installed on board A (VALIDATION-STATUS): beta.13 plus quieter boot (SD, MQTT) and silent refusal of out-of-scope web connections. README/site/branding positioning (c602715, 3e6e094) goes live only with the next merge to Main.

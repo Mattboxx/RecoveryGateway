@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.19 adds to beta.18:
+
+- **Control server liveness pings are answered** (over the encrypted
+  control connection, as the official client does); other ping kinds are
+  logged.
+- **Messages from the control server** (for example an expiring key or an
+  account issue) are shown on the Tailscale page, as plain text.
+- **Tailscale's control server typed by hand** as the login server gets the
+  same port 80 / TLS 443 fallback as the default.
+- The Tailnet access audit (what was fixed in beta.16-19 and what is still
+  open: very large maps without compression, IPv6 inside the tailnet, some
+  protocol features) is in docs/TAILNET-ACCESS-AUDIT.md; Tailnet IPv6 limits
+  are documented in docs/CONFIGURATION.md.
+
 3.0.25-beta.18 adds to beta.17 fixes for cases where the Tailnet could not
 be used at all:
 
