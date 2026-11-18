@@ -46,6 +46,7 @@ static char captured[4096];
 #define TAG "test"
 static bool ml_policy_authority_active(void){return authority;}
 static void ml_policy_suspend(void){authority=false;suspended++;}
+static unsigned expect_full;static void ml_policy_expect_full_map(void){expect_full++;}
 static void ml_conn_close(microlink_t *ml){(void)ml;closed++;ml_policy_suspend();}
 static void bytes_to_hex(const uint8_t *p,int n,char *s){(void)p;memset(s,'0',n*2);s[n*2]=0;}
 static cJSON *build_hostinfo(microlink_t *ml){(void)ml;return cJSON_CreateObject();}

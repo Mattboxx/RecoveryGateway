@@ -914,6 +914,23 @@ static void save_str_if_present(const cJSON *obj, const char *json_key, const ch
     if (cJSON_IsString(v)) nvs_save_str(nvs_key, v->valuestring);
 }
 
+/* Secrets pasted from a console often carry a space or a line break: the
+ * server then refuses the key ("invalid key"). Saved without them. */
+static void save_trimmed_str_if_present(const cJSON *obj, const char *json_key, const char *nvs_key)
+{
+    const cJSON *v = cJSON_GetObjectItem(obj, json_key);
+    if (!cJSON_IsString(v)) return;
+    const char *s = v->valuestring;
+    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+    size_t n = strlen(s);
+    while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) n--;
+    char buf[160];
+    if (n >= sizeof buf) n = sizeof buf - 1;
+    memcpy(buf, s, n);
+    buf[n] = '\0';
+    nvs_save_str(nvs_key, buf);
+}
+
 static void save_int_if_present(const cJSON *obj, const char *json_key, const char *nvs_key)
 {
     const cJSON *v = cJSON_GetObjectItem(obj, json_key);
@@ -3716,7 +3733,7 @@ static esp_err_t tailscale_save_handler(httpd_req_t *req)
         if (cJSON_IsBool(enabled)) {
             nvs_save_int("ts_enabled", cJSON_IsTrue(enabled) ? 1 : 0);
         }
-        save_str_if_present(s, "auth_key",         "ts_authkey");
+        save_trimmed_str_if_present(s, "auth_key", "ts_authkey");
         save_str_if_present(s, "hostname",         "ts_hostname");
         save_str_if_present(s, "login_server",     "ts_login");
         save_str_if_present(s, "ipn_version",      "ts_ipn_ver");
@@ -4614,7 +4631,7 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
         cJSON_Delete(root);
         return send_save_response(req);
     }
-    save_str_if_present(root, "auth_key",    "ts_authkey");
+    save_trimmed_str_if_present(root, "auth_key", "ts_authkey");
     if (cJSON_IsString(ap_pw) && ap_pw->valuestring[0]) {
         nvs_save_str("ap_passwd", ap_pw->valuestring);
         nvs_save_u8("ap_open", 0);

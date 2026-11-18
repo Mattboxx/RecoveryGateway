@@ -6,6 +6,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+3.0.25-beta.18 adds to beta.17 fixes for cases where the Tailnet could not
+be used at all:
+
+- **A gateway alone in its tailnet (or the first device) works.** The first
+  map of a session omits Peers when the tailnet has no other devices; the
+  gateway then never had peer authority, blocked the tunnel when a device
+  joined, and looped on every reconnect. The first map of a session is now
+  complete as the protocol defines it, even without Peers or PacketFilter.
+- **ACL rules with "cap:" sources** (node capabilities and posture) no
+  longer refuse the whole policy and block all traffic: such a source
+  admits nobody here and the other rules apply.
+- **Networks that block port 80** (or proxy it): after two failed attempts
+  the gateway reaches Tailscale's control server over TLS on port 443, as the
+  official client does, and back.
+- **Networks that block NTP**: the clock is set from the control server's
+  time until NTP answers. Without a clock, node key expiry kept the policy
+  "pending" and blocked the tunnel.
+- **DERP relay**: a failed connection tries the next node of the region,
+  and the node's address from the DERP map is used when DNS fails.
+- **Auth keys pasted with a space or a line break** are saved and used
+  without them (they were refused as "invalid key").
+- Own and peer tailnet addresses are the first IPv4 of the list, not item 0
+  (IPv6-first lists); map responses up to 768 KB (about 250-500 peers in an
+  official map, was 512 KB); registration that needs a new auth key or a
+  console change retries every 5 minutes instead of 30 s.
+
 3.0.25-beta.17 adds to beta.16 (beta.16 was a local candidate):
 
 - **Every advertised subnet is reachable.** A peer could carry only its own

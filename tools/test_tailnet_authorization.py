@@ -175,7 +175,7 @@ static void invalid(void) {
         "{\"PeersChangedPatch\":[{\"NodeID\":1,\"key\":\"" KEY_B "\"}]}",
         "{\"PeersChangedPatch\":[{\"NodeID\":1,\"AllowedIPs\":[]}]}",
         "{\"PacketFilters\":{\"*\":[]}}",
-        "{\"PacketFilter\":[{\"SrcIPs\":[\"cap:foo\"],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":0,\"Last\":65535}}]}]}",
+        /* "cap:" sources narrow (admit nobody) instead of refusing: cap_sources(). */
         "{\"PacketFilter\":[{\"SrcIPs\":[\"*\"],\"SrcBits\":[0],\"DstPorts\":[]}]}",
         "{\"PacketFilter\":[{\"SrcIPs\":[\"*\"],\"Action\":\"accept\",\"DstPorts\":[]}]}",
         "{\"PeersChanged\":[{\"ID\":1,\"Key\":\"" KEY_A "\",\"AllowedIPs\":[\"0.0.0.0/33\"]}]}",
@@ -449,8 +449,56 @@ static void index_differential(void) {
     printf("PASS: ownership index equals the reference scan on %u random queries (%u owned; 60 random maps with overlaps, ties, expired peers, IPv4/IPv6)\n",checks,owned);
     ml_policy_reset();
 }
+/* The first map of a session is complete even when Peers / PacketFilter
+ * are absent (both omitempty: an empty tailnet omits Peers). Before, a
+ * gateway alone in its tailnet never had peer authority, stayed blocked when
+ * a device joined, and looped on every reconnect ("delta-while-suspended"). */
+#define EMPTY_FIRST "{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]},\"PacketFilter\":[" ALL_RULE "]}"
+static void session_maps(void) {
+    ml_policy_status_t st;
+    ml_policy_reset();ml_policy_expect_full_map();
+    assert(apply(EMPTY_FIRST));ml_policy_get_status(&st);assert(st.authority_ready&&st.peer_authority&&st.peers==0);
+    assert(apply("{\"PeersChanged\":[" PEER_A "]}"));ml_policy_get_status(&st);assert(st.authority_ready&&st.peers==1);
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
+    /* Reconnect of a gateway still alone: the first map has no Peers. */
+    ml_policy_suspend();ml_policy_expect_full_map();
+    assert(apply(EMPTY_FIRST));ml_policy_get_status(&st);assert(st.authority_ready&&st.peers==0);
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));          /* peer gone with the full map */
+    /* No filter field in a complete first map: no rules (deny), authority known. */
+    ml_policy_reset();ml_policy_expect_full_map();
+    assert(apply("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]},\"Peers\":[" PEER_A "]}"));
+    ml_policy_get_status(&st);assert(st.authority_ready&&st.filter_authority&&st.expanded_rules==0);
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
+    /* Without the session mark (OmitPeers, or a later message) nothing is
+     * assumed: a delta never wipes peers, a partial map never completes. */
+    ml_policy_reset();assert(apply(ALL));
+    assert(apply("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]}}"));ml_policy_get_status(&st);assert(st.peers==2);
+    ml_policy_suspend();assert(!apply(EMPTY_FIRST));assert(!strcmp(ml_policy_last_reject(),"delta-while-suspended"));
+    /* The mark is consumed by one map and cleared by a session end. */
+    ml_policy_reset();ml_policy_expect_full_map();assert(apply(ALL));
+    assert(apply("{\"Node\":{\"Addresses\":[\"100.64.0.10/32\"]}}"));ml_policy_get_status(&st);assert(st.peers==2);
+    ml_policy_expect_full_map();ml_policy_suspend();assert(!apply(EMPTY_FIRST));
+    /* Keepalives do not consume it. */
+    ml_policy_reset();ml_policy_expect_full_map();assert(apply("{\"KeepAlive\":true}"));
+    assert(apply(EMPTY_FIRST));ml_policy_get_status(&st);assert(st.authority_ready);
+    puts("PASS: first map of a session complete without Peers/PacketFilter (empty tailnet, reconnect alone, join), never assumed for deltas or OmitPeers, consumed once");
+    ml_policy_reset();
+}
+/* "cap:<name>" sources (node-capability match, capver >= 109) admit nobody
+ * here and no longer refuse the whole policy. */
+static void cap_sources(void) {
+    ml_policy_reset();
+    assert(apply("{" NODE "," PEER_LIST ",\"PacketFilter\":[{\"SrcIPs\":[\"cap:example.com/cap/posture\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"*\",\"Ports\":{\"First\":22,\"Last\":22}}]},"
+                 "{\"SrcIPs\":[\"100.64.0.1\",\"cap:other\"],\"IPProto\":[6],\"DstPorts\":[{\"IP\":\"100.64.0.10\",\"Ports\":{\"First\":80,\"Last\":80}}]}]}"));
+    ml_policy_status_t st;ml_policy_get_status(&st);assert(st.authority_ready&&st.expanded_rules==1);
+    assert(rx(4,6,"100.64.0.1","100.64.0.10",40000,80,2,key_a));
+    assert(!rx(4,6,"100.64.0.1","100.64.0.10",40000,22,2,key_a));      /* the cap: rule admits nobody */
+    assert(!rx(4,6,"100.64.0.2","100.64.0.10",40000,22,2,key_b));
+    puts("PASS: cap: sources match nobody, the rest of the policy applies (no whole-policy refusal)");
+    ml_policy_reset();
+}
 int main(void) {
-    peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();concurrency();
+    peer_replacement();basics();deltas();replies();invalid();ownership();bounds_and_ranges();large_maps();index_differential();session_maps();cap_sources();concurrency();
     printf("RESOURCE BOUNDS: snapshot=%zu bytes; two during normal update=%zu; return cache=%zu (inside PSRAM snapshot); rules, peers, prefixes sized by the map (%zu, %zu, %zu bytes each) groups=%d flows=%d\n",sizeof(policy),2*sizeof(policy),sizeof(((policy*)0)->flows),sizeof(entry),sizeof(peer),sizeof(ip_range),GROUPS,FLOWS);
 }
 '''

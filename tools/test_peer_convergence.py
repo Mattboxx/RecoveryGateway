@@ -29,7 +29,7 @@ manager=(ML/'src/ml_wg_mgr.c').read_text(encoding='utf-8')
 internal=(ML/'include/microlink_internal.h').read_text(encoding='utf-8')
 start=internal.index('typedef struct {\n    enum {\n        ML_PEER_ADD,')
 update=internal[start:internal.index('} ml_peer_update_t;',start)+len('} ml_peer_update_t;')]
-parser=function(coord,'static bool parse_peers_from_map_response(') if 'static bool parse_peers_from_map_response(' in coord else function(coord,'static void parse_peers_from_map_response(')
+parser=function(coord,'static uint32_t first_ipv4(const cJSON *addresses) {')+function(coord,'static bool parse_peers_from_map_response(') if 'static bool parse_peers_from_map_response(' in coord else function(coord,'static void parse_peers_from_map_response(')
 apply_map=function(coord,'static bool apply_peer_map(') if 'static bool apply_peer_map(' in coord else '''
 /* Baseline reproduction only: old coordinator had separate unguarded calls. */
 static bool apply_peer_map(microlink_t *ml,cJSON *map){if(!ml_policy_apply(map))return false;parse_peers_from_map_response(ml,map);return true;}
@@ -87,6 +87,7 @@ static int wireguardif_remove_peer(struct netif *n,u8_t slot){(void)n;assert(slo
 
 finders=function(manager,'static int find_peer_by_key(')+function(manager,'static int find_peer_by_node_id(')
 SINK=r'''
+static void clock_from_control(const cJSON *m){(void)m;}   /* tested in test_tailnet_access */
 static uint64_t fake_ms=1;
 static uint64_t ml_get_time_ms(void){return fake_ms;}
 /* Only WG installation is replaced: explicit bounded sink, not actual crypto. */

@@ -47,6 +47,20 @@ static char *nvs_str_or_empty(const char *key)
     return s ? s : strdup("");
 }
 
+/* Surrounding spaces/line breaks removed in place (keys saved before they
+ * were trimmed on save). */
+static char *trim_in_place(char *s)
+{
+    if (!s) return s;
+    char *b = s;
+    while (*b == ' ' || *b == '\t' || *b == '\r' || *b == '\n') b++;
+    size_t n = strlen(b);
+    while (n && (b[n - 1] == ' ' || b[n - 1] == '\t' || b[n - 1] == '\r' || b[n - 1] == '\n')) n--;
+    memmove(s, b, n);
+    s[n] = '\0';
+    return s;
+}
+
 static const char *TAG = "tailscale_mgr";
 
 int32_t tailscale_enabled = 0;
@@ -221,7 +235,7 @@ void tailscale_init(void)
     tailscale_ipn_version      = nvs_str_or_empty("ts_ipn_ver");
     s_active_ipn_version       = nvs_str_or_empty("ts_ipn_ver");
     tailscale_advertise_routes = nvs_str_or_empty("ts_routes");
-    s_active_auth_key = nvs_str_or_empty("ts_authkey");
+    s_active_auth_key = trim_in_place(nvs_str_or_empty("ts_authkey"));
     s_active_hostname = nvs_str_or_empty("ts_hostname");
     s_active_login_server = nvs_str_or_empty("ts_login");
     s_active_advertise_routes = nvs_str_or_empty("ts_routes");

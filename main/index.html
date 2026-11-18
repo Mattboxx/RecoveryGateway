@@ -10013,7 +10013,7 @@
           }
         }
       };
-      var authKey = document.getElementById('ts-auth-key').value;
+      var authKey = document.getElementById('ts-auth-key').value.trim();   /* a pasted space breaks the key */
       if (authKey) body.settings.auth_key = authKey;   /* omit-to-keep */
 
       var btn = this;

@@ -385,3 +385,6 @@ CONFIG_TSR_SNMP=y
 CONFIG_TSR_DDNS=y
 # Tunnel slots (internal RAM; handshake state is in PSRAM). The map has no peer limit.
 CONFIG_ML_MAX_PEERS=20
+# One map response (PSRAM): about 1.5-3 KB per peer in an official map.
+CONFIG_ML_JSON_BUFFER_SIZE_KB=768
+CONFIG_ML_H2_BUFFER_SIZE_KB=768
