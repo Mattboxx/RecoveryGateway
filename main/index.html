@@ -3390,10 +3390,6 @@
               </select>
               <span class="form-hint">Picks from peers advertising 0.0.0.0/0.</span>
             </div>
-            <div class="form-group">
-              <label class="form-label" for="ts-max-peers">Max peers</label>
-              <input class="input" type="number" id="ts-max-peers" min="1" max="64" value="16">
-            </div>
           </div>
 
           <div class="form-group">
@@ -9727,7 +9723,6 @@
             ? ('Exit-node server active · DNS ' + (s.exit_dns_running ? ('running on port ' + s.peerapi_port) : 'unavailable'))
             : 'Exit-node DNS inactive · starts only in exit-node server mode after restart.';
           document.getElementById('ts-routes').value        = s.advertise_routes || '';
-          document.getElementById('ts-max-peers').value     = s.max_peers   || 16;
           document.getElementById('ts-accept-routes').checked = !!s.accept_routes;
           document.getElementById('ts-lan-bypass').checked    = !!s.lan_bypass;
           document.getElementById('ts-snat').checked          = !!s.snat_subnet_routes;
@@ -9930,7 +9925,7 @@
 
     /* Dirty-track and wiring. */
     ['ts_enabled_on', 'ts-auth-key', 'ts-hostname', 'ts-login', 'ts-ipn-version', 'ts-adv-ap',
-     'ts-routes', 'ts-max-peers', 'ts-accept-routes', 'ts-lan-bypass', 'ts-snat', 'ts-advertise-exit', 'ts-exit-node',
+     'ts-routes', 'ts-accept-routes', 'ts-lan-bypass', 'ts-snat', 'ts-advertise-exit', 'ts-exit-node',
      'ts-4via6-enabled', 'ts-4via6-lan', 'ts-4via6-site'
     ].forEach(function (id) {
       var el = document.getElementById(id);
@@ -10087,7 +10082,6 @@
           ipn_version:       document.getElementById('ts-ipn-version').value.trim(),
           advertise_ap:      document.getElementById('ts-adv-ap').checked,
           advertise_routes:  document.getElementById('ts-routes').value,
-          max_peers:         parseInt(document.getElementById('ts-max-peers').value, 10) || 16,
           accept_routes:     document.getElementById('ts-accept-routes').checked,
           lan_bypass:        document.getElementById('ts-lan-bypass').checked,
           snat_subnet_routes: document.getElementById('ts-snat').checked,
@@ -13339,8 +13333,6 @@
         vURL(true),                      { saveBtn: btnTs });
       attachValidator(document.getElementById('ts-routes'),
         vCIDRList(true),                 { saveBtn: btnTs });
-      attachValidator(document.getElementById('ts-max-peers'),
-        vRange(1, 64, false),            { saveBtn: btnTs });
 
       // ── System tab → Device card ──────────────────────────────────────
       var btnSys = document.getElementById('sys-device-name-save');

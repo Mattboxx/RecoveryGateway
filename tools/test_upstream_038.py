@@ -216,10 +216,11 @@ int main(void){
 ''')
 
 mgr = (ML / 'src/ml_wg_mgr.c').read_text(encoding='utf-8')
-sync = 'struct wg_tcpip_call {' + mgr.split('struct wg_tcpip_call {', 1)[1].split('static void wg_netif_bring_up_cb', 1)[0]
+sync = 'struct wg_tcpip_call {' + mgr.split('struct wg_tcpip_call {', 1)[1].split('/* udp_sendto on the raw WG output PCB from any task', 1)[0]
 run('actual blocking TCPIP executor completes callback before its stack context expires', r'''
 static unsigned completions;
 static int esp_netif_tcpip_exec(int(*fn)(void*),void *arg){return fn(arg);}
+typedef void *TaskHandle_t;static TaskHandle_t xTaskGetCurrentTaskHandle(void){return (TaskHandle_t)1;}
 ''' + sync + r'''
 static void callback(void *p){(*(unsigned *)p)++;completions++;}
 int main(void){unsigned count=0;for(unsigned i=0;i<10000;i++){wg_tcpip_sync(callback,&count);assert(count==i+1&&completions==count);}}

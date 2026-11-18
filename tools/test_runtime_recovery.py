@@ -282,7 +282,7 @@ int main(void){
 run('Actual authenticated endpoint selection: relay recovery, healthy direct retention, upgrade and clock wrap',
     headers + endpoint_fixture + endpoint + endpoint_tests)
 assert 'update_peer_addr(peer, addr, port, pbuf->tot_len > 0);' in wg_backend
-assert 'uint32_t age = now_wg - wp->last_direct_rx;' in (
+assert 'uint32_t age = wireguard_sys_now() - kwp->last_direct_rx;' in (
     ROOT / 'external/microlink/components/microlink/src/ml_wg_mgr.c').read_text()
 
 web = (ROOT / 'main/web_ui.c').read_text()
