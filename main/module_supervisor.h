@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only
- * Copyright (C) 2026 Mattboxx. ESP32 Tailnet Gateway, Mattboxx Edition: see LICENSE
+ * Copyright (C) 2026 Mattboxx. RecoveryGateway, Mattboxx Edition: see LICENSE
  * and LICENSE-EXCEPTION.md. */
 /* Restart optional integration workers (MQTT, ntfy) whose task could not be
  * created, e.g. under low memory at boot. Driven by the PSRAM operations

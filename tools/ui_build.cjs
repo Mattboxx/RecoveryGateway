@@ -7,7 +7,7 @@ function build() {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { spawnSync } = require('node:child_process');
   const src = path.join(__dirname, '../main/index.html');
   if (process.env.UI_SOURCE === 'raw') return (built = { html: fs.readFileSync(src, 'utf8'), assets: {} });
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tailnet-gateway-ui-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recoverygateway-ui-'));
   const out = path.join(dir, 'index.html');
   const r = spawnSync(process.env.PYTHON || 'python', [path.join(__dirname, '../main/gen_index_html_gz.py'), '--html', src, out], { encoding: 'utf8' });
   if (r.status !== 0) throw new Error('UI build failed: ' + r.stderr + r.stdout);

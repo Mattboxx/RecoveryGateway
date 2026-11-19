@@ -2297,7 +2297,7 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="fb-host">Device name in the tailnet</label>
-          <input class="input" id="fb-host" maxlength="63" value="tailnet-gateway" spellcheck="false">
+          <input class="input" id="fb-host" maxlength="63" value="recovery-gateway" spellcheck="false">
         </div>
         </div>
       </section>
@@ -13223,7 +13223,7 @@
         row(dl, 'Time zone', tz.label || T('UTC (change it later in System)'));
         var joining = $('fb-key').value.trim();
         row(dl, 'Tailnet', joining ? (document.querySelector('input[name="fb-ctl"]:checked').value === 'hs' ? $('fb-server').value.trim() : 'Tailscale') : T('Disabled'));
-        if (joining) row(dl, 'Device name in the tailnet', $('fb-host').value.trim() || 'tailnet-gateway');
+        if (joining) row(dl, 'Device name in the tailnet', $('fb-host').value.trim() || 'recovery-gateway');
         row(dl, 'Share home network', $('fb-share-lan').checked ? yes : no);
         row(dl, 'Share gateway Wi-Fi', $('fb-share-ap').checked ? yes : no);
         row(dl, 'Exit node', $('fb-exit').checked ? yes : no);
@@ -13322,7 +13322,7 @@
       function skipTailnet() {
         $('fb-key').value = '';
         $('fb-server').value = '';
-        $('fb-host').value = 'tailnet-gateway';
+        $('fb-host').value = 'recovery-gateway';
         document.querySelector('input[name="fb-ctl"][value="ts"]').checked = true;
         $('fb-server-row').hidden = true;
         $('fb-share-ap').checked = false; st.apOff = true; delete st.auto['fb-share-ap'];

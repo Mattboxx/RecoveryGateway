@@ -91,7 +91,7 @@ async function refresh(page) {
       await refresh(f.page);
       s = await st();
       assert.equal(s.hasAp, true); assert.equal(s.apHidden, false); assert.equal(s.cols, 5);
-      assert.equal(s.apText, 'Tailnet-Gateway · 2 clients');
+      assert.equal(s.apText, 'RecoveryGateway · 2 clients');
       assert.equal(s.rateHidden, false);
       const m = s.rate.match(/^↓(\d+(?:\.\d)?) (kbit|Mbit)\/s↑(\d+(?:\.\d)?) kbit\/s$/);
       assert.ok(m, s.rate);

@@ -1,5 +1,5 @@
 /*
- * ESP32 Tailnet Gateway: copy of lwIP 2.2.0 src/apps/mdns/mdns.c as shipped
+ * RecoveryGateway: copy of lwIP 2.2.0 src/apps/mdns/mdns.c as shipped
  * in ESP-IDF 5.5.3 (components/lwip/lwip, SHA-256
  * 2bd12a3bb8b3c8830c56c2b5c3b8073ab5f71654171602210f63cf6dafc8d5e9), with
  * changes for IPv4-only probing and netif teardown. Original copyright and
@@ -2345,7 +2345,7 @@ mdns_probe_and_announce(void* arg)
 #endif
       {
 #if LWIP_IPV6
-        /* ESP32 Tailnet Gateway patch: an interface without a valid IPv6
+        /* RecoveryGateway patch: an interface without a valid IPv6
          * address cannot send the IPv6 probe (no source address); upstream
          * then retries forever and never answers. Probe IPv4 only there. */
         if (!mdns_netif_has_ip6(netif) || mdns_send_probe(netif, &v6group) == ERR_OK)

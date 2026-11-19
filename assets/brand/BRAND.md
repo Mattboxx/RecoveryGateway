@@ -5,7 +5,7 @@
 **Description:** All-in-one ESP32-S3 Tailscale/Headscale gateway with selective
 LAN-to-Tailnet access, subnet routing, remote recovery and optional automation.
 
-Formerly *ESP32 Homelab Gateway* (Mattboxx edition of Csontikka's
+Formerly *ESP32 Tailnet Gateway*, and before that *ESP32 Homelab Gateway* (Mattboxx edition of Csontikka's
 *esp32-tailscale-subnet-router*). Community firmware: never present it as an
 official Tailscale or Espressif product, and do not borrow their logos,
 colours or typefaces. *Tailscale*, *Headscale*, *WireGuard* and *ESP32* are

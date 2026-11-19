@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only
- * Copyright (C) 2026 Mattboxx. ESP32 Tailnet Gateway, Mattboxx Edition: see LICENSE
+ * Copyright (C) 2026 Mattboxx. RecoveryGateway, Mattboxx Edition: see LICENSE
  * and LICENSE-EXCEPTION.md. */
 /* Internal RAM for the optional USB connection. The ESP32-S3 USB DMA cannot
  * reach PSRAM, so its transfers come from the same internal RAM the Wi-Fi

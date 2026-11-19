@@ -69,7 +69,7 @@ official client.
 
 ## Home Assistant community
 
-**Title:** ESP32-S3 Tailnet gateway with MQTT Discovery (rule switches, destination tests, WoL)
+**Title:** RecoveryGateway: ESP32-S3 Tailscale gateway with MQTT Discovery (rule switches, destination tests, WoL)
 
 If your Home Assistant must reach a broker or device at another site over
 Tailscale — or the other way round — this ESP32-S3 firmware can bridge it.
