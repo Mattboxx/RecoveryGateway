@@ -263,6 +263,16 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
   `main/i18n/*.json` entries). Show `github.com/Mattboxx/RecoveryGateway`
   (owner, 2026-11-19: "ricorda nella prossima versione di aggiustare questo
   nelle info del firmware").
+- **Restart button after saving the Ethernet or cellular (SIM data) uplink:**
+  both settings apply at the next boot and their POST answers
+  `restart_required: true`, but the page only writes "saved settings apply
+  after restart" in the card; unlike the other settings that need a restart,
+  it never raises the pending-reboot banner with its Restart button
+  (`setPendingReboot(true)` is not called after `/api/ethernet` and
+  `/api/cellular` saves, including the USB transport and data-limit forms).
+  Raise it the same way, with a browser test (owner, 2026-11-19: "quando si
+  imposta ethernet o SIM dati che appaia il tasto di reboot come le altre cose
+  che lo richiedono").
 
 ## 3.0.26 and later — Tailnet reach (owner decision, 2026-11-18)
 
