@@ -186,7 +186,7 @@ summary { cursor: pointer; font-weight: 600; }
 }
 @media (max-width: 760px) {
   .tools .menu { display: inline-flex; }
-  .tools .buy { display: none; }   /* phones: the header is full; the page buttons remain */
+  .tools .theme { display: none; }   /* phones: the board icon takes its place; the theme follows the phone */
   .top-inner { flex-wrap: wrap; gap: 8px; }
   .site-nav { order: 3; width: 100%; display: none; }
   .tools { gap: 6px; }
