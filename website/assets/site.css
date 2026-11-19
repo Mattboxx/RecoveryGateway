@@ -185,6 +185,9 @@ summary { cursor: pointer; font-weight: 600; }
   .hero { grid-template-columns: 1fr; padding-top: 32px; }
 }
 @media (max-width: 760px) {
+  /* Phones: the header scrolls with the page. Sticky, it stayed on screen with
+   * the menu open (over half the viewport) and could hide the page heading. */
+  .top { position: relative; backdrop-filter: none; background: var(--bg); }
   .tools .menu { display: inline-flex; }
   .tools .theme { display: none; }   /* phones: the board icon takes its place; the theme follows the phone */
   .top-inner { flex-wrap: wrap; gap: 8px; }
