@@ -14,8 +14,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   button**, like the other settings that apply after a restart. Before, only
   a short note said to restart. The monthly data limit still applies at once
   and does not ask for a restart.
-- System → About shows `github.com/Mattboxx/RecoveryGateway` as the source
-  (the link already opened it; the text still showed the old name).
+- System → About shows the RecoveryGateway repository as the source (the
+  link already opened it; the text still showed the old name).
 
 ## [3.0.29] - 2026-11-19
 
