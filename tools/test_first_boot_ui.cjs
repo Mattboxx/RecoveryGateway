@@ -33,10 +33,10 @@ function mockGateway(opts = {}) {
     if (url.pathname.startsWith('/i18n/') && await serveAsset(route, url.pathname)) return;
     switch (url.pathname) {
       case '/': return route.fulfill({ contentType: 'text/html', body: html });
-      case '/api/auth/status': return send(200, { setup_mode: true, password_set: false, auth_enabled: true, auth_required: false, authenticated: false, device_name: 'Tailnet Gateway' });
+      case '/api/auth/status': return send(200, { setup_mode: true, password_set: false, auth_enabled: true, auth_required: false, authenticated: false, device_name: 'RecoveryGateway' });
       case '/api/setup/state': {
         const mine = sidHeader && sidHeader === g.sid;
-        const out = { setup: true, setup_ssid: 'ESP32-Tailnet-Setup-1A2B', default_ap_ssid: 'ESP32-Tailnet-1A2B', version: 'synthetic', lan_name: 'esp32-tailnet-1a2b',
+        const out = { setup: true, setup_ssid: 'RecoveryGateway-Setup-1A2B', default_ap_ssid: 'ESP32-Tailnet-1A2B', version: 'synthetic', lan_name: 'esp32-tailnet-1a2b',
           session: mine ? g.state : 'none', other_pairing: false, code_locked: false, finished: !!g.finish, uplinks: ['wifi', 'ethernet', 'cellular'] };
         if (mine && g.state === 'claimed') {
           if (g.wifi === 'testing' && ++g.polls >= 2) g.wifi = 'ok';
@@ -382,8 +382,8 @@ async function flow(browser, [width, height, locale], failures, full) {
     const want = locale.split('-')[0];
     await page.waitForFunction(w => document.documentElement.lang.split('-')[0] === w && !document.documentElement.classList.contains('i18n-wait'), want);
     const title = (await page.textContent('#fb-title')).trim();
-    if (want === 'en') assert.equal(title, 'Welcome to ESP32 Tailnet Gateway');
-    else assert.notEqual(title, 'Welcome to ESP32 Tailnet Gateway', 'wizard title translated');
+    if (want === 'en') assert.equal(title, 'Welcome to RecoveryGateway');
+    else assert.notEqual(title, 'Welcome to RecoveryGateway', 'wizard title translated');
     assert.equal(await page.getAttribute('#firstBoot', 'lang'), null);
     assert.equal(await page.inputValue('#fb-lang'), want, 'language picker shows the language in use');
     assert.equal(await page.isEnabled('#fb-next'), false);

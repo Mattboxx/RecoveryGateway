@@ -1,8 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0.."
-title ESP32 Tailnet Gateway - install on a new device (erases everything)
-echo ESP32 Tailnet Gateway - Mattboxx Edition
+title RecoveryGateway - install on a new device (erases everything)
+echo RecoveryGateway - Mattboxx Edition
 echo INSTALL ON A NEW DEVICE: this ERASES all Wi-Fi, tailnet identity, passwords and settings.
 echo For a configured gateway use UPDATE-KEEP-SETTINGS.bat instead.
 echo Optional usage: INSTALL-NEW-DEVICE.bat COM5
@@ -24,7 +24,7 @@ if errorlevel 1 goto :error
 windows\esptool.exe --chip esp32s3 %PORT_ARGS% --baud 460800 write-flash --flash-mode dio --flash-freq 80m --flash-size 8MB 0x0 firmware\bootloader.bin 0x8000 firmware\partitions.bin 0x19000 firmware\ota_data_initial.bin 0x20000 firmware\firmware.bin
 if errorlevel 1 goto :error
 echo.
-echo Done. Power the board, join the Wi-Fi ESP32-Tailnet-Setup-XXXX and follow the setup page.
+echo Done. Power the board, join the Wi-Fi RecoveryGateway-Setup-XXXX and follow the setup page.
 echo If nothing opens, browse to http://192.168.4.1/
 pause
 exit /b 0

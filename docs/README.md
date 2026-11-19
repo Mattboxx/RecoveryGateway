@@ -1,9 +1,9 @@
-# Documentation — ESP32 Tailnet Gateway
+# Documentation — RecoveryGateway
 
 User guides for the current firmware, the technical reference and the project
-records. The [website](https://mattboxx.github.io/esp32-tailnet-gateway/)
+records. The [website](https://mattboxx.github.io/RecoveryGateway/)
 presents the same guides for reading online, and the
-[wiki](https://github.com/Mattboxx/esp32-tailnet-gateway/wiki) summarizes them
+[wiki](https://github.com/Mattboxx/RecoveryGateway/wiki) summarizes them
 by task.
 
 ## Start here

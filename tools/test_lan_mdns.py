@@ -47,7 +47,7 @@ stripped = patched.replace('\r\n', '\n').split('*/\n', 1)[1]
 for piece in (c_func(stripped.replace('\r\n', '\n'), HAS6),):
     stripped = stripped.replace('#if LWIP_IPV6\n' + piece + '\n#endif\n\n', '', 1)
 stripped = stripped.replace(
-    """        /* ESP32 Tailnet Gateway patch: an interface without a valid IPv6
+    """        /* RecoveryGateway patch: an interface without a valid IPv6
          * address cannot send the IPv6 probe (no source address); upstream
          * then retries forever and never answers. Probe IPv4 only there. */
         if (!mdns_netif_has_ip6(netif) || mdns_send_probe(netif, &v6group) == ERR_OK)""",

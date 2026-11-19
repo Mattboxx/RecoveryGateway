@@ -85,18 +85,19 @@ def lockup(dark):
     else:
         mark = f'<g transform="translate(8 8) scale(1.25)">{tile(INK)}{mark_on_dark(INK)}</g>'
         word, edition = INK, GREEN_DEEP
-    text = (f'<g font-family="{FONT}"><text x="108" y="52" font-size="34" font-weight="650" letter-spacing="-0.4" fill="{word}">ESP32 Tailnet Gateway</text>'
-            f'<text x="110" y="80" font-size="13.5" font-weight="650" letter-spacing="3.6" fill="{edition}">MATTBOXX EDITION</text></g>')
-    return svg('0 0 560 96', mark + text, 'ESP32 Tailnet Gateway — Mattboxx Edition')
+    text = (f'<g font-family="{FONT}"><text x="108" y="52" font-size="34" font-weight="650" letter-spacing="-0.4" fill="{word}">RecoveryGateway</text>'
+            f'<text x="110" y="80" font-size="13.5" font-weight="650" letter-spacing="3.6" fill="{edition}">FOR ESP32-S3 · MATTBOXX EDITION</text></g>')
+    return svg('0 0 560 96', mark + text, 'RecoveryGateway — Mattboxx Edition')
 
 
 def compact_lockup():
     """Stacked mark + short name for small spaces (square-ish)."""
     body = (f'<rect width="200" height="200" rx="40" fill="{INK}"/>'
             f'<g transform="translate(52 22) scale(1.5)">{mark_on_dark(INK)}</g>'
-            f'<g font-family="{FONT}" text-anchor="middle"><text x="100" y="146" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Tailnet</text>'
-            f'<text x="100" y="172" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Gateway</text></g>')
-    return svg('0 0 200 200', body, 'ESP32 Tailnet Gateway (compact)')
+            f'<g font-family="{FONT}" text-anchor="middle"><text x="100" y="142" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Recovery</text>'
+            f'<text x="100" y="166" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Gateway</text>'
+            f'<text x="100" y="188" font-size="12" font-weight="650" fill="{GREEN_MUTED}" letter-spacing="2.4">ESP32-S3</text></g>')
+    return svg('0 0 200 200', body, 'RecoveryGateway (compact)')
 
 
 def roles(x0, y0, _scale, labels_x, font_size, label_lit, label_off):
@@ -139,13 +140,13 @@ def grid(w, h):
 def banner():
     body = grid(1280, 400)
     body += f'<g transform="translate(80 84) scale(1.5)">{tile(INK_2, LINE)}{mark_on_dark(INK_2)}</g>'
-    body += (f'<g font-family="{FONT}"><text x="200" y="134" font-size="50" font-weight="650" letter-spacing="-0.6" fill="{GREEN}">ESP32 Tailnet Gateway</text>'
-             f'<text x="203" y="170" font-size="15" font-weight="650" letter-spacing="4" fill="{GREEN_MUTED}">MATTBOXX EDITION</text>'
+    body += (f'<g font-family="{FONT}"><text x="200" y="134" font-size="50" font-weight="650" letter-spacing="-0.6" fill="{GREEN}">RecoveryGateway</text>'
+             f'<text x="203" y="170" font-size="15" font-weight="650" letter-spacing="4" fill="{GREEN_MUTED}">FOR ESP32-S3 · MATTBOXX EDITION</text>'
              f'<text x="80" y="252" font-size="26" font-weight="500" fill="{GREEN_SOFT}">One ESP32. Remote access, Wake-on-LAN</text>'
              f'<text x="80" y="288" font-size="26" font-weight="500" fill="{GREEN_SOFT}">and backup internet.</text>'
              f'<text x="80" y="328" font-size="26" font-weight="600" fill="{GREEN}">Enable only what you need.</text></g>')
     body += roles(770, 200, 1, 1060, 18, GREEN, GREEN_MUTED)
-    return svg('0 0 1280 400', body, 'ESP32 Tailnet Gateway — Mattboxx Edition',
+    return svg('0 0 1280 400', body, 'RecoveryGateway — Mattboxx Edition',
                'One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need. A LAN device passes through the ESP32; the Service Gateway role is lit while Wake-on-LAN, subnet router, exit node and Ethernet / 4G backup stay off until enabled.',
                (1280, 400))
 
@@ -153,8 +154,8 @@ def banner():
 def social():
     body = grid(1280, 640)
     body += f'<g transform="translate(96 80) scale(1.75)">{tile(INK_2, LINE)}{mark_on_dark(INK_2)}</g>'
-    body += (f'<g font-family="{FONT}"><text x="232" y="146" font-size="58" font-weight="650" letter-spacing="-0.7" fill="{GREEN}">ESP32 Tailnet Gateway</text>'
-             f'<text x="235" y="186" font-size="17" font-weight="650" letter-spacing="4.5" fill="{GREEN_MUTED}">MATTBOXX EDITION</text>'
+    body += (f'<g font-family="{FONT}"><text x="232" y="146" font-size="58" font-weight="650" letter-spacing="-0.7" fill="{GREEN}">RecoveryGateway</text>'
+             f'<text x="235" y="186" font-size="17" font-weight="650" letter-spacing="4.5" fill="{GREEN_MUTED}">FOR ESP32-S3 · MATTBOXX EDITION</text>'
              f'<text x="96" y="300" font-size="32" font-weight="500" fill="{GREEN_SOFT}">One ESP32.</text>'
              f'<text x="96" y="342" font-size="32" font-weight="500" fill="{GREEN_SOFT}">Remote access, Wake-on-LAN</text>'
              f'<text x="96" y="384" font-size="32" font-weight="500" fill="{GREEN_SOFT}">and backup internet.</text>'
@@ -164,20 +165,20 @@ def social():
     body += (f'<g font-family="{FONT}" font-size="21" fill="{GREEN_MUTED}">'
              '<text x="96" y="550">ESP32-S3 firmware: Wake-on-LAN from Telegram or ntfy (no VPN needed), Tailscale/Headscale</text>'
              '<text x="96" y="580">gateway, and Ethernet or 4G/LTE uplinks that keep IoT devices online.</text></g>')
-    return svg('0 0 1280 640', body, 'ESP32 Tailnet Gateway — Mattboxx Edition',
+    return svg('0 0 1280 640', body, 'RecoveryGateway — Mattboxx Edition',
                'All-in-one ESP32-S3 Tailscale/Headscale gateway with selective LAN-to-Tailnet access, subnet routing, remote recovery and optional automation.',
                (1280, 640))
 
 
 def main():
     files = {
-        'logo-mark.svg': svg('0 0 64 64', tile() + mark_on_dark(), 'ESP32 Tailnet Gateway'),
+        'logo-mark.svg': svg('0 0 64 64', tile() + mark_on_dark(), 'RecoveryGateway'),
         'logo-mark-dark.svg': svg('0 0 64 64', mark_on_dark('none').replace('<circle cx="27" cy="32" r="3" fill="none"/>', ''),
-                                  'ESP32 Tailnet Gateway (transparent, for dark backgrounds)'),
-        'logo-mark-light.svg': svg('0 0 64 64', light_glyph(), 'ESP32 Tailnet Gateway (transparent, for light backgrounds)'),
-        'logo-mono.svg': svg('0 0 64 64', mono('currentColor'), 'ESP32 Tailnet Gateway (single colour, currentColor)'),
-        'logo-mono-black.svg': svg('0 0 64 64', mono(INK), 'ESP32 Tailnet Gateway (black)'),
-        'logo-mono-green.svg': svg('0 0 64 64', mono(GREEN_DEEP), 'ESP32 Tailnet Gateway (green)'),
+                                  'RecoveryGateway (transparent, for dark backgrounds)'),
+        'logo-mark-light.svg': svg('0 0 64 64', light_glyph(), 'RecoveryGateway (transparent, for light backgrounds)'),
+        'logo-mono.svg': svg('0 0 64 64', mono('currentColor'), 'RecoveryGateway (single colour, currentColor)'),
+        'logo-mono-black.svg': svg('0 0 64 64', mono(INK), 'RecoveryGateway (black)'),
+        'logo-mono-green.svg': svg('0 0 64 64', mono(GREEN_DEEP), 'RecoveryGateway (green)'),
         'logo-horizontal-dark.svg': lockup(True),
         'logo-horizontal-light.svg': lockup(False),
         'logo-compact.svg': compact_lockup(),

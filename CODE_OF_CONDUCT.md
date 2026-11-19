@@ -1,6 +1,6 @@
 # Code of conduct
 
-ESP32 Tailnet Gateway is a small community project. Everyone who opens an
+RecoveryGateway is a small community project. Everyone who opens an
 issue, discussion or pull request is expected to:
 
 - be respectful and assume good intent; disagree about code, not people;

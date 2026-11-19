@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only
- * Copyright (C) 2026 Mattboxx. ESP32 Tailnet Gateway, Mattboxx Edition: see LICENSE
+ * Copyright (C) 2026 Mattboxx. RecoveryGateway, Mattboxx Edition: see LICENSE
  * and LICENSE-EXCEPTION.md. */
 /* Optional traffic count per device on the gateway's access point, keyed by
  * the client's MAC address: bytes the device sent and bytes it received

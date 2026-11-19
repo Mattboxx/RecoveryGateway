@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>ESP32 Tailnet Gateway</title>
+  <title>RecoveryGateway</title>
   <script>
     /* Ask for the visitor's language as early as possible: the page lists
      * the languages (window.I18N_LANGS, added by the build) and each one is a
@@ -2025,9 +2025,9 @@
     <div class="nav-brand">
       <div class="nav-brand-icon">
         <!-- Project mark: LAN input -> ESP32 hub -> one lit Tailnet role (tools/brand_svg.py) -->
-        <svg class="brand-mark" width="26" height="26" viewBox="0 0 64 64" role="img" aria-label="ESP32 Tailnet Gateway"><g fill="none" stroke-linecap="round" stroke-width="4.5"><path d="M10 32h17" stroke="#1FC97A"/><path d="M27 32c11 0 11-15 21-15M27 32c11 0 11 15 21 15" stroke="#1F5C3F"/><path d="M27 32h21" stroke="#1FC97A"/></g><circle cx="27" cy="32" r="8" fill="#1FC97A"/><circle cx="27" cy="32" r="3" fill="#0d0f12"/><circle cx="52" cy="32" r="5.5" fill="#1FC97A"/><circle cx="51.5" cy="17" r="3.5" fill="none" stroke="#1F5C3F" stroke-width="2.6"/><circle cx="51.5" cy="47" r="3.5" fill="none" stroke="#1F5C3F" stroke-width="2.6"/></svg>
+        <svg class="brand-mark" width="26" height="26" viewBox="0 0 64 64" role="img" aria-label="RecoveryGateway"><g fill="none" stroke-linecap="round" stroke-width="4.5"><path d="M10 32h17" stroke="#1FC97A"/><path d="M27 32c11 0 11-15 21-15M27 32c11 0 11 15 21 15" stroke="#1F5C3F"/><path d="M27 32h21" stroke="#1FC97A"/></g><circle cx="27" cy="32" r="8" fill="#1FC97A"/><circle cx="27" cy="32" r="3" fill="#0d0f12"/><circle cx="52" cy="32" r="5.5" fill="#1FC97A"/><circle cx="51.5" cy="17" r="3.5" fill="none" stroke="#1F5C3F" stroke-width="2.6"/><circle cx="51.5" cy="47" r="3.5" fill="none" stroke="#1F5C3F" stroke-width="2.6"/></svg>
       </div>
-      <span class="nav-brand-name" id="brandName">Tailnet Gateway</span>
+      <span class="nav-brand-name" id="brandName">RecoveryGateway</span>
     </div>
 
     <div class="nav-tabs" role="tablist" id="navTabs">
@@ -2164,7 +2164,7 @@
     <form class="auth-card fb-card" id="fbForm" autocomplete="off" novalidate>
       <div class="fb-head">
         <svg class="brand-mark" width="34" height="34" viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke-linecap="round" stroke-width="4.5"><path d="M10 32h17" stroke="#1FC97A"/><path d="M27 32c11 0 11-15 21-15M27 32c11 0 11 15 21 15" stroke="#1F5C3F"/><path d="M27 32h21" stroke="#1FC97A"/></g><circle cx="27" cy="32" r="8" fill="#1FC97A"/><circle cx="27" cy="32" r="3" fill="#0d0f12"/><circle cx="52" cy="32" r="5.5" fill="#1FC97A"/><circle cx="51.5" cy="17" r="3.5" fill="none" stroke="#1F5C3F" stroke-width="2.6"/><circle cx="51.5" cy="47" r="3.5" fill="none" stroke="#1F5C3F" stroke-width="2.6"/></svg>
-        <div class="fb-head-text"><div class="auth-title" id="fb-title">Welcome to ESP32 Tailnet Gateway</div>
+        <div class="fb-head-text"><div class="auth-title" id="fb-title">Welcome to RecoveryGateway</div>
           <div class="auth-subtitle">Let’s secure your gateway before getting started.</div></div>
         <select class="select fb-lang" id="fb-lang" aria-label="Language" data-no-i18n></select>
       </div>
@@ -2297,7 +2297,7 @@
         </div>
         <div class="form-group">
           <label class="form-label" for="fb-host">Device name in the tailnet</label>
-          <input class="input" id="fb-host" maxlength="63" value="tailnet-gateway" spellcheck="false">
+          <input class="input" id="fb-host" maxlength="63" value="recovery-gateway" spellcheck="false">
         </div>
         </div>
       </section>
@@ -2385,7 +2385,7 @@
           <path d="M7 11V7a5 5 0 0110 0v4"/>
         </svg>
       </div>
-      <div class="auth-title" id="login-title">Tailnet Gateway</div>
+      <div class="auth-title" id="login-title">RecoveryGateway</div>
       <!-- updateBrandName() also rewrites #login-title with the operator label. -->
       <div class="auth-subtitle">Enter your admin password to continue.</div>
       <div class="auth-error" id="login-error"></div>
@@ -4203,7 +4203,7 @@
           <div class="grid grid-cols-2">
             <div class="form-group">
               <label class="form-label" for="sys-device-name">Friendly name</label>
-              <input class="input" type="text" id="sys-device-name" placeholder="Tailnet Gateway" maxlength="32">
+              <input class="input" type="text" id="sys-device-name" placeholder="RecoveryGateway" maxlength="32">
               <span class="form-hint">Shown in the nav and on the login screen. Helps tell multiple routers apart.</span>
             </div>
             <div class="form-group">
@@ -4434,7 +4434,7 @@
           <span class="badge badge-neutral" id="sys-ota-badge">Manual only</span>
         </div>
         <div class="card-body">
-          <p class="form-hint" style="margin:0 0 0.75rem 0;">Only Mattboxx releases from <a id="sys-updates-repo" href="https://github.com/Mattboxx/esp32-tailscale-gateway-NAS-recovery/releases" target="_blank" rel="noopener">the ESP32 Tailnet Gateway repository</a> are eligible. GitHub downloads use HTTPS, a SHA-256 checksum and board/version checks. Settings are preserved; the device restarts after installation.</p>
+          <p class="form-hint" style="margin:0 0 0.75rem 0;">Only Mattboxx releases from <a id="sys-updates-repo" href="https://github.com/Mattboxx/esp32-tailscale-gateway-NAS-recovery/releases" target="_blank" rel="noopener">the RecoveryGateway repository</a> are eligible. GitHub downloads use HTTPS, a SHA-256 checksum and board/version checks. Settings are preserved; the device restarts after installation.</p>
           <div class="stat-row" style="border-top:none;"><span class="stat-label">Running</span><span class="stat-value mono" id="sys-ota-running">—</span></div>
           <div class="stat-row"><span class="stat-label">Latest compatible update</span><span class="stat-value mono" id="sys-updates-latest">Not checked</span></div>
           <div class="form-hint" id="sys-updates-status" role="status">Loading update settings…</div>
@@ -4632,7 +4632,7 @@
           <span class="badge badge-neutral mono">GPL-3.0</span>
         </div>
         <div class="card-body">
-          <p style="margin:0 0 0.5rem 0;"><strong>ESP32 Tailnet Gateway — Mattboxx Edition</strong> — selective Tailnet service access, independent Wake-on-LAN and local diagnostics, with optional MQTT/Home Assistant and ntfy automation. Independent of managed servers, not of power, the router, Internet or VPN infrastructure.</p>
+          <p style="margin:0 0 0.5rem 0;"><strong>RecoveryGateway — Mattboxx Edition</strong> — selective Tailnet service access, independent Wake-on-LAN and local diagnostics, with optional MQTT/Home Assistant and ntfy automation. Independent of managed servers, not of power, the router, Internet or VPN infrastructure.</p>
           <div class="stat-row"><span class="stat-label">Firmware version</span><span class="stat-value mono" id="about-version">—</span></div>
           <div class="stat-row"><span class="stat-label">Build tag</span>       <span class="stat-value mono" id="about-build-tag" title="—">—</span></div>
           <div class="stat-row"><span class="stat-label">Build commit</span><span class="stat-value mono" id="about-commit">—</span></div>
@@ -4796,7 +4796,7 @@
         var w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT,null),n;
         while((n=w.nextNode())){if(n.nodeType===3)text(n);else if(n.tagName!=='SCRIPT'&&n.tagName!=='STYLE')attrs(n);}
       }
-      function apply(){busy=true;try{walk(document.body);document.title=tr('ESP32 Tailnet Gateway');}finally{busy=false;}
+      function apply(){busy=true;try{walk(document.body);document.title=tr('RecoveryGateway');}finally{busy=false;}
         document.documentElement.classList.remove('i18n-wait');document.dispatchEvent(new Event('i18n-applied'));}
       var observer=new MutationObserver(function(list){if(busy||!map&&lang==='en')return;busy=true;try{
         list.forEach(function(m){if(m.type==='characterData')text(m.target);else if(m.type==='attributes')attrs(m.target);else m.addedNodes.forEach(walk);});
@@ -11936,7 +11936,7 @@
         .then(function (resp) {
           if (!resp || resp.ok !== true) throw new Error('Settings were not fully saved. Refresh and retry.');
           updateBrandName(name);
-          showToast('success', 'Saved', 'Name "' + (name || 'Tailnet Gateway') + '"' + (tz ? ' · TZ ' + tz : '') + '.', 3500);
+          showToast('success', 'Saved', 'Name "' + (name || 'RecoveryGateway') + '"' + (tz ? ' · TZ ' + tz : '') + '.', 3500);
           /* Backend flips restart_required when the TZ actually changed —
            * the IDF log subsystem caches TZ at boot, so the new rule
            * only governs log timestamps after a reboot. */
@@ -12768,7 +12768,7 @@
     });
 
     function updateBrandName(name) {
-      var n = (name && name.length) ? name : 'Tailnet Gateway';
+      var n = (name && name.length) ? name : 'RecoveryGateway';
       document.title = n;
       var brand = document.getElementById('brandName');
       var login = document.getElementById('login-title');
@@ -13223,7 +13223,7 @@
         row(dl, 'Time zone', tz.label || T('UTC (change it later in System)'));
         var joining = $('fb-key').value.trim();
         row(dl, 'Tailnet', joining ? (document.querySelector('input[name="fb-ctl"]:checked').value === 'hs' ? $('fb-server').value.trim() : 'Tailscale') : T('Disabled'));
-        if (joining) row(dl, 'Device name in the tailnet', $('fb-host').value.trim() || 'tailnet-gateway');
+        if (joining) row(dl, 'Device name in the tailnet', $('fb-host').value.trim() || 'recovery-gateway');
         row(dl, 'Share home network', $('fb-share-lan').checked ? yes : no);
         row(dl, 'Share gateway Wi-Fi', $('fb-share-ap').checked ? yes : no);
         row(dl, 'Exit node', $('fb-exit').checked ? yes : no);
@@ -13322,7 +13322,7 @@
       function skipTailnet() {
         $('fb-key').value = '';
         $('fb-server').value = '';
-        $('fb-host').value = 'tailnet-gateway';
+        $('fb-host').value = 'recovery-gateway';
         document.querySelector('input[name="fb-ctl"][value="ts"]').checked = true;
         $('fb-server-row').hidden = true;
         $('fb-share-ap').checked = false; st.apOff = true; delete st.auto['fb-share-ap'];

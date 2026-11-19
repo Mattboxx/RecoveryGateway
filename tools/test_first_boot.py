@@ -151,7 +151,7 @@ int main(void) {
     assert(fb_check_ap_change(false, NULL, false) && fb_check_ap_change(false, "", false));
     assert(!fb_check_auth_key("") && fb_check_auth_key("tskey") && fb_check_auth_key("tskey-auth with space") && !fb_check_auth_key("synthetic-preauth-0123456789"));
     assert(!fb_check_login_server("") && !fb_check_login_server("https://hs.example.com") && fb_check_login_server("ftp://x") && fb_check_login_server("https://a b"));
-    assert(!fb_check_hostname("") && !fb_check_hostname("tailnet-gateway") && fb_check_hostname("-x") && fb_check_hostname("Upper") && fb_check_hostname("a_b"));
+    assert(!fb_check_hostname("") && !fb_check_hostname("recovery-gateway") && fb_check_hostname("-x") && fb_check_hostname("Upper") && fb_check_hostname("a_b"));
     /* Home network name: empty keeps the board's own; 32 characters at most. */
     assert(!fb_check_lan_name(NULL) && !fb_check_lan_name("") && !fb_check_lan_name("nas-gateway") && !fb_check_lan_name("abcdefghijklmnopqrstuvwxyz012345"));
     assert(fb_check_lan_name("abcdefghijklmnopqrstuvwxyz0123456") && fb_check_lan_name("Gateway") && fb_check_lan_name("gw-") && fb_check_lan_name("my gw") && fb_check_lan_name("gw.local"));

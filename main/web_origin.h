@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only
- * Copyright (C) 2026 Mattboxx. ESP32 Tailnet Gateway, Mattboxx Edition: see LICENSE
+ * Copyright (C) 2026 Mattboxx. RecoveryGateway, Mattboxx Edition: see LICENSE
  * and LICENSE-EXCEPTION.md. */
 /* Browser origin checks supplement sessions; native clients without Origin
  * remain supported. web_origin_matches is not authentication; together with

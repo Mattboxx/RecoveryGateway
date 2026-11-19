@@ -1,6 +1,6 @@
 # First-boot setup (captive portal)
 
-A brand-new or factory-reset ESP32 Tailnet Gateway configures itself from a
+A brand-new or factory-reset RecoveryGateway configures itself from a
 phone or PC through its own Wi-Fi. There is no default admin password and no
 shared default Wi-Fi password.
 
@@ -14,7 +14,7 @@ removed. A factory reset erases everything, so the setup returns.
 
 ## Steps for the user
 
-1. Power the gateway. Join the open Wi-Fi **ESP32-Tailnet-Setup-XXXX**
+1. Power the gateway. Join the open Wi-Fi **RecoveryGateway-Setup-XXXX**
    (XXXX: last characters of the gateway's MAC address).
 2. The setup page opens by itself on most phones and PCs. If not, open
    **http://192.168.4.1/**. It appears in the browser's language (English,
@@ -107,7 +107,7 @@ the BOOT button prove presence; they are not printed anywhere else.
 ## Website update for Codex
 
 Replace the first-start instructions on the site's getting-started page with
-the user steps above (join *ESP32-Tailnet-Setup-XXXX*, captive page or
+the user steps above (join *RecoveryGateway-Setup-XXXX*, captive page or
 192.168.4.1, BOOT button or console code, wizard, restart). Mention that there
 is no default password, that the setup network is open only on an
 unconfigured gateway, and the residual risk sentence. Do not change it before

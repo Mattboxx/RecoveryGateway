@@ -556,7 +556,7 @@ static esp_err_t email(const notify_config_t *c, const char *title, const char *
             if (now > 1700000000) {struct tm tm; gmtime_r(&now, &tm); strftime(date, sizeof date, "%a, %d %b %Y %H:%M:%S +0000", &tm);}
             snprintf(subject, sizeof subject, "%s: %.70s", host, title);
             if (body) {
-                snprintf(body, body_cap, "%s\n\nSent by the ESP32 Tailnet Gateway \"%s\".\n", text, host);
+                snprintf(body, body_cap, "%s\n\nSent by RecoveryGateway \"%s\".\n", text, host);
                 notify_smtp_io_t io = {m, io_send, io_recv, io_starttls};
                 notify_mail_t mail = {.helo = host, .user = c->mail_user, .pass = c->mail_pass, .from = c->mail_from,
                                       .to = c->mail_to, .subject = subject, .body = body, .date = date[0] ? date : NULL,

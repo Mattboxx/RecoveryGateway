@@ -20,8 +20,12 @@ for file in site.rglob('*.html'):
             and text.strip() == 'google-site-verification: ' + file.name):
         continue  # Ownership proof is an exact plain-text file, not a site page.
     if not build_site.RENAMED:
-        assert 'https://github.com/Mattboxx/esp32-tailnet-gateway' not in text, file
-        assert 'https://mattboxx.github.io/esp32-tailnet-gateway/' not in text, file
+        assert 'https://github.com/Mattboxx/RecoveryGateway' not in text, file
+        assert 'https://mattboxx.github.io/RecoveryGateway/' not in text, file
+    else:
+        # The old name is only the redirect repository: the site never links it.
+        assert 'github.com/Mattboxx/esp32-tailnet-gateway' not in text, file
+        assert 'mattboxx.github.io/esp32-tailnet-gateway' not in text, file
     if not build_site.NEXT_PUBLISHED:
         assert not re.search(r'releases/download/[^\s"<>]*(?:1\.14|v2\.)', text), file
         assert 'esp-web-install-button' not in text, file
@@ -52,7 +56,7 @@ if build_site.NEXT_PUBLISHED:
         assert re.fullmatch('[0-9a-f]{64}',files[build_site.easy_install_asset()])
     with patch.object(build_site,'NEXT_VERSION','3.0.3'):
         assert build_site.easy_install_checksums()==build_site.REPO_URL+'/releases/download/v3.0.3/SHA256SUMS.txt'
-        assert build_site.easy_install_asset()=='ESP32-Tailnet-Gateway-v3.0.3-EASY-INSTALL-Windows-macOS-Linux.zip'
+        assert build_site.easy_install_asset()=='RecoveryGateway-v3.0.3-EASY-INSTALL-Windows-macOS-Linux.zip'
 installer = (site/'install-firmware/index.html').read_text(encoding='utf-8')
 assert ('<esp-web-install-button manifest=' in installer) == build_site.NEXT_PUBLISHED
 if build_site.NEXT_PUBLISHED:

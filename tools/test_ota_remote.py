@@ -168,13 +168,21 @@ int main(void) {
     /* One 3.0 image: the 2.x Ethernet and language assets are never accepted. */
     const char *other_assets[]={"firmware-eth.bin","firmware-it.bin","firmware-es.bin","firmware-zh.bin"};
     for(unsigned i=0;i<4;i++){char url[160];snprintf(url,sizeof url,OTA_FORK_URL "/releases/download/v0.1.31-Mattboxx-1.10/%s",other_assets[i]);assert(!ota_download_url_allowed(url));}
-    /* Rename bridge: both fixed release paths, nothing that merely shares a prefix. */
-    assert(!strcmp(ota_repo(0),OTA_REPO_CURRENT)&&!strcmp(ota_repo(1),OTA_REPO_PREVIOUS)&&!ota_repo(2));
+    /* Rename bridge: the three fixed release paths (RecoveryGateway, the current
+     * and the previous name, compared without case like GitHub), nothing that
+     * merely shares a prefix. */
+    assert(!strcmp(OTA_REPO_NEXT,"Mattboxx/RecoveryGateway"));
+    assert(!strcmp(ota_repo(0),OTA_REPO_NEXT)&&!strcmp(ota_repo(1),OTA_REPO_CURRENT)&&!strcmp(ota_repo(2),OTA_REPO_PREVIOUS)&&!ota_repo(3));
     assert(ota_download_url_allowed("https://github.com/" OTA_REPO_PREVIOUS "/releases/download/v0.1.31-Mattboxx-1.10/" OTA_ASSET));
+    assert(ota_download_url_allowed("https://github.com/" OTA_REPO_NEXT "/releases/download/v3.0.28/" OTA_ASSET));
+    assert(ota_download_url_allowed("https://github.com/mattboxx/recoverygateway/releases/download/v3.0.28/" OTA_ASSET));
+    assert(ota_download_url_allowed("https://github.com/mattboxx/esp32-tailnet-gateway/releases/download/v0.1.31-Mattboxx-1.10/firmware.bin"));
     const char *near[]={"https://github.com/Mattboxx/esp32-tailnet-gatewayX/releases/download/v0.1.31-Mattboxx-1.10/firmware.bin",
         "https://github.com/Mattboxx/esp32-tailnet/releases/download/v0.1.31-Mattboxx-1.10/firmware.bin",
         "https://github.com/Csontikka/esp32-tailscale-subnet-router/releases/download/v0.1.31-Mattboxx-1.10/firmware.bin",
-        "https://github.com/mattboxx/esp32-tailnet-gateway/releases/download/v0.1.31-Mattboxx-1.10/firmware.bin",
+        "https://github.com/Mattboxx/RecoveryGatewayX/releases/download/v3.0.28/firmware.bin",
+        "https://github.com/Mattboxx/Recovery/releases/download/v3.0.28/firmware.bin",
+        "https://github.com/Other/RecoveryGateway/releases/download/v3.0.28/firmware.bin",
         "https://github.com/" OTA_REPO_PREVIOUS "/releases/download/v0.1.31-Mattboxx-1.10/firmware.bin.sig"};
     for(unsigned i=0;i<sizeof near/sizeof near[0];i++) assert(!ota_download_url_allowed(near[i]));
     const char *bad[]={"http://github.com/x","https://github.com@evil.example/x","https://release-assets.githubusercontent.com.evil.example/github-production-release-asset/x","https://release-assets.githubusercontent.com:443/github-production-release-asset/x",OTA_FORK_URL "/releases/download/v0.1.31/firmware.bin",OTA_FORK_URL "/releases/download/v0.1.31-Mattboxx-1.10/firmware-factory.bin"};
@@ -269,8 +277,9 @@ int main(void) {
     assert(ota_remote_select_release(rows,"2.0.4",false,"firmware-it.bin",true,2048,tag,&size,digest)&&!strcmp(tag,"v2.0.5")); /* newer wins */
     assert(!ota_remote_select_release(rows,"2.0.4",false,NULL,true,2048,tag,&size,digest));
     cJSON_Delete(rows);
-    reset(); s_state.repo=2; assert(!install_release()); assert(!opens&&!begins&&!s_writer_active);
-    snapshots=0; reset(); s_state.repo=1; assert(install_release()&&boots==1&&snapshots==1); /* previous name, before the rename */
+    reset(); s_state.repo=3; assert(!install_release()); assert(!opens&&!begins&&!s_writer_active);   /* no fourth name */
+    snapshots=0; reset(); s_state.repo=1; assert(install_release()&&boots==1&&snapshots==1); /* current name, before the RecoveryGateway rename */
+    snapshots=0; reset(); s_state.repo=2; assert(install_release()&&boots==1&&snapshots==1); /* previous name */
     reset(); assert(ota_writer_try_acquire()); assert(!install_release()); assert(!opens&&!begins&&s_writer_active); ota_writer_release();
     for(int f=1;f<=16;f++) { if(f==11||f==14)continue; reset(); fault=f; assert(!install_release()); assert(!restarts&&!s_writer_active); if(f!=7)assert(!boots); assert(aborts<=1&&ends<=1); if(f==15||f==16)assert(aborts==1&&!ends); }
     /* Unacknowledged cleanup retains exclusion; repeated attempts cannot leak
@@ -370,27 +379,32 @@ static void esp_http_client_cleanup(esp_http_client_handle_t c){(void)c;}
 static int time(void *p){(void)p;return 1800000000;}
 bool ota_remote_select_release(const cJSON *releases,const char *running,bool beta,const char *asset,bool reinstall,uint32_t partition_size,char tag[32],uint32_t *size,unsigned char digest[32]);
 ''' + selector + checker + r'''
-static bool run(int a,int b){memset(&s_state,0,sizeof s_state);calls=0;fail_transport=0;answers[0]=a;answers[1]=b;memset(urls,0,sizeof urls);return check_release();}
+static bool run3(int a,int b,int c){memset(&s_state,0,sizeof s_state);calls=0;fail_transport=0;answers[0]=a;answers[1]=b;answers[2]=c;memset(urls,0,sizeof urls);return check_release();}
+static bool run(int a,int b){return run3(a,b,0);}
 int main(void){
-    /* After the rename: the current name answers; the previous one is never asked. */
-    assert(run(200,0)&&calls==1&&s_state.repo==0&&s_state.update_available&&strstr(urls[0],"/repos/" OTA_REPO_CURRENT "/"));
+    /* After the RecoveryGateway rename: that name answers; no other one is asked. */
+    assert(run(200,0)&&calls==1&&s_state.repo==0&&s_state.update_available&&strstr(urls[0],"/repos/" OTA_REPO_NEXT "/"));
+    assert(!strcmp(s_state.release_url,"https://github.com/" OTA_REPO_NEXT "/releases/tag/v0.1.38-Mattboxx-1.14"));
+    /* Today (not yet renamed): 404 for RecoveryGateway, then the current name. */
+    assert(run(404,200)&&calls==2&&s_state.repo==1&&strstr(urls[1],"/repos/" OTA_REPO_CURRENT "/"));
     assert(!strcmp(s_state.release_url,"https://github.com/" OTA_REPO_CURRENT "/releases/tag/v0.1.38-Mattboxx-1.14"));
-    /* Before the rename: 404 for the current name, then the previous name. */
-    assert(run(404,200)&&calls==2&&s_state.repo==1&&strstr(urls[1],"/repos/" OTA_REPO_PREVIOUS "/"));
+    /* Before the earlier rename: both newer names 404, then the previous name. */
+    assert(run3(404,404,200)&&calls==3&&s_state.repo==2&&strstr(urls[2],"/repos/" OTA_REPO_PREVIOUS "/"));
     assert(!strcmp(s_state.release_url,"https://github.com/" OTA_REPO_PREVIOUS "/releases/tag/v0.1.38-Mattboxx-1.14"));
-    /* Any other failure of the current name never falls back (rate limit, 5xx, moved, transport). */
+    /* Any other failure never falls back (rate limit, 5xx, moved, transport). */
     int other[]={403,429,500,301};
     for(unsigned i=0;i<4;i++){assert(!run(other[i],200)&&calls==1&&!s_state.checked&&!s_state.update_available);}
+    for(unsigned i=0;i<4;i++){assert(!run3(404,other[i],200)&&calls==2&&!s_state.checked);}
     memset(&s_state,0,sizeof s_state);calls=0;answers[0]=200;fail_transport=1;assert(!check_release()&&calls==1);
-    /* Both names missing: clean failure, nothing cached. */
-    assert(!run(404,404)&&calls==2&&!s_state.checked&&!s_state.latest_version[0]);
+    /* Every name missing: clean failure, nothing cached. */
+    assert(!run3(404,404,404)&&calls==3&&!s_state.checked&&!s_state.latest_version[0]);
     /* Unavailable executor or slot must not be presented as "up to date". */
     no_partition=true;
     assert(!run(200,0)&&calls==1&&!s_state.checked&&!s_state.update_available);
     assert(strstr(s_state.status,"unavailable")); no_partition=false;
     /* The found asset is remembered for the download. */
     assert(run(200,0)&&!strcmp(s_state.asset,OTA_ASSET));
-    puts("PASS: actual release check across the repository rename: current first, previous only on 404, no fallback on other errors (fixtures)");
+    puts("PASS: actual release check across the repository renames: RecoveryGateway first, then the current and previous names only on 404, no fallback on other errors (fixtures)");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='ota-check-') as directory:

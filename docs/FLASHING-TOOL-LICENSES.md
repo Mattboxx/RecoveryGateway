@@ -18,7 +18,7 @@ remains alongside the program as `ESPTOOL-LICENSE.txt`.
 The release download pages additionally supply
 `esptool-5.3.1-CORRESPONDING-SOURCE.tar.gz`, SHA-256
 `c407d13fd84a0d8019ea9d5634412918fd9dbeaf999d0289841425aa8dafa018`.
-[Download with firmware 3.0.2](https://github.com/Mattboxx/esp32-tailnet-gateway/releases/download/v3.0.2/esptool-5.3.1-CORRESPONDING-SOURCE.tar.gz).
+[Download with firmware 3.0.2](https://github.com/Mattboxx/RecoveryGateway/releases/download/v3.0.2/esptool-5.3.1-CORRESPONDING-SOURCE.tar.gz).
 This supplies source access beside the executable download, rather than
 creating a written source offer or a new approval requirement. The
 `WITH-NOTICES.zip` packages contain full firmware/tool notices and the exact

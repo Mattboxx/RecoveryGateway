@@ -1,4 +1,4 @@
-# Firmware updates — ESP32 Tailnet Gateway
+# Firmware updates — RecoveryGateway
 
 > **Firmware 3.x.** Application updates within the same layout preserve the
 > existing app identity, NVS namespace and partitions. Keep a configuration
@@ -49,7 +49,10 @@ as information; restore cannot activate it through the ordinary System API.
 
 The repository has moved to `Mattboxx/esp32-tailnet-gateway`. Firmware before
 the bridge release cannot follow the rename automatically; see the
-[migration plan](MIGRATION-RENAME.md).
+[migration plan](MIGRATION-RENAME.md). From 3.0.28 the repository is
+`Mattboxx/RecoveryGateway`: 3.0.28 and later look there first. Firmware 3.0.27
+and older still look under `Mattboxx/esp32-tailnet-gateway`, which is now a
+redirect repository holding only the 3.0.28 transition release.
 
 ## Web UI languages
 
@@ -77,7 +80,7 @@ to the next stable release.
 ## Which releases qualify?
 
 Fixed repository:
-[Mattboxx/esp32-tailnet-gateway](https://github.com/Mattboxx/esp32-tailnet-gateway/releases),
+[Mattboxx/RecoveryGateway](https://github.com/Mattboxx/RecoveryGateway/releases),
 with the previous-name fallback described in the migration guide.
 The worker scans the ten most recent release entries and selects the highest
 compatible version, not the first JSON entry. A release must:

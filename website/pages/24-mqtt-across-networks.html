@@ -12,7 +12,7 @@ order: 24
 <h2>What goes where?</h2>
 <ul>
   <li><strong>Home A:</strong> an MQTT broker on a Tailscale/Headscale peer, or a deliberately configured reachable Tailnet service.</li>
-  <li><strong>Home B:</strong> your MQTT device and an ESP32 Tailnet Gateway on the same LAN.</li>
+  <li><strong>Home B:</strong> your MQTT device and an RecoveryGateway on the same LAN.</li>
   <li><strong>On the ESP32:</strong> one TCP forwarding rule, restricted to the MQTT device's source address.</li>
 </ul>
 <figure class="diagram"><img src="{{root}}assets/diagrams/lan-to-tailnet.svg" alt="An existing LAN device connects to an ESP32 listen port, which forwards the connection over Tailscale to a selected remote service" width="960" height="400" loading="lazy"><figcaption>For this example, the selected remote service is the MQTT broker.</figcaption></figure>

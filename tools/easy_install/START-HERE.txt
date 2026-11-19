@@ -1,4 +1,4 @@
-ESP32 TAILNET GATEWAY - MATTBOXX EDITION
+RECOVERYGATEWAY - MATTBOXX EDITION
 Firmware v{VERSION}{CHANNEL}
 EASY INSTALL - Windows, macOS & Linux
 One ESP32. Multiple Tailnet roles. Enable only what you need.
@@ -31,7 +31,7 @@ NOT FOR: other ESP32 chips or boards with quad PSRAM (N4R2, N8R2).
    ESP32-S3, and asks you to type ERASE before erasing anything.
 
 3. FIRST START (new device)
-   Join the open Wi-Fi ESP32-Tailnet-Setup-XXXX. The setup page opens by
+   Join the open Wi-Fi RecoveryGateway-Setup-XXXX. The setup page opens by
    itself on most phones and PCs; otherwise open http://192.168.4.1/
    Press the BOOT button on the board when asked, create the admin
    password, choose your Wi-Fi, your Tailnet and the gateway role.

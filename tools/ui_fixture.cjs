@@ -21,18 +21,18 @@ function rule(i, o) {
 }
 
 const data = {
-  '/api/auth/status': { password_set: true, auth_enabled: true, auth_required: true, authenticated: true, device_name: 'Tailnet Gateway', session_timeout_s: 0, session_remaining_s: 0 },
+  '/api/auth/status': { password_set: true, auth_enabled: true, auth_required: true, authenticated: true, device_name: 'RecoveryGateway', session_timeout_s: 0, session_remaining_s: 0 },
   '/api/status': { version: '0.1.38-Mattboxx-1.14-dev.6', uptime_s: 93784, free_heap: 4210000, heap_total: 8650000, free_psram: 4100000,
     mem_internal_free: 13800, mem_internal_total: 380000, mem_spiram_free: 4100000, mem_spiram_total: 8380000, cpu_load_pct: 23, cpu_core0_pct: 31, cpu_core1_pct: 15,
     cpu_temp_c: 41.5, reset_reason: 'Power on',
     sta: { connected: true, ssid: 'HomeNetwork-5G-but-really-2.4', rssi: -58, channel: 6, mac: '02:00:00:00:10:01', ip: '192.168.1.50', gateway: '192.168.1.1', prefix: 24, cidr: '192.168.1.0/24', dns: '192.168.1.1', bytes_in: 7.4e8, bytes_out: 2.1e8, lan_name: 'esp32-tailnet-1a2b' },
-    ap: { enabled: false, auto_off_when_connected: true, clients: 0, ssid: 'Tailnet-Gateway', channel: 6, cfg_channel: 6, mac: '02:00:00:00:10:02', ip: '192.168.4.1', prefix: 24, bytes_in: 0, bytes_out: 0 },
+    ap: { enabled: false, auto_off_when_connected: true, clients: 0, ssid: 'RecoveryGateway', channel: 6, cfg_channel: 6, mac: '02:00:00:00:10:02', ip: '192.168.4.1', prefix: 24, bytes_in: 0, bytes_out: 0 },
     tx_power: 78,
-    tailscale: { enabled: true, connected: true, startup_error: '', startup_retrying: false, advertise_exit_node: false, hostname: 'tailnet-gateway',
+    tailscale: { enabled: true, connected: true, startup_error: '', startup_retrying: false, advertise_exit_node: false, hostname: 'recovery-gateway',
       advertise_routes: '192.168.1.0/24', tunnel_ip: '100.64.0.42', exit_node_ip: '', peers_online: 2, peers_total: 3, register_user_id: 1, register_user_name: 'owner@example.com',
       identity_persistent: true, identity_pubkey_prefix: 'nodekey:3f2a…' } },
   '/api/tailscale': {
-    settings: { enabled: true, auth_key_set: true, auth_key_len: 61, auth_key_preview: 'tskey-auth-…', hostname: 'tailnet-gateway', login_server: '', ipn_version: '1.80.0', advertise_ap: false,
+    settings: { enabled: true, auth_key_set: true, auth_key_len: 61, auth_key_preview: 'tskey-auth-…', hostname: 'recovery-gateway', login_server: '', ipn_version: '1.80.0', advertise_ap: false,
       effective_routes: '192.168.1.0/24', effective_routes_valid: true, active_routes: '192.168.1.0/24', advertise_routes: '192.168.1.0/24',
       fourvia6: { enabled: false, lan_cidr: '', site_id: 0, advertised_prefix: '', translated_packets: 0, dropped_packets: 0, active_flows: 0 },
       max_peers: 16, default_derp_region: 0, netcheck_threshold_ms: 0, exit_server_active: false, exit_server_configured: false, manual_exit_advertisement: false,
@@ -59,7 +59,7 @@ const data = {
     rule(2, { name: 'Syslog (UDP)', protocol: 'udp', listen_port: 15140, destination_port: 514, allowed_source_subnet: '192.168.1.0/24', destination_check: null })],
     max: 8, uplink_has_ipv4: true, uplink_ip: '192.168.1.50', tailscale_control_connected: true, observation: 'passive_snapshot' },
   '/api/system': { version: '0.1.38-Mattboxx-1.14-dev.6', build_date: 'Oct 22 2026', build_time: '18:00:00', idf_ver: 'v5.5.3',
-    firmware_updates: { enabled: false, auto_install: false, beta_channel: false, install_hour: -1 }, device_name: 'Tailnet Gateway', tz: 'CET-1CEST,M3.5.0,M10.5.0/3',
+    firmware_updates: { enabled: false, auto_install: false, beta_channel: false, install_hour: -1 }, device_name: 'RecoveryGateway', tz: 'CET-1CEST,M3.5.0,M10.5.0/3',
     session_timeout_s: 0, session_remaining_s: 0, web_auth_enabled: true, web_password_set: true, web_port: 80, wifi_power_save: false, wifi_power_save_known: true,
     wifi_power_save_active: false, tx_power: 78, tx_power_nvs: 78, log_tail: 'I (1234) main: ready', reset_history: [{ wallclock: 1792000000, reason: 'Power on', who: 'boot', crash: '' }] },
   '/api/system/updates': { enabled: false, auto_install: false, beta_channel: false, install_hour: -1, busy: false, checked: false, update_available: false,

@@ -1,7 +1,7 @@
 <!--
 slug: first-boot/
 title: First boot
-description: Set up a new ESP32 Tailnet Gateway from your phone or PC: join its setup Wi-Fi, confirm with the BOOT button, create the admin password and follow the guide.
+description: Set up a new RecoveryGateway from your phone or PC: join its setup Wi-Fi, confirm with the BOOT button, create the admin password and follow the guide.
 group: Start
 order: 1
 -->
@@ -11,7 +11,7 @@ order: 1
 
 <ol>
   <li><strong>Install the firmware</strong> from the <a href="{{root}}install-firmware/">browser installer</a> or the <a href="{{root}}easy-install/">Easy Install package</a>.</li>
-  <li><strong>Power the board.</strong> After a few seconds it opens an open Wi-Fi network called <code>ESP32-Tailnet-Setup-XXXX</code> (XXXX identifies your board).</li>
+  <li><strong>Power the board.</strong> After a few seconds it opens an open Wi-Fi network called <code>RecoveryGateway-Setup-XXXX</code> (XXXX identifies your board).</li>
   <li><strong>Join that network</strong> with a phone or computer. Most phones and PCs then show a sign-in notification or open the setup page by themselves.</li>
   <li><strong>If nothing opens</strong>, open <code>http://192.168.4.1/</code> in a browser. This address always works while the setup network is active.</li>
   <li><strong>Confirm it is yours:</strong> press the <strong>BOOT</strong> button on the board once. No reachable button? Connect USB, open a serial console at 115200 baud and enter the current 8-digit code it prints <strong>in the setup page</strong>.</li>
@@ -23,7 +23,7 @@ order: 1
 </ol>
 
 <p>The setup is available in English, Italiano, Español, 简体中文, Français and Deutsch. Select the language in the setup page; the browser also supplies the initial time zone.</p>
-<figure class="guide-shot"><a href="{{root}}assets/firmware-ui/first-boot.png"><img src="{{root}}assets/firmware-ui/first-boot.png" alt="Setup confirmation with an example LAN address and local hostname" width="560" height="361" loading="lazy" decoding="async"></a><figcaption>Setup confirmation with an example LAN address and local hostname. Select the image to enlarge it.</figcaption></figure>
+<figure class="guide-shot"><a href="{{root}}assets/firmware-ui/first-boot.png"><img src="{{root}}assets/firmware-ui/first-boot.png" alt="Setup confirmation with an example LAN address and local hostname" width="560" height="400" loading="lazy" decoding="async"></a><figcaption>Setup confirmation with an example LAN address and local hostname. Select the image to enlarge it.</figcaption></figure>
 
 <h2 id="security">Why the setup network is open, and how it is protected</h2>
 <p>The setup Wi-Fi has no password so that any phone can join it, but only a gateway that has <strong>never been configured</strong> opens it. An existing installation, including one updated from 1.13, never does.</p>

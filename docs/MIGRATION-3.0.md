@@ -46,7 +46,7 @@ the new partition table and 3.0 without touching the settings area.
 
 ## 3. Over USB from the browser
 
-Use the [web installer](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
+Use the [web installer](https://mattboxx.github.io/RecoveryGateway/install-firmware/)
 in desktop Chrome or Edge with **Erase device unticked**.
 
 ## After the move

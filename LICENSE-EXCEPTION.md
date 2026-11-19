@@ -1,6 +1,6 @@
 # Licence of the Mattboxx Edition, additional permission and terms
 
-ESP32 Tailnet Gateway — Mattboxx Edition
+RecoveryGateway — Mattboxx Edition (formerly ESP32 Tailnet Gateway)
 Copyright (C) 2026 Mattboxx
 
 This program is free software: you can redistribute it and/or modify it under

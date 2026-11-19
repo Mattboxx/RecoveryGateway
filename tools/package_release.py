@@ -129,7 +129,7 @@ def collect_release_notices(root, sdkbuild):
                 if block not in seen:
                     records.append((label + '/' + path.relative_to(base).as_posix() + ' (source notice)', block))
                     seen.add(block)
-    header = ('Original authors retain their copyrights. This is ESP32 Tailnet Gateway, the Mattboxx custom edition.\n'
+    header = ('Original authors retain their copyrights. This is RecoveryGateway, the Mattboxx custom edition.\n'
               'Optional tips support the mod; they do not purchase features or imply upstream endorsement.\n'
               'Source: ' + SOURCE_URL + '\n'
               'The following unmodified license/notice texts accompany the firmware distribution.\n'
@@ -159,7 +159,7 @@ def release_readme(version, prerelease, variant):
         board = ('WIFI VARIANT (default) for ESP32-S3 N16R8 (16MB flash, 8MB octal PSRAM).\n'
                  'NOT for ESP32-C3/S2, boards without PSRAM, or the Ethernet wiring.')
     notes = f"{SOURCE_URL}/blob/Main/docs/releases/RELEASE-{version.split('-Mattboxx-', 1)[1]}.md"
-    title = f"ESP32 TAILNET GATEWAY - MATTBOXX EDITION - {version}" + (' (Ethernet)' if variant == 'eth' else '')
+    title = f"RECOVERYGATEWAY - MATTBOXX EDITION - {version}" + (' (Ethernet)' if variant == 'eth' else '')
     lines = [
         title,
         'One ESP32. Multiple Tailnet roles. Enable only what you need.',
@@ -218,7 +218,7 @@ def release_readme(version, prerelease, variant):
 def release_manifest(version, prerelease, variant, files, description):
     env, ota, factory, _ = VARIANTS[variant]
     return {
-        'product': 'ESP32 Tailnet Gateway - Mattboxx Edition',
+        'product': 'RecoveryGateway - Mattboxx Edition',
         'version': version,
         'channel': 'pre-release' if prerelease else 'stable',
         'variant': variant,
@@ -308,7 +308,7 @@ def main():
         assert not credential_findings((out / name).read_bytes(), True), f'Credential pattern in {name}'
     manifest = ''.join(f'{sha(out / name)}  {name}\n' for name in names)
     (out / 'SHA256SUMS.txt').write_text(manifest, encoding='ascii', newline='\n')
-    archive = out / f'ESP32-Tailnet-Gateway-{version}{suffix}-windows.zip'
+    archive = out / f'RecoveryGateway-{version}{suffix}-windows.zip'
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name in names + ['SHA256SUMS.txt']:
             z.write(out / name, name)
