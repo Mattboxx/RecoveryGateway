@@ -137,7 +137,7 @@ async function fixture(browser, options = {}) {
         state.migrationBody = {...state.migrationBody, busy: true, state: 'downloading', progress: 40, target: 'v3.0.0'}; status = 202; body = {ok: true}; }
       else body = state.migrationBody || {layout: '3.x', needed: false};
     } else if (url.pathname === '/api/cellular') {
-      if (route.request().method() === 'POST') { state.savedCellular = route.request().postDataJSON(); body = {ok: true, restart_required: true}; }
+      if (route.request().method() === 'POST') { state.savedCellular = route.request().postDataJSON(); body = {ok: true, restart_required: !state.savedCellular.data_limit}; }
       else body = state.cellularBody || {};
     } else if (url.pathname === '/api/tailnet-forward/import') {
       const input=route.request().postDataJSON();
@@ -408,6 +408,8 @@ async function main() {
       await f.page.waitForFunction(() => document.getElementById('cell-status').textContent.startsWith('Connected'));
       await f.page.waitForTimeout(300);
       assert.equal(f.state.savedCellular.enabled, true); assert.equal(f.state.savedCellular.data_ack, true);
+      /* A modem setting applies after a restart: the restart banner is raised like for other settings. */
+      assert.equal(await f.page.locator('#pendingRebootBanner').isVisible(), true);
       assert.equal('pin' in f.state.savedCellular, false); assert.equal('password' in f.state.savedCellular, false);
       await f.page.locator('#cell-pin').fill('1234'); await f.page.locator('#cell-save').click(); await f.page.waitForTimeout(300);
       assert.equal(f.state.savedCellular.pin, '1234');
@@ -472,6 +474,8 @@ async function main() {
       await f.page.locator('#cell-limit-save').click();
       for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
       assert.deepEqual(f.state.savedCellular, {data_limit: {limit_mb: 1000, warn_percent: 80, reset_day: 10, pause: true}});
+      await f.page.waitForTimeout(200);
+      assert.equal(await f.page.locator('#pendingRebootBanner').isVisible(), false);   /* the limit applies at once */
       await f.page.waitForFunction(() => document.getElementById('cell-limit-status').textContent.includes('1000 MB / 1000 MB'));
       assert.match(await f.page.locator('#cell-limit-status').textContent(), /^Used this month: 1000 MB \/ 1000 MB \(100%\) · since 2026-11-10 · limit reached: mobile data paused until the next month$/);
       assert.equal(await f.page.locator('#cell-limit-reset').isVisible(), true);
@@ -917,6 +921,10 @@ async function main() {
       assert.equal(await f.page.locator('#sys-updates-release').isVisible(), shown, url);
       if (shown) assert.equal(await f.page.getAttribute('#sys-updates-release', 'href'), url);
       assert.equal(await f.page.getAttribute('#sys-updates-repo', 'href'), 'https://github.com/Mattboxx/RecoveryGateway/releases');
+      /* About: the visible Source text names the current repository, not a redirect. */
+      const src = await f.page.evaluate(() => [...document.querySelectorAll('.stat-row')].filter(r => r.querySelector('.stat-label') && r.querySelector('.stat-label').textContent.trim() === 'Source' && r.querySelector('a'))
+        .map(r => [r.querySelector('a').textContent.trim(), r.querySelector('a').getAttribute('href')]));
+      assert.deepEqual(src, [['github.com/Mattboxx/RecoveryGateway', 'https://github.com/Mattboxx/RecoveryGateway']]);
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
     // Failed status reads retain visible policy, disable writes and do not
@@ -1586,6 +1594,7 @@ async function main() {
     for(let i=0;i<50&&!f.state.savedEthernet;i++)await f.page.waitForTimeout(100);
     assert.deepEqual(f.state.savedEthernet,{enabled:true,transport:'spi',chip:'w5500',preference:'ethernet_first',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:true,ip:'192.168.1.60',netmask:'255.255.255.0',gateway:'192.168.1.1',dns:''});
     assert.equal(await f.page.locator('#eth-sclk').isVisible(),true);assert.equal(await f.page.locator('#eth-card div.form-hint.eth-usb').isVisible(),false);
+    await f.page.waitForFunction(()=>document.getElementById('pendingRebootBanner').classList.contains('visible'));   /* restart banner after an uplink save */
     assert.deepEqual(f.errors,[]);await f.context.close();count++;
     // Ethernet over USB (adapter or phone tethering): SPI fields hidden, USB status, typed save.
     f=await fixture(browser,{page:'network',ethernetBody:{config:{enabled:true,transport:'usb',chip:'w5500',spi_host:2,spi_mhz:20,sclk:12,mosi:11,miso:13,cs:10,int:14,rst:9,static_ip:false,ip:'',netmask:'',gateway:'',dns:'',preference:'ethernet_first'},

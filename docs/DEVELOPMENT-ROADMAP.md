@@ -257,6 +257,11 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
 
 ## Next firmware (after 3.0.29) — owner requests to carry
 
+Status: both items are implemented on `feat/next-firmware` as 3.0.30
+(not published; owner 2026-11-19: "crea la nuova versione ... ma ancora non
+pubblicarla"). Browser tests cover the banner after Ethernet and cellular
+saves, no banner after a data-limit save, and the About source text.
+
 - **System → About, "Source":** the link already opens `Mattboxx/RecoveryGateway`
   (3.0.29), but its visible text still reads
   `github.com/Mattboxx/esp32-tailnet-gateway` (`main/index.html` and the
