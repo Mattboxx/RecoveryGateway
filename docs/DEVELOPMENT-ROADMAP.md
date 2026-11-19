@@ -269,8 +269,9 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
   after restart" in the card; unlike the other settings that need a restart,
   it never raises the pending-reboot banner with its Restart button
   (`setPendingReboot(true)` is not called after `/api/ethernet` and
-  `/api/cellular` saves, including the USB transport and data-limit forms).
-  Raise it the same way, with a browser test (owner, 2026-11-19: "quando si
+  `/api/cellular` saves; the monthly data limit applies at once and answers
+  `restart_required: false`, so it must not raise it). Raise it the same way,
+  with a browser test (owner, 2026-11-19: "quando si
   imposta ethernet o SIM dati che appaia il tasto di reboot come le altre cose
   che lo richiedono").
 
