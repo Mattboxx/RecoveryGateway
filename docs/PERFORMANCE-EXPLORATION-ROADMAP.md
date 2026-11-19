@@ -1,6 +1,6 @@
 # Performance and load-resilience exploration roadmap
 
-ESP32 Tailnet Gateway — Mattboxx Edition. Owner-approved planning direction,
+RecoveryGateway — Mattboxx Edition. Owner-approved planning direction,
 2026-10-29. **Investigation active. RX prototype rejected (no gain); IRAM
 crypto-loop prototype promising (+14.7 % sequential), confirmation pending.**
 Current continuation: [Codex-to-Claude checkpoint](CODEX-TO-CLAUDE-PERFORMANCE-CHECKPOINT.md).

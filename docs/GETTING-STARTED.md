@@ -26,7 +26,7 @@ image and stays off until configured (experimental).
 
 ## 2. Set up a new gateway
 
-A genuinely unconfigured board opens **`ESP32-Tailnet-Setup-XXXX`**. Join it
+A genuinely unconfigured board opens **`RecoveryGateway-Setup-XXXX`**. Join it
 near the board. If the captive page does not open, visit **http://192.168.4.1/**.
 
 1. Pair physically with **BOOT**, or enter the current eight-digit setup code

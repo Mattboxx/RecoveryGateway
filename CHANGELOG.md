@@ -6,6 +6,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.28] - 2026-11-19
+
+### Changed
+
+- **New name: RecoveryGateway** (formerly ESP32 Tailnet Gateway). Same firmware,
+  same settings: nothing to reconfigure. The web interface, Home Assistant
+  device, notifications, logo, covers, website and release files carry the new
+  name. The first-boot Wi-Fi of a new device is now `RecoveryGateway-Setup-XXXX`.
+- The updater also follows a later rename of the repository to
+  `Mattboxx/RecoveryGateway`: it asks that name first and the current one when
+  it does not exist yet. Update to 3.0.28 before that rename happens.
+
+### Website
+
+- A "Which board?" button (a chip icon in the header on computers, buttons on
+  the home, install and getting-started pages) leads to the tested boards.
+
 ## [3.0.27] - 2026-11-18
 
 ### Fixed

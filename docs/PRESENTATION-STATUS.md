@@ -1,6 +1,6 @@
 # Firmware and installation availability
 
-**ESP32 Tailnet Gateway — Mattboxx Edition**, Firmware **v3.0.4**.
+**RecoveryGateway — Mattboxx Edition**, Firmware **v3.0.4**.
 One ESP32. Multiple Tailnet roles. Enable only what you need.
 
 ## Current downloads

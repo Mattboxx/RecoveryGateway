@@ -39,7 +39,7 @@ def fixture(folder: Path, *, offsets=None, erase=True, bad_sum=False):
     (folder / 'SHA256SUMS.txt').write_text(''.join(sums), encoding='ascii')
     # Served next to the installer files and linked from the downloads page.
     (folder / 'FIRMWARE-LICENSES.txt').write_text('synthetic license notices fixture\n', encoding='ascii')
-    manifest = {'name': 'ESP32 Tailnet Gateway', 'version': build_site.NEXT_VERSION, 'new_install_prompt_erase': erase,
+    manifest = {'name': 'RecoveryGateway', 'version': build_site.NEXT_VERSION, 'new_install_prompt_erase': erase,
                 'new_install_improv_wait_time': 0, 'builds': [{'chipFamily': 'ESP32-S3', 'parts': parts}]}
     (folder / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
 

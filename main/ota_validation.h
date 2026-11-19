@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #if defined(__has_include)
 #if __has_include("sdkconfig.h")
 #include "sdkconfig.h"
@@ -20,31 +21,33 @@
 #define OTA_ASSET "firmware.bin"
 #endif
 
-/* Repository rename bridge. Firmware up to 1.14-dev.6 requests the releases
- * API of the previous name with redirects disabled and requires HTTP 200, so
- * it cannot follow a GitHub rename. This bridge looks up releases under the
- * current name first and falls back to the previous name only when the
- * current one answers 404 (before the rename). Downloads are accepted from
- * either fixed release path, so GitHub's previous->current redirect stays
- * inside the allowlist. Never reuse the previous name for another repository. */
+/* Repository rename bridge. The releases API is requested with redirects
+ * disabled and must answer HTTP 200, so a firmware cannot follow a GitHub
+ * rename by itself. Releases are looked up under the newest name first; the
+ * next name is tried only when the previous one answers 404 (before that
+ * rename has happened). Downloads are accepted from the fixed release path of
+ * any of these names (owner part and name compared without case, as GitHub
+ * does), so GitHub's old->new redirect stays inside the allowlist.
+ * 3.0.28: the product is RecoveryGateway; the repository will be renamed to
+ * Mattboxx/RecoveryGateway once gateways run this bridge. Never reuse an old name
+ * for another repository. */
+#define OTA_REPO_NEXT "Mattboxx/RecoveryGateway"
 #define OTA_REPO_CURRENT "Mattboxx/esp32-tailnet-gateway"
 #define OTA_REPO_PREVIOUS "Mattboxx/esp32-tailscale-gateway-NAS-recovery"
-#define OTA_REPO_COUNT 2u
+#define OTA_REPO_COUNT 3u
 #define OTA_RELEASES_API_PREFIX "https://api.github.com/repos/"
 #define OTA_RELEASES_API_SUFFIX "/releases?per_page=10"
-/* Exact longest permitted endpoint, including its NUL. Keep the legacy
- * repository fallback without reserving unused internal-RAM headroom. */
-#define OTA_RELEASES_API_BYTES \
-    (sizeof(OTA_RELEASES_API_PREFIX OTA_REPO_CURRENT OTA_RELEASES_API_SUFFIX) > \
-     sizeof(OTA_RELEASES_API_PREFIX OTA_REPO_PREVIOUS OTA_RELEASES_API_SUFFIX) ? \
-     sizeof(OTA_RELEASES_API_PREFIX OTA_REPO_CURRENT OTA_RELEASES_API_SUFFIX) : \
-     sizeof(OTA_RELEASES_API_PREFIX OTA_REPO_PREVIOUS OTA_RELEASES_API_SUFFIX))
+/* Exact longest permitted endpoint, including its NUL (the previous name is
+ * the longest); checked below. */
+#define OTA_RELEASES_API_BYTES sizeof(OTA_RELEASES_API_PREFIX OTA_REPO_PREVIOUS OTA_RELEASES_API_SUFFIX)
+_Static_assert(sizeof(OTA_REPO_PREVIOUS) >= sizeof(OTA_REPO_CURRENT) && sizeof(OTA_REPO_PREVIOUS) >= sizeof(OTA_REPO_NEXT),
+               "OTA_RELEASES_API_BYTES must fit the longest repository name");
 #define OTA_FORK_REPO OTA_REPO_CURRENT
 #define OTA_FORK_URL "https://github.com/" OTA_FORK_REPO
 
 static inline const char *ota_repo(unsigned index)
 {
-    return index == 0 ? OTA_REPO_CURRENT : index == 1 ? OTA_REPO_PREVIOUS : NULL;
+    return index == 0 ? OTA_REPO_NEXT : index == 1 ? OTA_REPO_CURRENT : index == 2 ? OTA_REPO_PREVIOUS : NULL;
 }
 
 /* Returns the part after ".../<repo>/releases/download/", or NULL. */
@@ -52,7 +55,7 @@ static inline const char *ota_release_download_tail(const char *url, const char 
 {
     static const char host[] = "https://github.com/", path[] = "/releases/download/";
     size_t h = sizeof host - 1, r = strlen(repo), d = sizeof path - 1;
-    if (strncmp(url, host, h) || strncmp(url + h, repo, r) || strncmp(url + h + r, path, d)) return NULL;
+    if (strncmp(url, host, h) || strncasecmp(url + h, repo, r) || strncmp(url + h + r, path, d)) return NULL;
     return url + h + r + d;
 }
 

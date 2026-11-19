@@ -1,8 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0.."
-title ESP32 Tailnet Gateway - update, keep settings
-echo ESP32 Tailnet Gateway - Mattboxx Edition
+title RecoveryGateway - update, keep settings
+echo RecoveryGateway - Mattboxx Edition
 echo UPDATE AN EXISTING DEVICE: Wi-Fi, tailnet identity and settings are kept.
 echo For a configured gateway the Web UI update (System - Firmware) is preferable.
 echo Optional usage: UPDATE-KEEP-SETTINGS.bat COM5

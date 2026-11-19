@@ -1,5 +1,5 @@
 #!/bin/sh
-# ESP32 Tailnet Gateway - Mattboxx Edition: Easy Install for macOS and Linux.
+# RecoveryGateway - Mattboxx Edition: Easy Install for macOS and Linux.
 #   sh macos-linux/install.sh new    [PORT]   new device: erases everything
 #   sh macos-linux/install.sh update [PORT]   configured device: keeps settings
 #                                              (also moves a 2.x gateway to the
@@ -78,7 +78,7 @@ if [ "$MODE" = new ]; then
   $ESPTOOL --chip esp32s3 --port "$PORT" --baud 460800 write-flash $WRITE_ARGS \
     || fail "write failed. Run the same command again; the board's ROM bootloader cannot be damaged."
   say ""
-  say "Done. Power the board, join the Wi-Fi ESP32-Tailnet-Setup-XXXX and follow the setup page (or open http://192.168.4.1/)."
+  say "Done. Power the board, join the Wi-Fi RecoveryGateway-Setup-XXXX and follow the setup page (or open http://192.168.4.1/)."
 else
   $ESPTOOL --chip esp32s3 --port "$PORT" --baud 460800 write-flash $WRITE_ARGS \
     || fail "update failed. Do not erase settings to fix a cable or port problem. Check the cable, then retry."

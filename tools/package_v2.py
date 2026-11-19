@@ -4,7 +4,7 @@
 language and the experimental W5500 Ethernet driver, OFF until configured.
 
 Outputs build/release-v<version>/:
-  ESP32-Tailnet-Gateway-v<version>-EASY-INSTALL-Windows-macOS-Linux.zip
+  RecoveryGateway-v<version>-EASY-INSTALL-Windows-macOS-Linux.zip
       guided scripts for Windows (bundled esptool.exe) and macOS/Linux
   assets/        files to attach to the GitHub release (firmware.bin keeps its
                  name for the updater; bootloader.bin and partitions.bin for
@@ -34,7 +34,7 @@ from package_release import collect_release_notices, validate_build_description
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = Path(__file__).resolve().parent / 'easy_install'
-PRODUCT = 'ESP32 Tailnet Gateway - Mattboxx Edition'
+PRODUCT = 'RecoveryGateway - Mattboxx Edition'
 CURRENT_REPOSITORY = 'Mattboxx/esp32-tailscale-gateway-NAS-recovery'
 RENAMED_REPOSITORY = 'Mattboxx/esp32-tailnet-gateway'
 # Offsets from sdkconfig (bootloader, partition table) and partitions.csv.
@@ -54,7 +54,7 @@ def write_web_installer(folder, web, version, notices):
     for name in LAYOUT:
         shutil.copyfile(folder / name, web / name)
     shutil.copyfile(notices, web / 'FIRMWARE-LICENSES.txt')
-    ewt = {'name': 'ESP32 Tailnet Gateway', 'version': version, 'new_install_prompt_erase': True,
+    ewt = {'name': 'RecoveryGateway', 'version': version, 'new_install_prompt_erase': True,
            'new_install_improv_wait_time': 0,
            'builds': [{'chipFamily': 'ESP32-S3', 'parts': [{'path': n, 'offset': o} for n, o in LAYOUT.items()]}]}
     (web / 'manifest.json').write_text(json.dumps(ewt, indent=1) + '\n', encoding='utf-8')
@@ -144,7 +144,7 @@ def main():
     v = a.version
     out = (a.out or ROOT / 'build' / f'release-v{v}').resolve()
     out.mkdir(parents=True, exist_ok=False)
-    stem = f'ESP32-Tailnet-Gateway-v{v}'
+    stem = f'RecoveryGateway-v{v}'
     source_url = repository_url(a.repository)
     notes = f'{source_url}/releases/tag/v{v}'
     channel = ' (release candidate, pre-release)' if a.prerelease else ''

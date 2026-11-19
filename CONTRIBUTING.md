@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in ESP32 Tailnet Gateway — Mattboxx Edition! This is a
+Thanks for your interest in RecoveryGateway — Mattboxx Edition! This is a
 small, single-maintainer project, so please keep changes focused and be patient
 with review turnaround. Everyone taking part follows the
 [code of conduct](CODE_OF_CONDUCT.md).

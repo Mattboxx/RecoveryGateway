@@ -1,6 +1,6 @@
-# Brand guide — ESP32 Tailnet Gateway, Mattboxx Edition
+# Brand guide — RecoveryGateway, Mattboxx Edition
 
-**Name:** ESP32 Tailnet Gateway — Mattboxx Edition (short: *Tailnet Gateway*).
+**Name:** RecoveryGateway — Mattboxx Edition (short: *RecoveryGateway*).
 **Tagline:** One ESP32. Multiple Tailnet roles. Enable only what you need.
 **Description:** All-in-one ESP32-S3 Tailscale/Headscale gateway with selective
 LAN-to-Tailnet access, subnet routing, remote recovery and optional automation.
@@ -28,7 +28,7 @@ and rendered by `tools/render_brand_assets.mjs` — edit the script, not the SVG
 | `logo-mark-light.svg` | Transparent mark for light backgrounds (black off-roles, deep-green lit role and hub ring) |
 | `logo-mono.svg`, `-black`, `-green` | Single-colour mark; off roles drawn thinner |
 | `logo-horizontal-dark.svg` / `-light.svg` | Mark + wordmark lockups |
-| `logo-compact.svg` | Stacked mark + "Tailnet Gateway" for small square spaces |
+| `logo-compact.svg` | Stacked mark + "RecoveryGateway" for small square spaces |
 | `banner.svg`, `social-preview.svg` | README hero 1280×400, Open Graph 1280×640 |
 | `png/` | Raster exports |
 

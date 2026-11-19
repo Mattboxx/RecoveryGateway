@@ -1,6 +1,31 @@
 # Repository rename and OTA migration
 
-The project is **ESP32 Tailnet Gateway — Mattboxx Edition**.
+## RecoveryGateway (3.0.28)
+
+From 3.0.28 the product is **RecoveryGateway — Mattboxx Edition** (formerly ESP32
+Tailnet Gateway). Same firmware, same settings: the internal identity
+(`esp32_tsr`, saved settings, the updater's checks) does not change, and the
+first-boot Wi-Fi is now `RecoveryGateway-Setup-XXXX`.
+
+The repository and the website keep their addresses for now
+(`Mattboxx/esp32-tailnet-gateway`, `mattboxx.github.io/esp32-tailnet-gateway`).
+3.0.28 prepares a later rename of the repository to `Mattboxx/RecoveryGateway`:
+
+- the updater asks `Mattboxx/RecoveryGateway` first, then
+  `Mattboxx/esp32-tailnet-gateway` only if that answers 404, then the older
+  name, and accepts downloads from any of the three release paths;
+- before the repository is renamed, wait until most gateways run 3.0.28 or
+  later: 3.0.27 and earlier ask only `esp32-tailnet-gateway` and cannot follow
+  GitHub's redirect, so they would show "GitHub check failed" and need a manual
+  update (System → Firmware with a file, or the web installer, keeping
+  settings);
+- after the rename, never create a new repository at `esp32-tailnet-gateway`;
+- GitHub redirects the code pages but not the website: keep the website at its
+  address or publish a redirect page when it moves.
+
+## Earlier rename
+
+The project was **ESP32 Tailnet Gateway — Mattboxx Edition**.
 The existing repository has moved from
 `Mattboxx/esp32-tailscale-gateway-NAS-recovery` to
 [`Mattboxx/esp32-tailnet-gateway`](https://github.com/Mattboxx/esp32-tailnet-gateway).

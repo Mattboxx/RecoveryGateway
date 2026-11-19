@@ -111,13 +111,13 @@ static void mac_suffix(char out[5])
 void first_boot_setup_ssid(char *out, size_t cap)
 {
     char sfx[5]; mac_suffix(sfx);
-    snprintf(out, cap, "ESP32-Tailnet-Setup-%s", sfx);
+    snprintf(out, cap, "RecoveryGateway-Setup-%s", sfx);
 }
 
 void first_boot_default_ssid(char *out, size_t cap)
 {
     char sfx[5]; mac_suffix(sfx);
-    snprintf(out, cap, "ESP32-Tailnet-%s", sfx);
+    snprintf(out, cap, "RecoveryGateway-%s", sfx);
 }
 
 void first_boot_init(void)

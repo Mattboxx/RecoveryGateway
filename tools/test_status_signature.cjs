@@ -188,7 +188,7 @@ async function refresh(page) {
       const context = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: touch, isMobile: touch, locale: 'en-US' });
       const page = await context.newPage();
       await install(page, { '/api/auth/status': { setup_mode: false, auth_enabled: true, password_set: true, auth_required: true, authenticated: true,
-        session_timeout_s: 3600, session_remaining_s: 3599, device_name: 'Tailnet Gateway' } });
+        session_timeout_s: 3600, session_remaining_s: 3599, device_name: 'RecoveryGateway' } });
       await page.goto('http://esp32.test/#status');
       await page.waitForFunction(() => getComputedStyle(document.getElementById('authCountdown')).display !== 'none');
       const r = await page.evaluate(() => {

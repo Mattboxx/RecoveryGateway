@@ -15,7 +15,7 @@ class PackagingVersionTests(unittest.TestCase):
         self.assertEqual(VARIANTS['eth'][1], 'firmware-eth.bin')
         self.assertEqual(len({v[1] for v in VARIANTS.values()} | {v[2] for v in VARIANTS.values()}), 4)
         wifi, eth = release_readme(version, True, 'wifi'), release_readme(version, True, 'eth')
-        self.assertIn('ESP32 TAILNET GATEWAY', wifi)
+        self.assertIn('RECOVERYGATEWAY', wifi)
         self.assertIn('Development candidate (pre-release)', wifi)
         self.assertIn('not an official Tailscale client', wifi)
         self.assertNotIn('firmware-eth', wifi)

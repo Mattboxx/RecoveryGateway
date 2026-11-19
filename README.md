@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="assets/brand/png/banner.png" alt="ESP32 Tailnet Gateway — Mattboxx Edition. One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need." width="100%">
+<img src="assets/brand/png/banner.png" alt="RecoveryGateway — Mattboxx Edition. One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need." width="100%">
 
-# ESP32 Tailnet Gateway 
+# RecoveryGateway
+
+*Formerly ESP32 Tailnet Gateway: same firmware, same settings, new name.*
 
 **Mattboxx Edition · One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need.**
 
@@ -44,7 +46,7 @@ Tailscale to use Wake-on-LAN or the backup uplinks.
 
 1. **Check your board.** Use an ESP32-S3 N8R8 or N16R8 with 8 MB octal PSRAM. See [supported hardware](#8-supported-hardware), or [buy the tested board](#buy-the-tested-board).
 2. **Install.** Open the [Web Installer](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/) in desktop Chrome or Edge with a USB data cable. You can also use [Easy Install or the advanced downloads](#7-download-firmware).
-3. **Set up.** Join the board's `ESP32-Tailnet-Setup-XXXX` Wi-Fi, go to http://192.168.4.1, pair using the BOOT button or USB setup code, and test your uplink. Open the address shown at the end of the wizard.
+3. **Set up.** Join the board's `RecoveryGateway-Setup-XXXX` Wi-Fi, go to http://192.168.4.1, pair using the BOOT button or USB setup code, and test your uplink. Open the address shown at the end of the wizard.
 4. **Join your Tailnet.** Connect to Tailscale or Headscale, then enable the role you need.
 
 [First-boot walkthrough](docs/GETTING-STARTED.md) · [Update an existing gateway](https://mattboxx.github.io/esp32-tailnet-gateway/updating/)
@@ -72,7 +74,12 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/esp32-tailnet-gateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.27
+## What's new in Firmware 3.0.28
+
+- **New name: RecoveryGateway** (formerly ESP32 Tailnet Gateway): same firmware,
+  same settings. The updater is ready for the repository's future rename.
+
+### Also in 3.0.27
 
 - **One more case that could block the tunnel is fixed:** a device whose key
   expiry carries a time zone offset (possible with some control servers).
@@ -87,18 +94,6 @@ configuration, peers and measurements. Open an image for the full view.
 - **LAN → Tailnet**: up to 5 allowed devices per rule, and a guide to
   [share one service with another network](docs/SERVICE-GATEWAY.md).
 - **Configuration profiles** for every first-boot goal.
-
-### Also in 3.0.25
-
-- **Tailscale access fixes:** single-use auth keys no longer take the gateway
-  offline after it joined, there is no 16-device limit, and a gateway alone in
-  its tailnet, networks that block port 80 or NTP, DNS failures and ACL rules
-  with node capabilities no longer block the tailnet.
-- **Clear Tailscale status:** why the gateway is not connected, node key
-  expiry, Tailnet Lock, peers and tunnels in use; a **Leave tailnet** button.
-- **LAN → Tailnet** tab redesigned, with a simple time limit per rule.
-- **Logs with date and time.**
-- **USB modems, 4G sticks and Ethernet adapters** (experimental, see below).
 
 [Install the current firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
 · [Full changelog](CHANGELOG.md)
@@ -267,7 +262,7 @@ published under MIT and copies of them keep those terms. The original firmware's
 Full attribution: [NOTICE.md](NOTICE.md). Brand assets: [assets/brand](assets/brand/BRAND.md).
 Bundled third-party components and the separately distributed esptool
 flashing program retain their respective licences.
-ESP32 Tailnet Gateway is independent community firmware. It is not affiliated
+RecoveryGateway is independent community firmware. It is not affiliated
 with Tailscale Inc., the Headscale project or Espressif.
 Tailscale, Headscale, WireGuard and ESP32 are trademarks of their respective
 owners. Legacy README: [1.13 documentation](https://github.com/Mattboxx/esp32-tailnet-gateway/blob/v0.1.38-Mattboxx-1.13/README.md).

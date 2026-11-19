@@ -1,4 +1,4 @@
-"""Build the static ESP32 Tailnet Gateway website (standard library only).
+"""Build the static RecoveryGateway website (standard library only).
 
 Sources live in website/: pages/*.html are body fragments with a small
 front-matter comment; assets/ holds CSS/JS; brand images and diagrams are
@@ -34,7 +34,7 @@ REPO_SLUG = 'esp32-tailnet-gateway' if RENAMED else 'esp32-tailscale-gateway-NAS
 SITE_URL = f'https://mattboxx.github.io/{REPO_SLUG}/'
 REPO_URL = f'https://github.com/Mattboxx/{REPO_SLUG}'
 FUTURE_REPO_URL = 'https://github.com/Mattboxx/esp32-tailnet-gateway'
-NAME = 'ESP32 Tailnet Gateway'
+NAME = 'RecoveryGateway'
 TAGLINE = 'One ESP32. Multiple Tailnet roles. Enable only what you need.'
 DESCRIPTION = ('All-in-one ESP32-S3 Tailscale/Headscale gateway with selective '
                'LAN-to-Tailnet access, subnet routing, remote recovery and optional automation.')
@@ -170,7 +170,7 @@ def flash_layout() -> dict[str, int]:
 
 def easy_install_asset():
     suffix = '-WITH-NOTICES' if NEXT_VERSION == '3.0.2' else ''
-    return f'ESP32-Tailnet-Gateway-v{NEXT_VERSION}-EASY-INSTALL-Windows-macOS-Linux{suffix}.zip'
+    return f'RecoveryGateway-v{NEXT_VERSION}-EASY-INSTALL-Windows-macOS-Linux{suffix}.zip'
 
 
 def easy_install_checksums():
@@ -357,7 +357,7 @@ def render(page: Page, pages: list[Page]) -> str:
 <a class="skip" href="#main">Skip to content</a>
 <header class="top">
   <div class="top-inner">
-    <a class="brand" href="{page.rel('')}" aria-label="{NAME} home"><img src="{page.rel('assets/logo-mark.svg')}" alt="" width="32" height="32"><span>Tailnet Gateway</span></a>
+    <a class="brand" href="{page.rel('')}" aria-label="{NAME} home"><img src="{page.rel('assets/logo-mark.svg')}" alt="" width="32" height="32"><span>RecoveryGateway</span></a>
     <nav id="site-nav" class="site-nav" aria-label="Main"><ul>{nav}</ul></nav>
     <div class="tools">
       <button class="search-open icon" type="button" aria-haspopup="dialog" aria-label="Search" title="Search (/)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>
@@ -485,7 +485,7 @@ def build(out: Path) -> list[Page]:
         '</urlset>\n', encoding='utf-8')
     (out / 'robots.txt').write_text(f'User-agent: *\nAllow: /\nSitemap: {SITE_URL}sitemap.xml\n', encoding='utf-8')
     (out / 'site.webmanifest').write_text(json.dumps({
-        'name': f'{NAME} — Mattboxx Edition', 'short_name': 'Tailnet Gateway', 'start_url': './', 'display': 'browser',
+        'name': f'{NAME} — Mattboxx Edition', 'short_name': 'RecoveryGateway', 'start_url': './', 'display': 'browser',
         'background_color': '#0A0F0C', 'theme_color': '#0A0F0C',
         'icons': [{'src': 'assets/icon-192.png', 'sizes': '192x192', 'type': 'image/png'},
                   {'src': 'assets/avatar-512.png', 'sizes': '512x512', 'type': 'image/png'}]}, indent=1), encoding='utf-8')

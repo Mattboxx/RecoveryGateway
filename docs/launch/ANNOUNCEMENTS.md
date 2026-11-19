@@ -9,7 +9,7 @@ where community rules allow project announcements.
 
 ## GitHub release announcement
 
-**ESP32 Tailnet Gateway — Mattboxx Edition `<release>`**
+**RecoveryGateway — Mattboxx Edition `<release>`**
 
 *One ESP32. Multiple Tailnet roles. Enable only what you need.*
 
@@ -93,7 +93,7 @@ no telemetry, opt-in updates.
 
 ## Migration message for existing users
 
-> The project is now **ESP32 Tailnet Gateway** and the repository moves to
+> The project is now **RecoveryGateway** and the repository moves to
 > `Mattboxx/esp32-tailnet-gateway`. Old links redirect. Your settings are
 > kept. If your device runs **1.13 or older**, its updater cannot follow the
 > rename: install the new release once by hand (System → Firmware →

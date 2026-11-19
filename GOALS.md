@@ -1,4 +1,4 @@
-# ESP32 Tailnet Gateway — Mattboxx Edition
+# RecoveryGateway — Mattboxx Edition
 
 _Formerly ESP32 Homelab Gateway. Tagline: One ESP32. Multiple Tailnet roles. Enable only what you need._
 

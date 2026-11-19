@@ -8,7 +8,7 @@
     .box{fill:#111814;stroke:#1C2A22}.hot{fill:#0E2219;stroke:#1FC97A;stroke-width:1.5}.opt{fill:#111814;stroke:#2E4A3B;stroke-dasharray:5 4}
   </style>
   <rect width="960" height="460" rx="16" fill="#0A0F0C"/>
-  <text class="z" x="24" y="36">ESP32 TAILNET GATEWAY — SIX OWNERSHIP AREAS</text>
+  <text class="z" x="24" y="36">RECOVERYGATEWAY — SIX OWNERSHIP AREAS</text>
 
   <rect class="hot" x="24" y="52" width="300" height="160" rx="12"/>
   <text class="h t" x="40" y="80">Network Gateway</text>

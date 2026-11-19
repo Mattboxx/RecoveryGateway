@@ -4127,7 +4127,7 @@ static esp_err_t system_handler(httpd_req_t *req)
         cJSON_AddStringToObject(root, "idf_ver",    desc->idf_ver);
     }
     /* Product identity and exact source revisions. */
-    cJSON_AddStringToObject(root, "product", "ESP32 Tailnet Gateway");
+    cJSON_AddStringToObject(root, "product", "RecoveryGateway");
     cJSON_AddStringToObject(root, "edition", "Mattboxx Edition");
     cJSON_AddStringToObject(root, "build_commit", MTG_BUILD_COMMIT);
     cJSON_AddStringToObject(root, "microlink_commit", MTG_MICROLINK_COMMIT);
@@ -5580,7 +5580,7 @@ static char *device_name_dup(void)
     char *s = nvs_param_get_str("dev_name");
     if (s && s[0]) return s;
     free(s);
-    return strdup("Tailnet Gateway");
+    return strdup("RecoveryGateway");
 }
 
 static esp_err_t auth_status_handler(httpd_req_t *req)

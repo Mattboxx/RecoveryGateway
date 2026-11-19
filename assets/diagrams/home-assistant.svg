@@ -12,7 +12,7 @@
   </defs>
   <rect width="960" height="340" rx="16" fill="#0A0F0C"/>
   <rect class="hot" x="20" y="60" width="240" height="200" rx="12"/>
-  <text class="z" x="36" y="88">ESP32 TAILNET GATEWAY</text>
+  <text class="z" x="36" y="88">RECOVERYGATEWAY</text>
   <text class="s" x="36" y="118">retained state, Last Will</text>
   <text class="s" x="36" y="142">bounded snapshot size</text>
   <text class="s" x="36" y="166">strict command payloads</text>

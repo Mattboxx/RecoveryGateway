@@ -21,7 +21,7 @@ function rule(i, o) {
 }
 
 const data = {
-  '/api/auth/status': { password_set: true, auth_enabled: true, auth_required: true, authenticated: true, device_name: 'Tailnet Gateway', session_timeout_s: 0, session_remaining_s: 0 },
+  '/api/auth/status': { password_set: true, auth_enabled: true, auth_required: true, authenticated: true, device_name: 'RecoveryGateway', session_timeout_s: 0, session_remaining_s: 0 },
   '/api/status': { version: '0.1.38-Mattboxx-1.14-dev.6', uptime_s: 93784, free_heap: 4210000, heap_total: 8650000, free_psram: 4100000,
     mem_internal_free: 13800, mem_internal_total: 380000, mem_spiram_free: 4100000, mem_spiram_total: 8380000, cpu_load_pct: 23, cpu_core0_pct: 31, cpu_core1_pct: 15,
     cpu_temp_c: 41.5, reset_reason: 'Power on',
@@ -59,7 +59,7 @@ const data = {
     rule(2, { name: 'Syslog (UDP)', protocol: 'udp', listen_port: 15140, destination_port: 514, allowed_source_subnet: '192.168.1.0/24', destination_check: null })],
     max: 8, uplink_has_ipv4: true, uplink_ip: '192.168.1.50', tailscale_control_connected: true, observation: 'passive_snapshot' },
   '/api/system': { version: '0.1.38-Mattboxx-1.14-dev.6', build_date: 'Oct 22 2026', build_time: '18:00:00', idf_ver: 'v5.5.3',
-    firmware_updates: { enabled: false, auto_install: false, beta_channel: false, install_hour: -1 }, device_name: 'Tailnet Gateway', tz: 'CET-1CEST,M3.5.0,M10.5.0/3',
+    firmware_updates: { enabled: false, auto_install: false, beta_channel: false, install_hour: -1 }, device_name: 'RecoveryGateway', tz: 'CET-1CEST,M3.5.0,M10.5.0/3',
     session_timeout_s: 0, session_remaining_s: 0, web_auth_enabled: true, web_password_set: true, web_port: 80, wifi_power_save: false, wifi_power_save_known: true,
     wifi_power_save_active: false, tx_power: 78, tx_power_nvs: 78, log_tail: 'I (1234) main: ready', reset_history: [{ wallclock: 1792000000, reason: 'Power on', who: 'boot', crash: '' }] },
   '/api/system/updates': { enabled: false, auto_install: false, beta_channel: false, install_hour: -1, busy: false, checked: false, update_available: false,
