@@ -208,6 +208,53 @@ static void cell_overlap_cb(void *ctx)
     q->uplink = cell_overlap_route(q->src.addr ? &q->src : NULL, &q->dst, &q->why);
 }
 
+/* lwIP keeps one resolver list for every netif and the newest lease wins. On
+ * board A the Wi-Fi lease left the home router (.254) there while the USB SIM
+ * stick carried the Internet uplink, so name lookups did not follow the
+ * owner's choice of mobile data. While a network-mode modem (an Ethernet-like
+ * netif with a gateway) carries the Internet uplink, a resolver on the LAN
+ * uplink's prefix -- or any private resolver while the LAN uplink is down --
+ * is replaced by the modem's gateway, which router-style sticks run as a DNS
+ * forwarder. It is put back once the LAN uplink carries the traffic again,
+ * unless something else changed it meanwhile. Public or user-chosen
+ * resolvers outside the LAN are kept (they work through the modem too). PPP
+ * modems are left alone: their resolvers come from IPCP, not the peer.
+ * TCP/IP context only (route supervisor). */
+static uint32_t s_dns_saved, s_dns_set;   /* network byte order; 0 = none */
+
+static void cell_dns_follow(struct netif *cell, struct netif *lan)
+{
+    const ip_addr_t *cur = dns_getserver(0);
+    uint32_t now = cur && IP_IS_V4(cur) ? ip4_addr_get_u32(ip_2_ip4(cur)) : 0;
+    uint32_t gw = cell && (cell->flags & NETIF_FLAG_ETHARP) ? ip4_addr_get_u32(netif_ip4_gw(cell)) : 0;
+    if (gw) {
+        if (now == gw) return;
+        bool lan_resolver;
+        if (!now) lan_resolver = true;
+        else if (lan && netif_is_up(lan) && netif_is_link_up(lan)) {
+            uint32_t mask = ip4_addr_get_u32(netif_ip4_netmask(lan));
+            lan_resolver = mask && (now & mask) == (ip4_addr_get_u32(netif_ip4_addr(lan)) & mask);
+        } else {
+            lan_resolver = ip_is_rfc1918(lwip_ntohl(now));
+        }
+        if (!lan_resolver) return;
+        if (!s_dns_set) s_dns_saved = now;    /* keep the first LAN resolver seen */
+        s_dns_set = gw;
+        ip_addr_t server;
+        ip_addr_set_ip4_u32(&server, gw);
+        dns_setserver(0, &server);
+        ESP_LOGW(TAG, "mobile uplink in use: DNS follows the modem's gateway");
+        return;
+    }
+    if (s_dns_set && now == s_dns_set && s_dns_saved) {
+        ip_addr_t server;
+        ip_addr_set_ip4_u32(&server, s_dns_saved);
+        dns_setserver(0, &server);
+        ESP_LOGW(TAG, "LAN uplink in use again: its DNS restored");
+    }
+    s_dns_set = s_dns_saved = 0;
+}
+
 typedef struct {
     ip4_addr_t src, dst;
     struct netif *uplink;
@@ -424,8 +471,10 @@ static void supervisor_netifs_cb(void *ctx)
     state->preferred = eth_uplink_lwip_select(state->uplink);
     if (state->preferred) state->uplink = state->preferred;
     /* Optional cellular: primary, or failover while WiFi/Ethernet is down. */
+    struct netif *lan = state->uplink;
     struct netif *cell = cell_uplink_lwip_select(state->uplink);
     if (cell) state->uplink = state->preferred = cell;
+    cell_dns_follow(cell, lan);
     state->wg_ready = state->wg && netif_is_up(state->wg);
     state->default_netif = netif_default;
 }

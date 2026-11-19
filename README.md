@@ -78,6 +78,8 @@ configuration, peers and measurements. Open an image for the full view.
 
 - **USB SIM sticks on the home network's address range** (e.g. 192.168.1.x
   on both sides) no longer cut the gateway off from the home devices.
+- **Mobile data as the main uplink carries name lookups too**, so Tailscale
+  stays connected instead of dropping every few minutes.
 
 ### Also in 3.0.28
 

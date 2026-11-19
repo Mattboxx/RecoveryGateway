@@ -315,9 +315,12 @@ only while it carries the Internet uplink. Other resolvers stay on the LAN:
 lwIP's list is global and on board A it held the home router (.254) while the
 stick was primary; sent to the stick, no name resolved and the control
 session flapped (about 200 s up, 200 s down). Host routing tests cover both
-states, the .1 ambiguity and that resolver; device check with the stick on
-board A pending. Not covered: when Wi-Fi drops, the resolver list still holds
-the home router until a lease updates it. The original analysis follows.
+states, the .1 ambiguity and that resolver. Owner: "ho impostato la SIM come
+accesso a internet principale...dovrebbe usare quello", so `cell_dns_follow()`
+(route supervisor) also swaps a LAN resolver for the stick's gateway while a
+network-mode stick carries the Internet uplink (also when Wi-Fi is down) and
+restores it afterwards; public/user resolvers and PPP modems are left alone.
+Device check with the stick on board A pending. The original analysis follows.
 
 - **The problem:** router-style SIM sticks (RNDIS/ECM/NCM, e.g. an Alcatel/TCL
   Link Key, 1BBB:0195, whose subnet 192.168.1.0/24 cannot be changed) can use

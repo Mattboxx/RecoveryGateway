@@ -38,12 +38,16 @@ typedef unsigned char u8_t;
 #define ip4_addr_netcmp(a,b,m) (((a)->addr & (m)->addr) == ((b)->addr & (m)->addr))
 static ip_addr_t dns_servers[DNS_MAX_SERVERS];
 static const ip_addr_t *dns_getserver(u8_t i) { return &dns_servers[i]; }
+static int dns_sets;
+static void dns_setserver(u8_t i, const ip_addr_t *a) { dns_servers[i] = *a; dns_sets++; }
 static struct dhcp { ip_addr_t server_ip_addr; } dhcp_state;
 #define netif_dhcp_data(n) (&dhcp_state)
 static uint32_t known_peer_nbo;
 struct netif;
 static bool microlink_wg_has_peer_ip(struct netif *wg, uint32_t ip);
-struct netif { struct netif *next; char name[2]; uint8_t num, napt; bool up, link; ip4_addr_t ip, mask, gw; };
+struct netif { struct netif *next; char name[2]; uint8_t num, napt, flags; bool up, link; ip4_addr_t ip, mask, gw; };
+#define NETIF_FLAG_ETHARP 0x08
+#define ip_addr_set_ip4_u32(a,v) ((a)->addr = (v))
 static struct netif *netif_list, *netif_default;
 #define netif_ip4_addr(n) (&(n)->ip)
 #define netif_ip4_netmask(n) (&(n)->mask)
@@ -300,6 +304,31 @@ int main(void) {
     eth=sta; eth.name[0]='e'; eth.name[1]='t'; eth.ip.addr=swap32(0xc0a80115); eth.next=NULL;
     sta.next=&eth; selected_eth=&eth; stick.mask.addr=swap32(0xffffff00);
     expect(0,0xc0a8013f,&eth);                   /* a selected Ethernet LAN uplink wins */
+    /* 3.0.29: with the stick as the Internet uplink, a LAN resolver (the home
+     * router .254 from the Wi-Fi lease, as on board A) follows the stick's
+     * gateway, and comes back when the LAN uplink carries the traffic again. */
+    reset();
+    stick=(struct netif){.name={'e','n'},.num=3,.flags=NETIF_FLAG_ETHARP,.up=true,.link=true,.ip={swap32(0xc0a801a7)},.mask={swap32(0xffffff00)},.gw={swap32(0xc0a80101)}};
+    dns_servers[0].addr=swap32(0xc0a801fe); dns_sets=0;
+    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fe) && dns_sets==0);   /* LAN in use: untouched */
+    cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101) && dns_sets==1);  /* follows the stick */
+    cell_dns_follow(&stick,&sta); assert(dns_sets==1);                                             /* stable: no rewrite */
+    dns_servers[0].addr=swap32(0xc0a801fe);                                                        /* a Wi-Fi lease renewal */
+    cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101) && dns_sets==2);
+    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fe) && dns_sets==3);    /* restored */
+    cell_dns_follow(NULL,&sta); assert(dns_sets==3);
+    dns_servers[0].addr=swap32(0x01010101);                                                        /* user's public resolver */
+    cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0x01010101) && dns_sets==3);
+    dns_servers[0].addr=swap32(0xc0a801fe); sta.link=false;                                        /* Wi-Fi down: failover */
+    cell_dns_follow(&stick,NULL); assert(dns_servers[0].addr==swap32(0xc0a80101));
+    sta.link=true; dns_servers[0].addr=swap32(0x08080808);                                         /* changed meanwhile */
+    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0x08080808));                   /* not overwritten */
+    dns_servers[0].addr=0; cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101));   /* none yet */
+    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101));                   /* nothing to restore */
+    struct netif ppp2={.name={'p','p'},.up=true,.link=true,.ip={swap32(0x0a400001)},.mask={swap32(0xffffffff)},.gw={swap32(0x0a404040)}};
+    dns_servers[0].addr=swap32(0xc0a801fe); dns_sets=0;
+    cell_dns_follow(&ppp2,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fe) && dns_sets==0);  /* PPP: left alone */
+    cell_dns_follow(NULL,&sta);
     reset(); tailscale_accept_routes=1;
     tailscale_accepted_route_t routes[32], snapshot[32];
     for(int i=0;i<32;i++) routes[i]=(tailscale_accepted_route_t){0x0a000000u+(i<<16),16};
