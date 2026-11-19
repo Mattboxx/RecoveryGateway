@@ -257,12 +257,28 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
 
 ## Next firmware (after 3.0.29) — owner requests to carry
 
+Status: both items are implemented on `feat/next-firmware` as 3.0.30
+(not published; owner 2026-11-19: "crea la nuova versione ... ma ancora non
+pubblicarla"). Browser tests cover the banner after Ethernet and cellular
+saves, no banner after a data-limit save, and the About source text.
+
 - **System → About, "Source":** the link already opens `Mattboxx/RecoveryGateway`
   (3.0.29), but its visible text still reads
   `github.com/Mattboxx/esp32-tailnet-gateway` (`main/index.html` and the
   `main/i18n/*.json` entries). Show `github.com/Mattboxx/RecoveryGateway`
   (owner, 2026-11-19: "ricorda nella prossima versione di aggiustare questo
   nelle info del firmware").
+- **Restart button after saving the Ethernet or cellular (SIM data) uplink:**
+  both settings apply at the next boot and their POST answers
+  `restart_required: true`, but the page only writes "saved settings apply
+  after restart" in the card; unlike the other settings that need a restart,
+  it never raises the pending-reboot banner with its Restart button
+  (`setPendingReboot(true)` is not called after `/api/ethernet` and
+  `/api/cellular` saves; the monthly data limit applies at once and answers
+  `restart_required: false`, so it must not raise it). Raise it the same way,
+  with a browser test (owner, 2026-11-19: "quando si
+  imposta ethernet o SIM dati che appaia il tasto di reboot come le altre cose
+  che lo richiedono").
 
 ## 3.0.26 and later — Tailnet reach (owner decision, 2026-11-18)
 

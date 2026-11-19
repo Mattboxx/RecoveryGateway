@@ -4637,7 +4637,7 @@
           <div class="stat-row"><span class="stat-label">Build tag</span>       <span class="stat-value mono" id="about-build-tag" title="—">—</span></div>
           <div class="stat-row"><span class="stat-label">Build commit</span><span class="stat-value mono" id="about-commit">—</span></div>
           <div class="stat-row"><span class="stat-label">MicroLink</span><span class="stat-value mono"><a href="https://github.com/Mattboxx/microlink" target="_blank" rel="noopener">Mattboxx/microlink</a></span></div>
-          <div class="stat-row"><span class="stat-label">Source</span><span class="stat-value mono"><a href="https://github.com/Mattboxx/RecoveryGateway" target="_blank" rel="noopener" style="color:var(--accent);">github.com/Mattboxx/esp32-tailnet-gateway</a></span></div>
+          <div class="stat-row"><span class="stat-label">Source</span><span class="stat-value mono"><a href="https://github.com/Mattboxx/RecoveryGateway" target="_blank" rel="noopener" style="color:var(--accent);">github.com/Mattboxx/RecoveryGateway</a></span></div>
           <div class="stat-row"><span class="stat-label">Issues</span><span class="stat-value mono"><a href="https://github.com/Mattboxx/RecoveryGateway/issues" target="_blank" rel="noopener" style="color:var(--accent);">github.com/&hellip;/issues</a></span></div>
           <div class="stat-row"><span class="stat-label">Credits</span><span class="stat-value"><a href="https://github.com/Csontikka/esp32-tailscale-subnet-router" target="_blank" rel="noopener">Csontikka</a> · <a href="https://github.com/CamM2325/microlink" target="_blank" rel="noopener">Cameron Malone</a></span></div>
           <div class="stat-row"><span class="stat-label">License</span><span class="stat-value mono">GPL-3.0 — see LICENSE and NOTICE.md in the repo</span></div>
@@ -7426,6 +7426,7 @@
       var btn=this;btn.disabled=true;
       try{var r=await apiFetch('/api/ethernet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var d=await r.json();
         if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
+        if(d.restart_required)setPendingReboot(true);
         showToast('success','Ethernet settings saved','Restart the device to apply them.',5000);await loadEthernet();}
       catch(e){document.getElementById('eth-status').textContent='Not saved: '+e.message;btn.disabled=false;}
     });
@@ -7496,6 +7497,7 @@
       var btn=this;btn.disabled=true;
       try{var r=await apiFetch('/api/cellular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var d=await r.json();
         if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
+        if(d.restart_required)setPendingReboot(true);
         showToast('success','Cellular settings saved','Restart the device to apply them.',5000);await loadCellular();}
       catch(e){document.getElementById('cell-status').textContent='Not saved: '+e.message;btn.disabled=false;}
     });

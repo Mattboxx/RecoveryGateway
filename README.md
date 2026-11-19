@@ -74,7 +74,13 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/RecoveryGateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.29
+## What's new in Firmware 3.0.30
+
+- **Saving the Ethernet or mobile data (SIM) uplink shows the Restart
+  button**, like the other settings that apply after a restart.
+- System → About shows the RecoveryGateway repository as the source.
+
+### Also in 3.0.29
 
 - **USB SIM sticks on the home network's address range** (e.g. 192.168.1.x
   on both sides) no longer cut the gateway off from the home devices.
