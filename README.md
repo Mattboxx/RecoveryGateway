@@ -74,7 +74,12 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/RecoveryGateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.28
+## What's new in Firmware 3.0.29
+
+- **USB SIM sticks on the home network's address range** (e.g. 192.168.1.x
+  on both sides) no longer cut the gateway off from the home devices.
+
+### Also in 3.0.28
 
 - **New name: RecoveryGateway** (formerly ESP32 Tailnet Gateway): same firmware,
   same settings, new addresses (this repository and its website). Gateways on

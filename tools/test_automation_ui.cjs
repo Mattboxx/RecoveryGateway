@@ -906,6 +906,19 @@ async function main() {
     assert.equal(await f.page.locator('#sys-updates-auto').isChecked(), false);
     assert.equal(await f.page.locator('#sys-updates-auto').isDisabled(), true);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    // 3.0.29: releases of the renamed repository (and the redirect repository
+    // at the old name) keep their notes link; a lookalike name stays hidden.
+    for (const [url, shown] of [['https://github.com/Mattboxx/RecoveryGateway/releases/tag/v3.0.29', true],
+                                ['https://github.com/Mattboxx/esp32-tailnet-gateway/releases/tag/v3.0.28', true],
+                                ['https://github.com/Mattboxx/RecoveryGatewayX/releases/tag/v3.0.29', false]]) {
+      f = await fixture(browser, { page: 'system/maintenance', updatesBody: {...updates, checked: true,
+        latest_version: 'v3.0.29', release_url: url, repository: 'Mattboxx/RecoveryGateway'} });
+      await f.page.waitForFunction(() => document.getElementById('sys-updates-latest').textContent === 'v3.0.29');
+      assert.equal(await f.page.locator('#sys-updates-release').isVisible(), shown, url);
+      if (shown) assert.equal(await f.page.getAttribute('#sys-updates-release', 'href'), url);
+      assert.equal(await f.page.getAttribute('#sys-updates-repo', 'href'), 'https://github.com/Mattboxx/RecoveryGateway/releases');
+      assert.deepEqual(f.errors, []); await f.context.close(); count++;
+    }
     // Failed status reads retain visible policy, disable writes and do not
     // report an enabled automatic installer as OFF. Invalid links stay hidden.
     f = await fixture(browser, { page: 'system/maintenance', updatesBody: {...updates,

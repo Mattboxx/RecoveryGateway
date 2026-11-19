@@ -1120,6 +1120,11 @@ struct netif *cell_uplink_selected_lwip(void)
            (atomic_load(&s_selected_cell) || netif_default == s_lwip) ? s_lwip : NULL;
 }
 
+struct netif *cell_uplink_lwip(void)
+{
+    return s_lwip && atomic_load(&s_has_ip) ? s_lwip : NULL;
+}
+
 esp_netif_t *cell_uplink_preferred_netif(esp_netif_t *lan)
 {
     esp_netif_ip_info_t info = {0};

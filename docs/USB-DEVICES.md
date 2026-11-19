@@ -219,3 +219,4 @@ the pins option, save and restart.
 | A phone is not seen | use an OTG adapter, enable USB tethering after plugging, unlock the phone |
 | About 10 Mbit/s at most | expected: the ESP32-S3 USB port is full speed (12 Mbit/s) |
 | Wi-Fi speed tests through the access point slower than before | expected while USB is on: fewer Wi-Fi receive buffers (see *Wi-Fi while a USB connection is on*) |
+| The stick uses the same addresses as the home network (e.g. 192.168.1.x on both) | handled from 3.0.29: home addresses go through Wi-Fi/Ethernet. While the stick carries the Internet traffic, its gateway address (often .1) means the stick, so a home device with that same address is unreachable then; change the stick's or the router's range if you can |

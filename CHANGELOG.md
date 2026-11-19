@@ -6,6 +6,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.29] - 2026-11-19
+
+### Fixed
+
+- **A USB SIM stick on the same network as the home LAN** (for example a stick
+  that always uses 192.168.1.x, like many home routers) no longer cuts the
+  gateway off from the home devices. Before, traffic for the home network
+  could leave through the stick: device checks, LAN → Tailnet access and
+  subnet routing stopped working. Home addresses now go through Wi-Fi or
+  Ethernet; only the stick's own addresses (and its gateway and DNS while the
+  stick carries the Internet traffic) go to the stick. Diagnostics → Route
+  lookup shows the reason.
+- System → About and the update page link the RecoveryGateway repository, and
+  the release-notes link is shown again for its releases.
+
 ## [3.0.28] - 2026-11-19
 
 ### Changed

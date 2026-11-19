@@ -104,5 +104,8 @@ void cell_uplink_get_status(cell_status_t *out);
  * carry the Internet uplink instead of `current`, otherwise NULL. */
 struct netif *cell_uplink_lwip_select(struct netif *current);
 struct netif *cell_uplink_selected_lwip(void);
+/* TCP/IP context only: the cellular netif while it has an address, selected
+ * or not (route hook: a modem network that overlaps the LAN prefix). */
+struct netif *cell_uplink_lwip(void);
 esp_netif_t *cell_uplink_preferred_netif(esp_netif_t *lan);
 esp_err_t cell_uplink_register_http(httpd_handle_t server);

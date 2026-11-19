@@ -43,10 +43,11 @@ static struct dhcp { ip_addr_t server_ip_addr; } dhcp_state;
 static uint32_t known_peer_nbo;
 struct netif;
 static bool microlink_wg_has_peer_ip(struct netif *wg, uint32_t ip);
-struct netif { struct netif *next; char name[2]; uint8_t num, napt; bool up, link; ip4_addr_t ip, mask; };
+struct netif { struct netif *next; char name[2]; uint8_t num, napt; bool up, link; ip4_addr_t ip, mask, gw; };
 static struct netif *netif_list, *netif_default;
 #define netif_ip4_addr(n) (&(n)->ip)
 #define netif_ip4_netmask(n) (&(n)->mask)
+#define netif_ip4_gw(n) (&(n)->gw)
 #define ip4_addr_get_u32(a) ((a)->addr)
 #define ip4_addr_isany_val(a) ((a).addr == 0)
 #define ip4_addr_cmp(a,b) ((a)->addr == (b)->addr)
@@ -97,6 +98,8 @@ static struct netif *selected_eth;
 static struct netif *eth_uplink_selected_lwip(void) { return selected_eth; }
 static struct netif *selected_ppp;
 static struct netif *cell_uplink_selected_lwip(void) { return selected_ppp; }
+static struct netif *cell_netif;
+static struct netif *cell_uplink_lwip(void) { return cell_netif; }
 static uint32_t binding;
 static bool tailnet_forward_is_routed_target(uint32_t uplink, int proto, uint32_t ip, uint16_t port) {
     return binding && uplink==binding && (proto==6 || proto==17) && ip==known_peer_nbo && port==22;
@@ -116,14 +119,15 @@ static void reset(void) {
     ap=(struct netif){.name={'a','p'},.num=2,.up=true,.link=true,.ip={swap32(0xc0a80401)},.mask={swap32(0xffffff00)}};
     wg=(struct netif){.name={'w','g'},.up=true,.link=true,.ip={swap32(0x6450463c)},.mask={swap32(0xffc00000)}};
     sta.next=&ap; ap.next=&wg; netif_list=&sta; netif_default=NULL;
-    selected_eth=NULL; selected_ppp=NULL; binding=0;
+    selected_eth=NULL; selected_ppp=NULL; cell_netif=NULL; binding=0;
     tailscale_exit_node_ip=0; tailscale_lan_bypass=0; tailscale_accept_routes=0;
     publish_accepted_routes(NULL,0);
     memset(dns_servers,0,sizeof dns_servers); memset(&dhcp_state,0,sizeof dhcp_state); known_peer_nbo=0;
 }
 static void expect(uint32_t src, uint32_t dst, struct netif *want) {
     ip4_addr_t s={swap32(src)}, d={swap32(dst)};
-    assert(__wrap_ip4_route_src_hook(&s,&d)==want);
+    struct netif *got=__wrap_ip4_route_src_hook(&s,&d);
+    if(got!=want) { fprintf(stderr,"hook mismatch %08x -> %08x: %.2s\n",src,dst,got?got->name:"--"); abort(); }
     char label[16], reason[160], expected[16];
     route_explain(src,dst,label,sizeof label,reason,sizeof reason);
     name_netif(want,expected,sizeof expected);
@@ -247,6 +251,53 @@ int main(void) {
         sta.up=up; sta.link=link;
         expect(0xc0a80402,0x64800164,up&&link?&sta:&wg);
     }
+    /* 3.0.29: a USB stick network on the home LAN prefix (192.168.1.0/24 on
+     * both sides). Home devices go to the LAN uplink; the stick's own
+     * address, gateway, DHCP server and (while it carries the Internet
+     * uplink) resolvers stay on the stick. Listed first, as lwIP adds new
+     * netifs at the head of the list. */
+    reset();
+    struct netif stick={.name={'e','n'},.num=3,.up=true,.link=true,.ip={swap32(0xc0a801a7)},.mask={swap32(0xffffff00)},.gw={swap32(0xc0a80101)}};
+    stick.next=&sta; netif_list=&stick; cell_netif=&stick;
+    sta.gw.addr=swap32(0xc0a801fe);
+    expect(0,0xc0a8013f,&sta);                   /* this PC on the home LAN */
+    expect(0,0xc0a801fe,&sta);                   /* the home router */
+    expect(0x6450463d,0xc0a8013f,&sta);          /* forwarded from the tailnet */
+    expect(0xc0a80402,0xc0a8013f,&sta);          /* forwarded from an AP client */
+    expect(0,0xc0a801a7,&stick);                 /* the stick's own address */
+    expect(0xc0a801a7,0xc0a8013f,&stick);        /* bound to the stick's address */
+    /* Wi-Fi carries the Internet uplink: .1 is the home router (and often its
+     * DNS), even though it is also the stick's gateway and DHCP server. */
+    dhcp_state.server_ip_addr.addr=swap32(0xc0a80101);
+    dns_servers[0].addr=swap32(0xc0a80101);
+    expect(0,0xc0a80101,&sta);
+    selected_ppp=&stick;                         /* the stick carries it */
+    expect(0,0xc0a80101,&stick);                 /* its gateway, DHCP server and resolver */
+    dns_servers[0].addr=swap32(0xc0a80103); dhcp_state.server_ip_addr.addr=swap32(0xc0a80102);
+    expect(0,0xc0a80103,&stick);                 /* its resolver */
+    expect(0,0xc0a80102,&stick);                 /* its DHCP server */
+    expect(0,0xc0a80104,&sta);                   /* anything else in the prefix: home LAN */
+    expect(0,0xc0a8013f,&sta);                   /* home devices still on the LAN */
+    expect(0,0xc0a80114,&sta);                   /* the LAN uplink's own address */
+    selected_ppp=NULL; memset(dns_servers,0,sizeof dns_servers); memset(&dhcp_state,0,sizeof dhcp_state);
+    expect(0,0x08080808,NULL);                   /* Internet: unchanged (lwIP default route) */
+    assert(__wrap_ip4_route_src_hook(NULL,&(ip4_addr_t){swap32(0xc0a80402)})==NULL);   /* AP clients: unchanged */
+    { ip4_addr_t d={swap32(0xc0a8013f)};
+      sta.link=false; assert(__wrap_ip4_route_src_hook(NULL,&d)==NULL);   /* Wi-Fi down: the stick's prefix */
+      sta.link=true; stick.up=false; assert(__wrap_ip4_route_src_hook(NULL,&d)==NULL);
+      stick.up=true; cell_netif=NULL; assert(__wrap_ip4_route_src_hook(NULL,&d)==NULL);   /* no address yet */
+      cell_netif=&stick; stick.ip.addr=swap32(0x0a000002);                              /* no overlap */
+      assert(__wrap_ip4_route_src_hook(NULL,&d)==NULL);
+      stick.ip.addr=swap32(0xc0a801a7); stick.mask.addr=0;
+      assert(__wrap_ip4_route_src_hook(NULL,&d)==NULL);                                /* no prefix */
+      stick.mask.addr=swap32(0xffff0000); sta.mask.addr=swap32(0xffffff00);           /* wider stick prefix */
+      assert(__wrap_ip4_route_src_hook(NULL,&d)==&sta);
+      ip4_addr_t other={swap32(0xc0a8023f)};
+      assert(__wrap_ip4_route_src_hook(NULL,&other)==NULL);                            /* outside the LAN prefix */
+    }
+    eth=sta; eth.name[0]='e'; eth.name[1]='t'; eth.ip.addr=swap32(0xc0a80115); eth.next=NULL;
+    sta.next=&eth; selected_eth=&eth; stick.mask.addr=swap32(0xffffff00);
+    expect(0,0xc0a8013f,&eth);                   /* a selected Ethernet LAN uplink wins */
     reset(); tailscale_accept_routes=1;
     tailscale_accepted_route_t routes[32], snapshot[32];
     for(int i=0;i<32;i++) routes[i]=(tailscale_accepted_route_t){0x0a000000u+(i<<16),16};

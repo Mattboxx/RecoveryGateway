@@ -305,9 +305,15 @@ record keeps its layout: 8 value bytes, so the 7-key records of 3.0.25 read
 unchanged and no migration is needed. Host core/API tests and browser
 scenarios pass; device check pending.
 
-**Deferred, possible future (owner, 2026-11-19: "salvala nella roadmap di un
-ipotetico futuro ma ancora non è importante"): a USB stick whose network
-overlaps the Wi-Fi/Ethernet LAN.**
+**Implemented in 3.0.29 (owner, 2026-11-19, after the stick on board A cut the
+LAN off): a USB stick whose network overlaps the Wi-Fi/Ethernet LAN.** First
+recorded as deferred ("salvala nella roadmap di un ipotetico futuro ma ancora
+non è importante"). `cell_overlap_route()` in `lwip_route_hook.c` sends a
+destination inside both prefixes to the LAN uplink; the stick's own address
+and a source bound to it stay on the stick, and its gateway, DHCP server and
+resolvers only while it carries the Internet uplink. Host routing tests cover
+both states and the .1 ambiguity; device check with the stick on board A
+pending. The original analysis follows.
 
 - **The problem:** router-style SIM sticks (RNDIS/ECM/NCM, e.g. an Alcatel/TCL
   Link Key, 1BBB:0195, whose subnet 192.168.1.0/24 cannot be changed) can use

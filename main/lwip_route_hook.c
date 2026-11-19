@@ -145,6 +145,72 @@ static struct netif *shared_uplink_route(const ip4_addr_t *src, const ip4_addr_t
     return microlink_wg_has_peer_ip(find_wg_netif(), src->addr) ? eth : NULL;
 }
 
+/* A USB stick or modem in network mode often gives the gateway the same
+ * private prefix as the home LAN (192.168.1.0/24 on both sides) and cannot be
+ * changed. lwIP would then pick the newest netif with that prefix, the stick,
+ * and the home LAN becomes unreachable: device checks, LAN -> Tailnet and
+ * subnet routing all leave through the modem. Cellular is an Internet uplink
+ * only, so a destination inside both prefixes goes to the Wi-Fi/Ethernet LAN
+ * uplink. Exceptions: the modem's own address, a source bound to it, and,
+ * only while cellular carries the Internet uplink, the modem's gateway, DHCP
+ * server and the resolvers in use (they came from it). The modem's gateway is
+ * often .1 like the home router: while Wi-Fi/Ethernet carries the Internet
+ * uplink, that address is the home router (and often its DNS). Default-route
+ * and DHCP traffic name their netif explicitly and never ask this hook.
+ * Returns NULL when the prefixes do not overlap. Runs in the TCP/IP thread. */
+static struct netif *cell_overlap_route(const ip4_addr_t *src, const ip4_addr_t *dst, const char **why)
+{
+    struct netif *cell = cell_uplink_lwip();
+    if (!cell || !dst || !netif_is_up(cell) || !netif_is_link_up(cell)) return NULL;
+    const ip4_addr_t *cip = netif_ip4_addr(cell), *cmask = netif_ip4_netmask(cell);
+    if (ip4_addr_isany_val(*cip) || ip4_addr_isany_val(*cmask) || !ip4_addr_netcmp(dst, cip, cmask)) return NULL;
+    struct netif *lan = find_lan_uplink();
+    if (!lan || lan == cell || !netif_is_up(lan) || !netif_is_link_up(lan)) return NULL;
+    const ip4_addr_t *lip = netif_ip4_addr(lan), *lmask = netif_ip4_netmask(lan);
+    if (ip4_addr_isany_val(*lip) || ip4_addr_isany_val(*lmask) || !ip4_addr_netcmp(dst, lip, lmask)) return NULL;
+    if (src && ip4_addr_cmp(src, cip)) {
+        if (why) *why = "source is the mobile modem's address";
+        return cell;
+    }
+    if (ip4_addr_cmp(dst, cip)) {
+        if (why) *why = "the mobile modem's own address";
+        return cell;
+    }
+    if (cell_uplink_selected_lwip() == cell) {
+        if (ip4_addr_cmp(dst, netif_ip4_gw(cell))) {
+            if (why) *why = "gateway of the mobile uplink in use";
+            return cell;
+        }
+        struct dhcp *dhcp = netif_dhcp_data(cell);
+        if (dhcp && !ip_addr_isany_val(dhcp->server_ip_addr) && IP_IS_V4(&dhcp->server_ip_addr) &&
+            ip4_addr_get_u32(ip_2_ip4(&dhcp->server_ip_addr)) == dst->addr) {
+            if (why) *why = "DHCP server of the mobile uplink in use";
+            return cell;
+        }
+        for (u8_t i = 0; i < DNS_MAX_SERVERS; i++) {
+            const ip_addr_t *srv = dns_getserver(i);
+            if (srv && IP_IS_V4(srv) && !ip_addr_isany(srv) && ip4_addr_get_u32(ip_2_ip4(srv)) == dst->addr) {
+                if (why) *why = "DNS resolver of the mobile uplink in use";
+                return cell;
+            }
+        }
+    }
+    if (why) *why = "home LAN: the mobile modem uses the same prefix, LAN uplink preferred";
+    return lan;
+}
+
+typedef struct {
+    ip4_addr_t src, dst;
+    struct netif *uplink;
+    const char *why;
+} cell_overlap_query_t;
+
+static void cell_overlap_cb(void *ctx)
+{
+    cell_overlap_query_t *q = ctx;
+    q->uplink = cell_overlap_route(q->src.addr ? &q->src : NULL, &q->dst, &q->why);
+}
+
 typedef struct {
     ip4_addr_t src, dst;
     struct netif *uplink;
@@ -665,6 +731,10 @@ static struct netif *route_src_hook(const ip4_addr_t *src, const ip4_addr_t *des
     struct netif *shared_uplink = shared_uplink_route(src, dest);
     if (shared_uplink) return shared_uplink;
 
+    /* 1c. A mobile modem network that overlaps the LAN prefix. */
+    struct netif *overlap = cell_overlap_route(src && !ip4_addr_isany_val(*src) ? src : NULL, dest, NULL);
+    if (overlap) return overlap;
+
     /* 2. Exit-node + lan_bypass: send LAN-class traffic to STA, not the
      * tunnel. Two passes, mirroring tailscale Go but extended:
      *   2a. Netif-prefix match — the upstream behaviour. Catches the
@@ -914,6 +984,13 @@ void route_explain(uint32_t src_hbo, uint32_t dst_hbo,
     if (tcpip_callback_wait(shared_uplink_cb, &shared) == ERR_OK && shared.uplink) {
         name_netif(shared.uplink, out_netif, out_netif_size);
         snprintf(out, out_size, "selected Ethernet uplink on a shared LAN prefix");
+        return;
+    }
+
+    cell_overlap_query_t overlap = {.src = {.addr = lwip_htonl(src_hbo)}, .dst = dst};
+    if (tcpip_callback_wait(cell_overlap_cb, &overlap) == ERR_OK && overlap.uplink) {
+        name_netif(overlap.uplink, out_netif, out_netif_size);
+        snprintf(out, out_size, "%s", overlap.why ? overlap.why : "mobile modem prefix overlap");
         return;
     }
 

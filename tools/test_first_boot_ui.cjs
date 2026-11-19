@@ -191,9 +191,9 @@ async function uplinkFlows(context) {
   const ethPower = await page.textContent('#fb-eth-usb-power');
   assert.match(ethPower, /does not supply 5 V/); assert.match(ethPower, /16 receive buffers instead of 24/); assert.doesNotMatch(ethPower, /2 A in bursts/);
   const guide = '#fb-eth-usb-power a.usb-guide-link';
-  assert.equal(await page.getAttribute(guide, 'href'), 'https://mattboxx.github.io/esp32-tailnet-gateway/usb-devices/', 'a non-pre-release keeps the website guide');
+  assert.equal(await page.getAttribute(guide, 'href'), 'https://mattboxx.github.io/RecoveryGateway/usb-devices/', 'a non-pre-release keeps the website guide');
   await page.evaluate(() => window.setUsbGuideLinks('3.0.25-beta.8'));
-  assert.equal(await page.getAttribute(guide, 'href'), 'https://github.com/Mattboxx/esp32-tailnet-gateway/blob/v3.0.25-beta.8/docs/USB-DEVICES.md', 'a pre-release links to the guide of its own tag');
+  assert.equal(await page.getAttribute(guide, 'href'), 'https://github.com/Mattboxx/RecoveryGateway/blob/v3.0.25-beta.8/docs/USB-DEVICES.md', 'a pre-release links to the guide of its own tag');
   await page.evaluate(() => { window.setUsbGuideLinks('3.0.26'); window.setUsbGuideLinks('1.0.0-beta"><x'); window.setUsbGuideLinks(undefined); });
   assert.match(await page.getAttribute(guide, 'href'), /blob\/v3\.0\.25-beta\.8\//, 'stable or malformed versions change nothing');
   await page.evaluate(() => { const c = document.getElementById('fb-eth-cs'); c.value = '11'; c.dispatchEvent(new Event('input')); });   /* hidden pins: not checked or sent */
