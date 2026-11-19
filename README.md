@@ -42,7 +42,7 @@ Tailscale to use Wake-on-LAN or the backup uplinks.
 
 ## Quick start
 
-1. **Check your board.** Use an ESP32-S3 N8R8 or N16R8 with 8 MB octal PSRAM. See [supported hardware](#8-supported-hardware).
+1. **Check your board.** Use an ESP32-S3 N8R8 or N16R8 with 8 MB octal PSRAM. See [supported hardware](#8-supported-hardware), or [buy the tested board](#buy-the-tested-board).
 2. **Install.** Open the [Web Installer](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/) in desktop Chrome or Edge with a USB data cable. You can also use [Easy Install or the advanced downloads](#7-download-firmware).
 3. **Set up.** Join the board's `ESP32-Tailnet-Setup-XXXX` Wi-Fi, go to http://192.168.4.1, pair using the BOOT button or USB setup code, and test your uplink. Open the address shown at the end of the wizard.
 4. **Join your Tailnet.** Connect to Tailscale or Headscale, then enable the role you need.
@@ -133,6 +133,23 @@ quad flash**:
 |---|---|
 | **N16R8** — e.g. ESP32-S3-DevKitC-1 N16R8, WROOM-1/1U-N16R8 (**tested**) | 4 MB flash (N4…) |
 | **N8R8** — e.g. ESP32-S3-DevKitC-1 N8R8, WROOM-1/1U-N8R8, Freenove N8R8, Seeed XIAO ESP32S3 (same layout, not yet tested on 3.x) | R2 or no PSRAM, octal-flash modules (WROOM-2, N16R16V, N32R8V), other ESP32 chips |
+
+<a id="buy-the-tested-board"></a>
+
+### Buy the tested board
+
+The gateway is developed and tested on the **ESP32-S3-DevKitC-1 N16R8**
+(16 MB flash, 8 MB octal PSRAM). If you do not have a board yet, these are
+the ones I use, on Amazon:
+
+- [ESP32-S3-DevKitC-1 N16R8 — Amazon link 1](https://link.amazon/B0hzOWAlV)
+- [ESP32-S3-DevKitC-1 N16R8 — Amazon link 2](https://link.amazon/B0891h232)
+
+For a wired connection there is also an ESP32-S3 board with **built-in
+Ethernet and a PoE module**: [Amazon link](https://link.amazon/B02rb02fJ). Ethernet support (W5500) is experimental and not yet validated on real hardware; check that the board has 8 MB octal PSRAM (R8) and at least 8 MB of flash, and set its W5500 pins under Network → Ethernet.
+
+*Affiliate links: buying through them supports the project at no extra cost
+to you. As an Amazon Associate I earn from qualifying purchases.* Any board in the table above works.
 
 Details and community reports: [Hardware](docs/HARDWARE.md).
 

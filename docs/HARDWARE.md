@@ -16,6 +16,21 @@ quad flash**. One image serves every supported board: it uses the first
 The module marking tells you the variant: `N` = flash in MB, `R` = PSRAM in
 MB. You need `N8` or more and `R8`.
 
+## Buy the tested board
+
+The reference board is the **ESP32-S3-DevKitC-1 N16R8**. The ones used for
+development, on Amazon:
+
+- [ESP32-S3-DevKitC-1 N16R8 — Amazon link 1](https://link.amazon/B0hzOWAlV)
+- [ESP32-S3-DevKitC-1 N16R8 — Amazon link 2](https://link.amazon/B0891h232)
+
+Wired option: an ESP32-S3 board with **built-in Ethernet and a PoE module**
+([Amazon link](https://link.amazon/B02rb02fJ)). Ethernet support (W5500) is experimental and not yet validated on real hardware; check that the board has 8 MB octal PSRAM (R8) and at least 8 MB of flash, and set its W5500 pins under Network → Ethernet. See
+[ETHERNET.md](ETHERNET.md).
+
+*Affiliate links: buying through them supports the project at no extra cost
+to you. As an Amazon Associate I earn from qualifying purchases.* Any supported board above works.
+
 ## Not supported
 
 | Board | Why |

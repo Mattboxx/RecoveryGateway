@@ -305,6 +305,29 @@ record keeps its layout: 8 value bytes, so the 7-key records of 3.0.25 read
 unchanged and no migration is needed. Host core/API tests and browser
 scenarios pass; device check pending.
 
+**Deferred, possible future (owner, 2026-11-19: "salvala nella roadmap di un
+ipotetico futuro ma ancora non è importante"): a USB stick whose network
+overlaps the Wi-Fi/Ethernet LAN.**
+
+- **The problem:** router-style SIM sticks (RNDIS/ECM/NCM, e.g. an Alcatel/TCL
+  Link Key, 1BBB:0195, whose subnet 192.168.1.0/24 cannot be changed) can use
+  the same subnet as the home LAN. In failover mode the stick keeps its
+  address while Wi-Fi works. lwIP then has two up netifs with one prefix, and
+  LAN-bound traffic (web UI replies, LAN → Tailnet rules, the DNS relay's
+  upstream) may leave through the stick. `lwip_route_hook.c`
+  (`shared_uplink_route`) handles a shared prefix only for Wi-Fi + Ethernet,
+  and only for tailnet replies.
+- **The planned fix:**
+  - while Wi-Fi or Ethernet is up, destinations in a prefix shared with the
+    stick go to the LAN uplink;
+  - the stick's own gateway is used only while the stick carries the Internet
+    traffic (the LAN uplink is down, so there is no conflict);
+  - the stick's gateway address may equal a LAN host (e.g. both .1): reach it
+    only in that state;
+  - test with host routing tests, then the stick on board B.
+- **Today:** a stick as the only uplink works; as a backup on the same subnet,
+  change the stick's (or the router's) subnet when possible.
+
 **Deferred, low priority (owner: "ci penseremo in futuro se mi contatteranno
 persone interessate"): very large tailnets.** One map response must fit the
 768 KB buffer (about 250-500 peers in an official map), parsed whole by cJSON.
