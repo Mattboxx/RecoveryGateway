@@ -359,7 +359,7 @@ def render(page: Page, pages: list[Page]) -> str:
 <a class="skip" href="#main">Skip to content</a>
 <header class="top">
   <div class="top-inner">
-    <a class="brand" href="{page.rel('')}" aria-label="{NAME} home"><img src="{page.rel('assets/logo-mark.svg')}" alt="" width="32" height="32"><span>RecoveryGateway</span></a>
+    <a class="brand" href="{page.rel('')}" aria-label="{NAME} home"><img src="{page.rel('assets/logo-mark.svg')}" alt="" width="32" height="32"><span><span>Recovery</span><span>Gateway</span></span></a>
     <nav id="site-nav" class="site-nav" aria-label="Main"><ul>{nav}</ul></nav>
     <div class="tools">
       <button class="search-open icon" type="button" aria-haspopup="dialog" aria-label="Search" title="Search (/)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>
