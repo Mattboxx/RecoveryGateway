@@ -37,7 +37,7 @@ Tailscale to use Wake-on-LAN or the backup uplinks.
 | Use case | What the ESP32 does |
 | --- | --- |
 | **Wake and check a NAS or PC — no VPN needed** | Send Wake-on-LAN and verify that the device answers, from a Telegram bot or an ntfy topic. Works with or without Tailscale. [Setup and command reference](https://mattboxx.github.io/RecoveryGateway/remote-recovery/#commands). |
-| **Keep IoT devices online** | Use a mobile SIM or wired Ethernet as the main or the backup uplink, with automatic failover and an optional monthly data limit. **SIM:** a 4G/LTE modem wired to the board's pins (UART, e.g. SIM7600 or A7670 modules), or plugged into its USB port (USB LTE modems and 4G sticks, beta). **Ethernet:** a W5500 module on the pins (SPI), or a USB Ethernet adapter or phone tethering on the USB port (beta). [Hardware](https://mattboxx.github.io/RecoveryGateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
+| **Keep IoT devices online** | Use a mobile SIM or wired Ethernet as the main or the backup uplink, with automatic failover and an optional monthly data limit. **SIM:** a 4G/LTE modem wired to the board's pins (UART, e.g. SIM7600 or A7670 modules), or plugged into its USB port (4G USB sticks, tested with a TCL LinkKey, and USB LTE modems). **Ethernet:** a W5500 module on the pins (SPI), or a USB Ethernet adapter or phone tethering on the USB port (beta). [Hardware](https://mattboxx.github.io/RecoveryGateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
 | **Connect devices that cannot run Tailscale** | Forward one TCP or UDP service from the local LAN to a Tailnet peer. Restrict the source by IP/CIDR. |
 | **Reach a remote LAN** | Advertise approved subnets to Tailnet clients. Configure the gateway's own Wi-Fi for IoT devices. |
 | **Monitor and automate** | Track events and resource trends locally. Optionally use MQTT and Home Assistant, ntfy, Telegram, email or SNMP. |
@@ -162,14 +162,23 @@ to you. As an Amazon Associate I earn from qualifying purchases.* Any board in t
 
 Details and community reports: [Hardware](docs/HARDWARE.md).
 
-### USB modems, 4G sticks and Ethernet adapters (experimental, from 3.0.25)
+### USB 4G sticks, modems and Ethernet adapters (from 3.0.25)
 
 Besides a W5500 module or a modem wired to the pins, the gateway can use one
 USB device on the board's **USB** port (not the COM port): a USB LTE modem or
 4G stick with a SIM, a USB Ethernet adapter (Realtek RTL8152/8153/8156,
 CDC-ECM/NCM) or Android USB tethering. Choose *USB* in first-boot setup or on
-the Network page, save, restart, then plug the device. Not yet tested with real
-devices.
+the Network page, save, restart, then plug the device.
+
+- **Tested:** a [TCL LinkKey 4G USB stick](https://link.amazon/B08rO5Fv3) with a SIM, as the main
+  Internet uplink: Tailscale stays connected over mobile data, name lookups
+  use the SIM, and home devices stay reachable even though the stick uses
+  the same 192.168.1.x range as the home router (from 3.0.29).
+- **Not yet tested with real devices:** USB modems in serial (AT/PPP) mode,
+  USB Ethernet adapters and phone tethering. Reports are welcome.
+
+*Affiliate link: buying through it supports the project at no extra cost to
+you. As an Amazon Associate I earn from qualifying purchases.*
 
 - **The board does not supply 5 V on its USB port.** Use a powered USB-C OTG
   Y-cable with a 5 V charger (at least 2.5 A for a modem or stick), or the
