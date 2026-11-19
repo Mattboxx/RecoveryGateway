@@ -24,6 +24,36 @@
     });
   }
 
+  // Web installer: after a finished install, once its dialog closes, show the
+  // next step and a quiet tip line (the line at most once a month per browser).
+  // ESP Web Tools 10.4.0 has no completion event; its dialog element keeps the
+  // install progress in _installState, read here without changing it.
+  var done = document.getElementById('flasher-done');
+  if (done && 'MutationObserver' in window) {
+    var showDone = function () {
+      var tip = done.querySelector('.flasher-tip'), now = Date.now(), last = 0;
+      try { last = Number(localStorage.getItem('rg-tip-shown')) || 0; } catch (e) { last = 0; }
+      if (tip) tip.hidden = now - last < 30 * 24 * 3600 * 1000;
+      if (tip && !tip.hidden) { try { localStorage.setItem('rg-tip-shown', String(now)); } catch (e) { /* private mode */ } }
+      done.hidden = false;
+      done.scrollIntoView({ block: 'nearest' });
+    };
+    done.querySelector('.flasher-done-close').addEventListener('click', function () { done.hidden = true; });
+    var watchDialog = function (dialog) {
+      var finished = false;
+      var timer = setInterval(function () {
+        var state = dialog._installState;
+        if (state && state.state === 'finished') finished = true;
+      }, 500);
+      dialog.addEventListener('closed', function () { clearInterval(timer); if (finished) showDone(); }, { once: true });
+    };
+    new MutationObserver(function (changes) {
+      changes.forEach(function (change) {
+        change.addedNodes.forEach(function (node) { if (node.nodeName === 'EWT-INSTALL-DIALOG') watchDialog(node); });
+      });
+    }).observe(document.body, { childList: true });
+  }
+
   var menu = document.querySelector('.menu'), nav = document.getElementById('site-nav');
   if (menu && nav) menu.addEventListener('click', function () {
     var open = nav.classList.toggle('open');

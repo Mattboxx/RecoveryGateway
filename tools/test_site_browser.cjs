@@ -154,6 +154,38 @@ pages.unshift('');
         if (dimensions.w !== dimensions.expectedW || dimensions.h !== dimensions.expectedH)
           failures.push(`${width}: screenshot dimensions mismatch ${await img.getAttribute('src')}`);
       }
+      // Web installer: the next step and one quiet tip line appear only after a
+      // finished install, once the installer dialog closes; the tip line at
+      // most once a month per browser. The dialog is a local stand-in for
+      // ESP Web Tools' element (no USB device in the test).
+      await page.goto(base + 'install-firmware/', { waitUntil: 'load' });
+      if (await page.locator('#flasher-done').count()) {
+        await page.evaluate(() => localStorage.removeItem('rg-tip-shown'));
+        const fakeInstall = finished => page.evaluate(async finished => {
+          const d = document.createElement('ewt-install-dialog');
+          document.body.appendChild(d);
+          await new Promise(r => setTimeout(r, 50));
+          d._installState = { state: finished ? 'finished' : 'writing' };
+          await new Promise(r => setTimeout(r, 700));
+          d.dispatchEvent(new CustomEvent('closed')); d.remove();
+        }, finished);
+        await fakeInstall(false);
+        if (await page.isVisible('#flasher-done')) failures.push(`${width}: install note shown without a finished install`);
+        await fakeInstall(true);
+        if (!(await page.isVisible('#flasher-done')) || !(await page.isVisible('#flasher-done .flasher-tip')))
+          failures.push(`${width}: install note or tip line missing after a finished install`);
+        await page.locator('#flasher-done [data-support-open]').click();
+        await dialog.waitFor({ state: 'visible' });
+        await page.keyboard.press('Escape');
+        await dialog.waitFor({ state: 'hidden' });
+        await page.locator('.flasher-done-close').click();
+        if (await page.isVisible('#flasher-done')) failures.push(`${width}: install note does not close`);
+        await fakeInstall(true);
+        if (!(await page.isVisible('#flasher-done')) || await page.isVisible('#flasher-done .flasher-tip'))
+          failures.push(`${width}: tip line repeated within a month`);
+        if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth))
+          failures.push(`${width}: install note overflows horizontally`);
+      }
       if (errors.length) failures.push(`${width}: console/page errors ${[...new Set(errors)].slice(0, 3).join(' | ')}`);
       await context.close();
     }

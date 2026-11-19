@@ -147,6 +147,14 @@ main:focus { outline: none; }
 .flasher-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .flasher .btn, .install-alternative .btn { max-width: 100%; white-space: normal; text-align: center; justify-content: center; font: inherit; font-weight: 600; }
 .flasher .flasher-help { margin: 16px 0 0; font-size: 14px; }
+/* After a finished install: next step, and one quiet, optional tip line. */
+.flasher-done { position: relative; margin: 16px 0 0; padding: 14px 44px 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 12px; background: var(--card); }
+.flasher-done[hidden], .flasher-done .flasher-tip[hidden] { display: none; }
+.flasher-done strong { display: block; margin-bottom: 6px; }
+.flasher-done p { margin: 0 0 8px; }
+.flasher-done .flasher-tip { margin: 0; color: var(--muted); font-size: 14px; }
+.flasher-done-close { position: absolute; top: 6px; right: 6px; width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: 16px var(--font); cursor: pointer; }
+.flasher-done-close:hover, .flasher-done-close:focus-visible { color: var(--text); background: var(--surface); }
 .install-alternative { margin: 20px 0; }
 .install-alternative h2 { margin-top: 0; font-size: 22px; }
 @media (max-width: 480px) {
