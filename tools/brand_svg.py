@@ -86,7 +86,7 @@ def lockup(dark):
         mark = f'<g transform="translate(8 8) scale(1.25)">{tile(INK)}{mark_on_dark(INK)}</g>'
         word, edition = INK, GREEN_DEEP
     text = (f'<g font-family="{FONT}"><text x="108" y="52" font-size="34" font-weight="650" letter-spacing="-0.4" fill="{word}">RecoveryGateway</text>'
-            f'<text x="110" y="80" font-size="13.5" font-weight="650" letter-spacing="3.6" fill="{edition}">MATTBOXX EDITION</text></g>')
+            f'<text x="110" y="80" font-size="13.5" font-weight="650" letter-spacing="3.6" fill="{edition}">FOR ESP32-S3 · MATTBOXX EDITION</text></g>')
     return svg('0 0 560 96', mark + text, 'RecoveryGateway — Mattboxx Edition')
 
 
@@ -94,8 +94,9 @@ def compact_lockup():
     """Stacked mark + short name for small spaces (square-ish)."""
     body = (f'<rect width="200" height="200" rx="40" fill="{INK}"/>'
             f'<g transform="translate(52 22) scale(1.5)">{mark_on_dark(INK)}</g>'
-            f'<g font-family="{FONT}" text-anchor="middle"><text x="100" y="146" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Recovery</text>'
-            f'<text x="100" y="172" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Gateway</text></g>')
+            f'<g font-family="{FONT}" text-anchor="middle"><text x="100" y="142" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Recovery</text>'
+            f'<text x="100" y="166" font-size="25" font-weight="700" fill="{GREEN}" letter-spacing="-0.3">Gateway</text>'
+            f'<text x="100" y="188" font-size="12" font-weight="650" fill="{GREEN_MUTED}" letter-spacing="2.4">ESP32-S3</text></g>')
     return svg('0 0 200 200', body, 'RecoveryGateway (compact)')
 
 
@@ -140,7 +141,7 @@ def banner():
     body = grid(1280, 400)
     body += f'<g transform="translate(80 84) scale(1.5)">{tile(INK_2, LINE)}{mark_on_dark(INK_2)}</g>'
     body += (f'<g font-family="{FONT}"><text x="200" y="134" font-size="50" font-weight="650" letter-spacing="-0.6" fill="{GREEN}">RecoveryGateway</text>'
-             f'<text x="203" y="170" font-size="15" font-weight="650" letter-spacing="4" fill="{GREEN_MUTED}">MATTBOXX EDITION</text>'
+             f'<text x="203" y="170" font-size="15" font-weight="650" letter-spacing="4" fill="{GREEN_MUTED}">FOR ESP32-S3 · MATTBOXX EDITION</text>'
              f'<text x="80" y="252" font-size="26" font-weight="500" fill="{GREEN_SOFT}">One ESP32. Remote access, Wake-on-LAN</text>'
              f'<text x="80" y="288" font-size="26" font-weight="500" fill="{GREEN_SOFT}">and backup internet.</text>'
              f'<text x="80" y="328" font-size="26" font-weight="600" fill="{GREEN}">Enable only what you need.</text></g>')
@@ -154,7 +155,7 @@ def social():
     body = grid(1280, 640)
     body += f'<g transform="translate(96 80) scale(1.75)">{tile(INK_2, LINE)}{mark_on_dark(INK_2)}</g>'
     body += (f'<g font-family="{FONT}"><text x="232" y="146" font-size="58" font-weight="650" letter-spacing="-0.7" fill="{GREEN}">RecoveryGateway</text>'
-             f'<text x="235" y="186" font-size="17" font-weight="650" letter-spacing="4.5" fill="{GREEN_MUTED}">MATTBOXX EDITION</text>'
+             f'<text x="235" y="186" font-size="17" font-weight="650" letter-spacing="4.5" fill="{GREEN_MUTED}">FOR ESP32-S3 · MATTBOXX EDITION</text>'
              f'<text x="96" y="300" font-size="32" font-weight="500" fill="{GREEN_SOFT}">One ESP32.</text>'
              f'<text x="96" y="342" font-size="32" font-weight="500" fill="{GREEN_SOFT}">Remote access, Wake-on-LAN</text>'
              f'<text x="96" y="384" font-size="32" font-weight="500" fill="{GREEN_SOFT}">and backup internet.</text>'
