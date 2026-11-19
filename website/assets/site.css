@@ -213,7 +213,10 @@ summary { cursor: pointer; font-weight: 600; }
   figure.diagram img { min-width: 820px; max-width: none; }
   figure.diagram figcaption::after { content: " Swipe sideways to see the whole diagram."; }
 }
-@media (max-width: 389px) { .brand span { display: none; } }
+/* Phones: the name stacks as "Recovery / Gateway" (like the compact logo) so the
+ * header icons stay on one row; below 344 px only the logo mark remains. */
+@media (max-width: 440px) { .brand > span { display: flex; flex-direction: column; line-height: 1.1; } }
+@media (max-width: 343px) { .brand > span { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; transition: none !important; } }
 .release-note { margin: 0 0 2rem; padding: 1rem 1.2rem; border: 1px solid var(--line); border-left: 3px solid #1FC97A; border-radius: 12px; font-size: .94rem; line-height: 1.65; }
 .release-note strong { display: block; margin-bottom: .3rem; }
