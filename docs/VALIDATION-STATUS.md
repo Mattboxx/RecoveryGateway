@@ -1,5 +1,18 @@
 # Validation records
 
+3.0.29 stable (release source `6440d7a`, MicroLink `9b0a70e`; BIN b5d26ac742104987cd0931bbd0e7965da4d2cb5d9dcd51a6c743e5d720753d8c; bootloader, partition table and esptool as 3.0.28). Content:
+- a USB stick network on the home LAN's prefix (board A: Wi-Fi 192.168.1.0/24, router .254; TCL stick 1BBB:0195 also 192.168.1.0/24, gateway .1): home addresses go to the LAN uplink, the stick's address and (while it carries the Internet uplink) its gateway and DHCP server to the stick;
+- the resolver follows a network-mode stick that carries the Internet uplink and is restored afterwards (on 3.0.28 board A's lookups all failed and the control session flapped about 200 s up / 200 s down);
+- web UI links and release-notes check for `Mattboxx/RecoveryGateway`.
+
+- **Offline:**
+  - clean build, image provenance PASS on `6440d7a`, USB RAM placement PASS;
+  - `validate_all.py --build --browser` 168/168 PASS on `6440d7a` (built in a separate folder);
+  - host routing tests: overlap in both uplink states, the .1 ambiguity, the home resolver, DNS follow/restore/re-assert, public resolver kept, PPP untouched;
+  - packaged from the archived, board-tested image (`--repository Mattboxx/RecoveryGateway`).
+- **Board A over the LAN with the SIM stick as primary uplink, 21/23:** version, tailnet, policy authority, product name; after install and after a restart: stick selected, DNS = stick gateway, names resolve, STUN public IP is the mobile one, home router routed through Wi-Fi and answering, stick gateway routed to the stick; Tailscale connected for 8 minutes with no drop; update check answered by `Mattboxx/RecoveryGateway`; web polls; RAM floors (free 48.7 KB, lowest 39.8 KB). The two failures are pings to the test PC, routed correctly through Wi-Fi but dropped by the PC's Windows firewall (inbound ICMP echo disabled on its Public Wi-Fi profile).
+- **Not run:** failover with Wi-Fi switched off (the UI cannot switch Wi-Fi off; host tests only), a PPP modem, subnet routing from a remote tailnet device to a home device.
+
 3.0.28 stable, RecoveryGateway (release source `0c41c47`, MicroLink `9b0a70e`; BIN e63ebdbe66ac1f31376f6529f24674fad7334a9c1ea11475db8de4d494a69f92; bootloader, partition table and esptool as 3.0.27). Content:
 - product renamed RecoveryGateway (UI, Home Assistant device, notifications, first-boot Wi-Fi);
 - updater asks `Mattboxx/RecoveryGateway` first, then the two older names on 404.

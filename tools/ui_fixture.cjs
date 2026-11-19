@@ -63,7 +63,7 @@ const data = {
     session_timeout_s: 0, session_remaining_s: 0, web_auth_enabled: true, web_password_set: true, web_port: 80, wifi_power_save: false, wifi_power_save_known: true,
     wifi_power_save_active: false, tx_power: 78, tx_power_nvs: 78, log_tail: 'I (1234) main: ready', reset_history: [{ wallclock: 1792000000, reason: 'Power on', who: 'boot', crash: '' }] },
   '/api/system/updates': { enabled: false, auto_install: false, beta_channel: false, install_hour: -1, busy: false, checked: false, update_available: false,
-    status: 'Periodic checks disabled', latest_version: '', repository: 'Mattboxx/esp32-tailnet-gateway' },
+    status: 'Periodic checks disabled', latest_version: '', repository: 'Mattboxx/RecoveryGateway' },
   '/api/sdlog': { sd_level: 3, console_level: 3, card_mb: 0, free_mb: 0, current_file: '', file_count: 0, dropped: 0, bytes_written: 0 },
   '/api/wol': { devices: [{ name: 'NAS', mac: '02:00:00:00:30:01', port: 9 }, { name: 'Workstation', mac: '02:00:00:00:30:02', port: 9 }] },
   '/api/mqtt': { enabled: true, connected: false, uri: 'mqtts://broker.example', base_topic: 'home/gateway', interval_seconds: 30, broker_watchdog_timeout_seconds: 300, broker_watchdog_wol_mac: '' },

@@ -6,6 +6,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.0.29] - 2026-11-19
+
+### Fixed
+
+- **A USB SIM stick on the same network as the home LAN** (for example a stick
+  that always uses 192.168.1.x, like many home routers) no longer cuts the
+  gateway off from the home devices. Before, traffic for the home network
+  could leave through the stick: device checks, LAN → Tailnet access and
+  subnet routing stopped working, and with the stick as the main uplink the
+  home router's DNS could not be reached, so names did not resolve and
+  Tailscale kept disconnecting and reconnecting. Home addresses now go through
+  Wi-Fi or Ethernet; only the stick's own addresses (and its gateway while the
+  stick carries the Internet traffic) go to the stick. Diagnostics → Route
+  lookup shows the reason.
+- **With mobile data as the main uplink, name lookups use it too.** A DNS
+  server of the home network (learned from Wi-Fi) is replaced by the stick's
+  while the stick carries the Internet traffic, and comes back when Wi-Fi or
+  Ethernet does. A DNS server you chose outside the home network (for example
+  1.1.1.1) is kept.
+- System → About and the update page link the RecoveryGateway repository, and
+  the release-notes link is shown again for its releases.
+
 ## [3.0.28] - 2026-11-19
 
 ### Changed

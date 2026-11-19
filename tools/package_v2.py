@@ -37,6 +37,9 @@ TEMPLATES = Path(__file__).resolve().parent / 'easy_install'
 PRODUCT = 'RecoveryGateway - Mattboxx Edition'
 CURRENT_REPOSITORY = 'Mattboxx/esp32-tailscale-gateway-NAS-recovery'
 RENAMED_REPOSITORY = 'Mattboxx/esp32-tailnet-gateway'
+# 2026-11-19: renamed again; the old name is now the redirect repository.
+RECOVERYGATEWAY_REPOSITORY = 'Mattboxx/RecoveryGateway'
+REPOSITORIES = (CURRENT_REPOSITORY, RENAMED_REPOSITORY, RECOVERYGATEWAY_REPOSITORY)
 # Offsets from sdkconfig (bootloader, partition table) and partitions.csv.
 LAYOUT = {'bootloader.bin': 0x0, 'partitions.bin': 0x8000, 'ota_data_initial.bin': 0x19000, 'firmware.bin': 0x20000}
 NVS = (0x9000, 0x19000)
@@ -63,7 +66,7 @@ def write_web_installer(folder, web, version, notices):
 
 def repository_url(repository):
     """Do not ship premature renamed URLs during the bridge migration window."""
-    assert repository in (CURRENT_REPOSITORY, RENAMED_REPOSITORY), 'Unknown release repository'
+    assert repository in REPOSITORIES, 'Unknown release repository'
     return 'https://github.com/' + repository
 
 
@@ -133,8 +136,8 @@ def main():
     p.add_argument('--tool-sources', type=Path, required=True,
                    help='Checksum-verified corresponding-source companion for the exact esptool executable')
     p.add_argument('--out', type=Path)
-    p.add_argument('--repository', choices=(CURRENT_REPOSITORY, RENAMED_REPOSITORY),
-                   default=CURRENT_REPOSITORY, help='Use the current repository until the rename really occurs')
+    p.add_argument('--repository', choices=REPOSITORIES,
+                   default=RECOVERYGATEWAY_REPOSITORY, help='The repository that publishes this release')
     a = p.parse_args()
     project = re.search(r'set\(PROJECT_VER "([^"]+)"\)', (ROOT / 'CMakeLists.txt').read_text())[1]
     validate_version(a.version, project, a.prerelease)

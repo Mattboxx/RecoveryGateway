@@ -255,6 +255,15 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
    Telegram/SMTP/DuckDNS/Cloudflare accounts, DNS clients, throughput).
 7. Everything already planned stays planned (this roadmap, F01–F49).
 
+## Next firmware (after 3.0.29) — owner requests to carry
+
+- **System → About, "Source":** the link already opens `Mattboxx/RecoveryGateway`
+  (3.0.29), but its visible text still reads
+  `github.com/Mattboxx/esp32-tailnet-gateway` (`main/index.html` and the
+  `main/i18n/*.json` entries). Show `github.com/Mattboxx/RecoveryGateway`
+  (owner, 2026-11-19: "ricorda nella prossima versione di aggiustare questo
+  nelle info del firmware").
+
 ## 3.0.26 and later — Tailnet reach (owner decision, 2026-11-18)
 
 Owner: "procedi in tutti i punti" after the 3.0.25 review
@@ -305,9 +314,22 @@ record keeps its layout: 8 value bytes, so the 7-key records of 3.0.25 read
 unchanged and no migration is needed. Host core/API tests and browser
 scenarios pass; device check pending.
 
-**Deferred, possible future (owner, 2026-11-19: "salvala nella roadmap di un
-ipotetico futuro ma ancora non è importante"): a USB stick whose network
-overlaps the Wi-Fi/Ethernet LAN.**
+**Implemented in 3.0.29 (owner, 2026-11-19, after the stick on board A cut the
+LAN off): a USB stick whose network overlaps the Wi-Fi/Ethernet LAN.** First
+recorded as deferred ("salvala nella roadmap di un ipotetico futuro ma ancora
+non è importante"). `cell_overlap_route()` in `lwip_route_hook.c` sends a
+destination inside both prefixes to the LAN uplink; the stick's own address
+and a source bound to it stay on the stick, and its gateway and DHCP server
+only while it carries the Internet uplink. Other resolvers stay on the LAN:
+lwIP's list is global and on board A it held the home router (.254) while the
+stick was primary; sent to the stick, no name resolved and the control
+session flapped (about 200 s up, 200 s down). Host routing tests cover both
+states, the .1 ambiguity and that resolver. Owner: "ho impostato la SIM come
+accesso a internet principale...dovrebbe usare quello", so `cell_dns_follow()`
+(route supervisor) also swaps a LAN resolver for the stick's gateway while a
+network-mode stick carries the Internet uplink (also when Wi-Fi is down) and
+restores it afterwards; public/user resolvers and PPP modems are left alone.
+Device check with the stick on board A pending. The original analysis follows.
 
 - **The problem:** router-style SIM sticks (RNDIS/ECM/NCM, e.g. an Alcatel/TCL
   Link Key, 1BBB:0195, whose subnet 192.168.1.0/24 cannot be changed) can use
