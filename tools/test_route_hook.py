@@ -273,8 +273,10 @@ int main(void) {
     expect(0,0xc0a80101,&sta);
     selected_ppp=&stick;                         /* the stick carries it */
     expect(0,0xc0a80101,&stick);                 /* its gateway, DHCP server and resolver */
-    dns_servers[0].addr=swap32(0xc0a80103); dhcp_state.server_ip_addr.addr=swap32(0xc0a80102);
-    expect(0,0xc0a80103,&stick);                 /* its resolver */
+    dns_servers[0].addr=swap32(0xc0a801fe); dhcp_state.server_ip_addr.addr=swap32(0xc0a80102);
+    expect(0,0xc0a801fe,&sta);                   /* board A: the home router's resolver (.254, from the
+                                                    Wi-Fi lease) stays on the LAN while the stick carries
+                                                    the Internet uplink */
     expect(0,0xc0a80102,&stick);                 /* its DHCP server */
     expect(0,0xc0a80104,&sta);                   /* anything else in the prefix: home LAN */
     expect(0,0xc0a8013f,&sta);                   /* home devices still on the LAN */

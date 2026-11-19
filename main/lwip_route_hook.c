@@ -152,11 +152,15 @@ static struct netif *shared_uplink_route(const ip4_addr_t *src, const ip4_addr_t
  * subnet routing all leave through the modem. Cellular is an Internet uplink
  * only, so a destination inside both prefixes goes to the Wi-Fi/Ethernet LAN
  * uplink. Exceptions: the modem's own address, a source bound to it, and,
- * only while cellular carries the Internet uplink, the modem's gateway, DHCP
- * server and the resolvers in use (they came from it). The modem's gateway is
- * often .1 like the home router: while Wi-Fi/Ethernet carries the Internet
- * uplink, that address is the home router (and often its DNS). Default-route
- * and DHCP traffic name their netif explicitly and never ask this hook.
+ * only while cellular carries the Internet uplink, the modem's gateway and
+ * DHCP server (a stick's resolver is normally its gateway). The modem's
+ * gateway is often .1 like the home router: while Wi-Fi/Ethernet carries the
+ * Internet uplink, that address is the home router. Other resolvers in the
+ * prefix stay on the LAN: lwIP's resolver list is global, and on board A it
+ * held the home router (.254, from the Wi-Fi lease) while the stick carried
+ * the Internet uplink -- sent to the stick, every lookup failed and the
+ * control session kept dropping. Default-route and DHCP traffic name their
+ * netif explicitly and never ask this hook.
  * Returns NULL when the prefixes do not overlap. Runs in the TCP/IP thread. */
 static struct netif *cell_overlap_route(const ip4_addr_t *src, const ip4_addr_t *dst, const char **why)
 {
@@ -186,13 +190,6 @@ static struct netif *cell_overlap_route(const ip4_addr_t *src, const ip4_addr_t 
             ip4_addr_get_u32(ip_2_ip4(&dhcp->server_ip_addr)) == dst->addr) {
             if (why) *why = "DHCP server of the mobile uplink in use";
             return cell;
-        }
-        for (u8_t i = 0; i < DNS_MAX_SERVERS; i++) {
-            const ip_addr_t *srv = dns_getserver(i);
-            if (srv && IP_IS_V4(srv) && !ip_addr_isany(srv) && ip4_addr_get_u32(ip_2_ip4(srv)) == dst->addr) {
-                if (why) *why = "DNS resolver of the mobile uplink in use";
-                return cell;
-            }
         }
     }
     if (why) *why = "home LAN: the mobile modem uses the same prefix, LAN uplink preferred";

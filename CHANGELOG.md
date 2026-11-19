@@ -14,8 +14,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that always uses 192.168.1.x, like many home routers) no longer cuts the
   gateway off from the home devices. Before, traffic for the home network
   could leave through the stick: device checks, LAN → Tailnet access and
-  subnet routing stopped working. Home addresses now go through Wi-Fi or
-  Ethernet; only the stick's own addresses (and its gateway and DNS while the
+  subnet routing stopped working, and with the stick as the main uplink the
+  home router's DNS could not be reached, so names did not resolve and
+  Tailscale kept disconnecting and reconnecting. Home addresses now go through
+  Wi-Fi or Ethernet; only the stick's own addresses (and its gateway while the
   stick carries the Internet traffic) go to the stick. Diagnostics → Route
   lookup shows the reason.
 - System → About and the update page link the RecoveryGateway repository, and
