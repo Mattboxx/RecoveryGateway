@@ -132,7 +132,7 @@ For the historical 3.0.2 notice bundles, see [their separate checksums](licenses
 ## Supported hardware
 
 <p align="center">
-<img src="assets/diagrams/hardware.svg" alt="ESP32-S3 N16R8 or N8R8 board, independent USB power, optional microSD and optional W5500 Ethernet." width="100%">
+<img src="assets/diagrams/hardware.svg" alt="ESP32-S3 N16R8 or N8R8 board. Tested 4G setup: one charger on an OTG Y-cable powers the board and a TCL LinkKey IK41 SIM stick; computer on the COM port optional; optional microSD, W5500 Ethernet and UART modem." width="100%">
 </p>
 
 Firmware 3.x runs on **ESP32-S3 with 8 MB octal PSRAM and at least 8 MB of
