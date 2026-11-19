@@ -7,7 +7,7 @@ explains which port to use, how to wire it and, above all, **how to power the
 device**. Which devices are expected to work is listed in
 [CELLULAR.md](CELLULAR.md#compatibility) and [ETHERNET.md](ETHERNET.md#usb-adapters-and-tethering).
 
-> Tested: a TCL LinkKey 4G USB stick (USB ID `1bbb:0195`, network mode) as the
+> Tested: a TCL LinkKey IK41 4G USB stick (USB ID `1bbb:0195`, network mode) as the
 > main Internet uplink, with Tailscale over mobile data. USB modems in serial
 > mode, USB Ethernet adapters and tethering are not yet tested with real
 > devices: report your board, cable and device (the card shows its `vendor:product`).

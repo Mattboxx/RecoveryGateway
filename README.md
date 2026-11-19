@@ -37,7 +37,7 @@ Tailscale to use Wake-on-LAN or the backup uplinks.
 | Use case | What the ESP32 does |
 | --- | --- |
 | **Wake and check a NAS or PC — no VPN needed** | Send Wake-on-LAN and verify that the device answers, from a Telegram bot or an ntfy topic. Works with or without Tailscale. [Setup and command reference](https://mattboxx.github.io/RecoveryGateway/remote-recovery/#commands). |
-| **Keep IoT devices online** | Use a mobile SIM or wired Ethernet as the main or the backup uplink, with automatic failover and an optional monthly data limit. **SIM:** a 4G/LTE modem wired to the board's pins (UART, e.g. SIM7600 or A7670 modules), or plugged into its USB port (4G USB sticks, tested with a TCL LinkKey, and USB LTE modems). **Ethernet:** a W5500 module on the pins (SPI), or a USB Ethernet adapter or phone tethering on the USB port (beta). [Hardware](https://mattboxx.github.io/RecoveryGateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
+| **Keep IoT devices online** | Use a mobile SIM or wired Ethernet as the main or the backup uplink, with automatic failover and an optional monthly data limit. **SIM:** a 4G/LTE modem wired to the board's pins (UART, e.g. SIM7600 or A7670 modules), or plugged into its USB port (4G USB sticks, tested with a TCL LinkKey IK41, and USB LTE modems). **Ethernet:** a W5500 module on the pins (SPI), or a USB Ethernet adapter or phone tethering on the USB port (beta). [Hardware](https://mattboxx.github.io/RecoveryGateway/hardware/) · [USB devices](docs/USB-DEVICES.md). |
 | **Connect devices that cannot run Tailscale** | Forward one TCP or UDP service from the local LAN to a Tailnet peer. Restrict the source by IP/CIDR. |
 | **Reach a remote LAN** | Advertise approved subnets to Tailnet clients. Configure the gateway's own Wi-Fi for IoT devices. |
 | **Monitor and automate** | Track events and resource trends locally. Optionally use MQTT and Home Assistant, ntfy, Telegram, email or SNMP. |
@@ -170,7 +170,7 @@ USB device on the board's **USB** port (not the COM port): a USB LTE modem or
 CDC-ECM/NCM) or Android USB tethering. Choose *USB* in first-boot setup or on
 the Network page, save, restart, then plug the device.
 
-- **Tested:** a [TCL LinkKey 4G USB stick](https://link.amazon/B08rO5Fv3) with a SIM, as the main
+- **Tested:** a [TCL LinkKey IK41 4G USB stick](https://link.amazon/B08rO5Fv3) with a SIM, as the main
   Internet uplink: Tailscale stays connected over mobile data, name lookups
   use the SIM, and home devices stay reachable even though the stick uses
   the same 192.168.1.x range as the home router (from 3.0.29).

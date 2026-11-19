@@ -48,7 +48,7 @@ to you. As an Amazon Associate I earn from qualifying purchases.* Any supported 
 | Flash layout | 3.x: two 3.5 MB update slots, settings, core dump and a 832 KB storage area (`partitions.csv`). 2.x gateways move with the [migration guide](MIGRATION-3.0.md); settings are kept. |
 | Radio | One 2.4 GHz radio shared by uplink and access point. |
 | Ethernet | Optional W5500 SPI module, driver in the standard image, off until configured; not validated on real hardware: [ETHERNET.md](ETHERNET.md). |
-| Cellular | Optional 4G USB stick or modem with a SIM, off until configured. Tested: TCL LinkKey 4G USB stick; UART modems not yet tested: [CELLULAR.md](CELLULAR.md). |
+| Cellular | Optional 4G USB stick or modem with a SIM, off until configured. Tested: TCL LinkKey IK41 4G USB stick; UART modems not yet tested: [CELLULAR.md](CELLULAR.md). |
 | microSD | Optional log recorder on GPIO38/39/40 (SDMMC 1-bit); those pins are reserved. |
 | Power | Independent, reliable supply; no power-consumption measurement is claimed. |
 

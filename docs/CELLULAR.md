@@ -113,7 +113,7 @@ modem's own default context (or the stick's settings) is used.
 
 ### Compatibility
 
-Tested with real hardware: a **TCL LinkKey 4G USB stick** (`1bbb:0195`, USB
+Tested with real hardware: a **TCL LinkKey IK41 4G USB stick** (`1bbb:0195`, USB
 network mode) as the main Internet uplink. Nothing else below has been tested
 with real hardware yet. "Expected" means the
 device exposes interfaces this firmware drives; firmware variants of the same
