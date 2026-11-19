@@ -246,7 +246,17 @@ def flasher_html(page: Page) -> str:
             f'<a href="{SITE_URL}install-firmware/">Open the official installer</a>.</p></div>'
             '</esp-web-install-button>'
             '<p class="flasher-help">Already installed? Use <strong>System → Firmware</strong> '
-            'on your gateway to update without a USB cable.</p></section>')
+            'on your gateway to update without a USB cable.</p>'
+            # Shown by site.js once the installer dialog closes after a finished install.
+            '<div class="flasher-done" id="flasher-done" role="status" hidden>'
+            '<button class="flasher-done-close" type="button" aria-label="Close">✕</button>'
+            '<strong>Installed. Welcome to RecoveryGateway!</strong>'
+            '<p>Next: join the board\'s <code>RecoveryGateway-Setup-XXXX</code> Wi-Fi and follow '
+            f'<a href="{setup}">the first-boot setup</a>.</p>'
+            '<div class="flasher-tip"><p>If it turns out useful to you, a small tip helps keep it going. '
+            'Entirely optional: everything stays free.</p>'
+            '<a class="btn tip-btn" href="https://ko-fi.com/mattboxx" data-support-open aria-haspopup="dialog" '
+            'aria-controls="support-dialog"><span aria-hidden="true">❤</span> Leave a tip</a></div></div></section>')
 
 
 def release_note(page: Page) -> str:

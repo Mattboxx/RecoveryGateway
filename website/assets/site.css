@@ -147,6 +147,17 @@ main:focus { outline: none; }
 .flasher-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .flasher .btn, .install-alternative .btn { max-width: 100%; white-space: normal; text-align: center; justify-content: center; font: inherit; font-weight: 600; }
 .flasher .flasher-help { margin: 16px 0 0; font-size: 14px; }
+/* After a finished install: next step, and one quiet, optional tip line. */
+.flasher-done { position: relative; margin: 16px 0 0; padding: 14px 44px 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 12px; background: var(--card); }
+.flasher-done[hidden], .flasher-done .flasher-tip[hidden] { display: none; }
+.flasher-done strong { display: block; margin-bottom: 6px; }
+.flasher-done p { margin: 0 0 8px; }
+.flasher-done .flasher-tip { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+.flasher-done .flasher-tip p { margin: 0 0 10px; }
+.flasher-done .tip-btn { color: #0A0F0C; background: #FF5E5B; border-color: #FF5E5B; font-weight: 600; gap: 6px; }
+.flasher-done .tip-btn:hover, .flasher-done .tip-btn:focus-visible { background: #FF7D7A; border-color: #FF7D7A; }
+.flasher-done-close { position: absolute; top: 6px; right: 6px; width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: 16px var(--font); cursor: pointer; }
+.flasher-done-close:hover, .flasher-done-close:focus-visible { color: var(--text); background: var(--surface); }
 .install-alternative { margin: 20px 0; }
 .install-alternative h2 { margin-top: 0; font-size: 22px; }
 @media (max-width: 480px) {
@@ -185,9 +196,14 @@ summary { cursor: pointer; font-weight: 600; }
   .hero { grid-template-columns: 1fr; padding-top: 32px; }
 }
 @media (max-width: 760px) {
-  /* Phones: the header scrolls with the page. Sticky, it stayed on screen with
-   * the menu open (over half the viewport) and could hide the page heading. */
-  .top { position: relative; backdrop-filter: none; background: var(--bg); }
+  /* Phones: the header stays on top while scrolling, opaque (a blurred
+   * translucent bar can freeze while scrolling on mobile browsers). The open
+   * menu never grows past the screen: it scrolls inside, and site.js closes
+   * it when the page scrolls, on a tap outside or with Escape, so it cannot
+   * stay over the page heading. Anchored headings stop below the bar. */
+  .top { backdrop-filter: none; background: var(--bg); }
+  .site-nav.open { max-height: calc(100vh - 80px); max-height: calc(100dvh - 80px); overflow-y: auto; overscroll-behavior: contain; }
+  main [id] { scroll-margin-top: 80px; }
   .tools .menu { display: inline-flex; }
   .tools .theme { display: none; }   /* phones: the board icon takes its place; the theme follows the phone */
   .top-inner { flex-wrap: wrap; gap: 8px; }
