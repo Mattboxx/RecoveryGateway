@@ -253,10 +253,10 @@ def flasher_html(page: Page) -> str:
             '<strong>Installed. Welcome to RecoveryGateway!</strong>'
             '<p>Next: join the board\'s <code>RecoveryGateway-Setup-XXXX</code> Wi-Fi and follow '
             f'<a href="{setup}">the first-boot setup</a>.</p>'
-            '<p class="flasher-tip">If it turns out useful to you, a small tip helps keep it going. '
-            'Entirely optional: everything stays free. '
-            '<a href="https://ko-fi.com/mattboxx" data-support-open aria-haspopup="dialog" '
-            'aria-controls="support-dialog">Leave a tip</a></p></div></section>')
+            '<div class="flasher-tip"><p>If it turns out useful to you, a small tip helps keep it going. '
+            'Entirely optional: everything stays free.</p>'
+            '<a class="btn tip-btn" href="https://ko-fi.com/mattboxx" data-support-open aria-haspopup="dialog" '
+            'aria-controls="support-dialog"><span aria-hidden="true">❤</span> Leave a tip</a></div></div></section>')
 
 
 def release_note(page: Page) -> str:

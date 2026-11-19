@@ -55,10 +55,26 @@
   }
 
   var menu = document.querySelector('.menu'), nav = document.getElementById('site-nav');
-  if (menu && nav) menu.addEventListener('click', function () {
-    var open = nav.classList.toggle('open');
-    menu.setAttribute('aria-expanded', open ? 'true' : 'false');
-  });
+  if (menu && nav) {
+    var openedAt = 0;
+    var setMenu = function (open) {
+      nav.classList.toggle('open', open);
+      menu.setAttribute('aria-expanded', open ? 'true' : 'false');
+      openedAt = window.scrollY;
+    };
+    menu.addEventListener('click', function () { setMenu(!nav.classList.contains('open')); });
+    // The open menu must not stay over the page: close it when the page
+    // scrolls, on a tap outside the header or with Escape.
+    window.addEventListener('scroll', function () {
+      if (nav.classList.contains('open') && Math.abs(window.scrollY - openedAt) > 40) setMenu(false);
+    }, { passive: true });
+    document.addEventListener('click', function (e) {
+      if (nav.classList.contains('open') && !e.target.closest('.top')) setMenu(false);
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && nav.classList.contains('open')) { setMenu(false); menu.focus(); }
+    });
+  }
 
   var theme = document.querySelector('.theme');
   if (theme) theme.addEventListener('click', function () {
