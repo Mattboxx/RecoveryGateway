@@ -82,6 +82,18 @@ pages.unshift('');
         await page.click('.menu');
         if (!(await page.isVisible('#site-nav'))) failures.push(`${width}: mobile menu does not open`);
         if (shots) await page.screenshot({ path: path.join(shots, `site-${width}-menu.png`) });
+        // The bar stays on top while scrolling; the open menu fits the screen
+        // and closes on page scroll, a tap outside or Escape.
+        const fits = await page.evaluate(() => document.getElementById('site-nav').getBoundingClientRect().bottom <= innerHeight + 1);
+        if (!fits) failures.push(`${width}: open menu taller than the screen`);
+        await page.evaluate(() => scrollTo(0, 600)); await page.waitForTimeout(250);
+        if (await page.isVisible('#site-nav')) failures.push(`${width}: menu stays open while the page scrolls`);
+        if (await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top)) !== 0)
+          failures.push(`${width}: header does not follow the scroll`);
+        await page.click('.menu'); await page.click('main h2, main p');
+        if (await page.isVisible('#site-nav')) failures.push(`${width}: menu stays open after a tap outside`);
+        await page.click('.menu'); await page.keyboard.press('Escape');
+        if (await page.isVisible('#site-nav')) failures.push(`${width}: menu stays open after Escape`);
       }
       await page.goto(base, { waitUntil: 'load' });
       if (width > 760 && await page.isVisible('.menu')) failures.push(`${width}: mobile menu button visible on a wide screen`);
@@ -153,6 +165,38 @@ pages.unshift('');
           expectedW:Number(el.getAttribute('width')),expectedH:Number(el.getAttribute('height'))}));
         if (dimensions.w !== dimensions.expectedW || dimensions.h !== dimensions.expectedH)
           failures.push(`${width}: screenshot dimensions mismatch ${await img.getAttribute('src')}`);
+      }
+      // Web installer: the next step and one quiet tip line appear only after a
+      // finished install, once the installer dialog closes; the tip line at
+      // most once a month per browser. The dialog is a local stand-in for
+      // ESP Web Tools' element (no USB device in the test).
+      await page.goto(base + 'install-firmware/', { waitUntil: 'load' });
+      if (await page.locator('#flasher-done').count()) {
+        await page.evaluate(() => localStorage.removeItem('rg-tip-shown'));
+        const fakeInstall = finished => page.evaluate(async finished => {
+          const d = document.createElement('ewt-install-dialog');
+          document.body.appendChild(d);
+          await new Promise(r => setTimeout(r, 50));
+          d._installState = { state: finished ? 'finished' : 'writing' };
+          await new Promise(r => setTimeout(r, 700));
+          d.dispatchEvent(new CustomEvent('closed')); d.remove();
+        }, finished);
+        await fakeInstall(false);
+        if (await page.isVisible('#flasher-done')) failures.push(`${width}: install note shown without a finished install`);
+        await fakeInstall(true);
+        if (!(await page.isVisible('#flasher-done')) || !(await page.isVisible('#flasher-done .flasher-tip')))
+          failures.push(`${width}: install note or tip line missing after a finished install`);
+        await page.locator('#flasher-done [data-support-open]').click();
+        await dialog.waitFor({ state: 'visible' });
+        await page.keyboard.press('Escape');
+        await dialog.waitFor({ state: 'hidden' });
+        await page.locator('.flasher-done-close').click();
+        if (await page.isVisible('#flasher-done')) failures.push(`${width}: install note does not close`);
+        await fakeInstall(true);
+        if (!(await page.isVisible('#flasher-done')) || await page.isVisible('#flasher-done .flasher-tip'))
+          failures.push(`${width}: tip line repeated within a month`);
+        if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth))
+          failures.push(`${width}: install note overflows horizontally`);
       }
       if (errors.length) failures.push(`${width}: console/page errors ${[...new Set(errors)].slice(0, 3).join(' | ')}`);
       await context.close();
