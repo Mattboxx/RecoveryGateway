@@ -7,10 +7,10 @@ roles, not for local administration or local Wake-on-LAN.
 
 ## 1. Choose an installation method
 
-- **Browser:** [Install firmware](https://mattboxx.github.io/esp32-tailnet-gateway/install-firmware/)
+- **Browser:** [Install firmware](https://mattboxx.github.io/RecoveryGateway/install-firmware/)
   in desktop Chrome/Edge, connect USB and choose the ESP32-S3 port.
 - **Easy Install:** download the Windows/macOS/Linux ZIP from the
-  [current downloads page](https://mattboxx.github.io/esp32-tailnet-gateway/downloads/).
+  [current downloads page](https://mattboxx.github.io/RecoveryGateway/downloads/).
   Read `START-HERE.txt`. Windows includes esptool; macOS/Linux need Python 3
   and esptool 5. Choose `windows/INSTALL-NEW-DEVICE.bat` for a fresh setup or
   `windows/UPDATE-KEEP-SETTINGS.bat` for an existing gateway.
@@ -81,5 +81,5 @@ and [Troubleshooting](TROUBLESHOOTING.md) explain the options.
 
 Firmware 1.13 and earlier installations that missed the OTA bridge need one
 manual update after the repository rename; see [Migration](MIGRATION-RENAME.md).
-Their [versioned installation guide](https://github.com/Mattboxx/esp32-tailnet-gateway/blob/v0.1.38-Mattboxx-1.13/README.md)
+Their [versioned installation guide](https://github.com/Mattboxx/RecoveryGateway/blob/v0.1.38-Mattboxx-1.13/README.md)
 and original downloads remain in the historical release.

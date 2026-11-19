@@ -1,5 +1,17 @@
 # Validation records
 
+3.0.28 stable, RecoveryGateway (release source `0c41c47`, MicroLink `9b0a70e`; BIN e63ebdbe66ac1f31376f6529f24674fad7334a9c1ea11475db8de4d494a69f92; bootloader, partition table and esptool as 3.0.27). Content:
+- product renamed RecoveryGateway (UI, Home Assistant device, notifications, first-boot Wi-Fi);
+- updater asks `Mattboxx/RecoveryGateway` first, then the two older names on 404.
+
+- **Offline:**
+  - clean build, image provenance PASS on `0c41c47`;
+  - `validate_all.py --build --browser` on `18550a1`: 167/168, the failure being `site-browser` (declared sizes of two regenerated screenshots), fixed and rerun with the site, release and sensitive-data checks;
+  - the release is packaged from the archived, board-tested image.
+- **Board A over Tailscale, 21/21:** the checks of 3.0.27 plus the product name and an update check that fell back from `RecoveryGateway` (404 before the rename) to the current repository.
+- **Repository rename:** checked after publication by emulating both updaters (API with redirects disabled, download redirect host) against `Mattboxx/RecoveryGateway` and the redirect repository at the old name.
+- **Not run:** an OTA from a real 3.0.27 board through the redirect repository (same API and download path as today's releases).
+
 3.0.27 stable (release source `8a51c84`, MicroLink `9b0a70e`; BIN 4eef32c83e38b594bd6d832e57caaedb86f03c45dc89976adb12d487521328d2; bootloader, partition table and esptool as 3.0.26). Content:
 - RFC 3339 key expiry times with offsets and late years (a peer with "+01:00" used to make the whole map refused);
 - exact registration user ID.

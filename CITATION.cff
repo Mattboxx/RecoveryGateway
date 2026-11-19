@@ -12,8 +12,8 @@ authors:
 version: 3.0.28
 date-released: 2026-11-18
 license: GPL-3.0-only
-repository-code: "https://github.com/Mattboxx/esp32-tailnet-gateway"
-url: "https://mattboxx.github.io/esp32-tailnet-gateway/"
+repository-code: "https://github.com/Mattboxx/RecoveryGateway"
+url: "https://mattboxx.github.io/RecoveryGateway/"
 keywords:
   - esp32
   - esp32-s3

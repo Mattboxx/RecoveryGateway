@@ -29,11 +29,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / 'website'
 # Repository rename (MIGRATION-RENAME.md): flip RENAMED only after GitHub has
 # renamed the repository, then rebuild and redeploy. Every URL derives from it.
+# The old name now holds only the redirect repository (transition release and
+# redirect pages): never link it.
 RENAMED = True
-REPO_SLUG = 'esp32-tailnet-gateway' if RENAMED else 'esp32-tailscale-gateway-NAS-recovery'
+REPO_SLUG = 'RecoveryGateway' if RENAMED else 'esp32-tailnet-gateway'
 SITE_URL = f'https://mattboxx.github.io/{REPO_SLUG}/'
 REPO_URL = f'https://github.com/Mattboxx/{REPO_SLUG}'
-FUTURE_REPO_URL = 'https://github.com/Mattboxx/esp32-tailnet-gateway'
+FUTURE_REPO_URL = 'https://github.com/Mattboxx/RecoveryGateway'
 NAME = 'RecoveryGateway'
 TAGLINE = 'One ESP32. Multiple Tailnet roles. Enable only what you need.'
 DESCRIPTION = ('All-in-one ESP32-S3 Tailscale/Headscale gateway with selective '
@@ -44,7 +46,7 @@ STABLE_TAG = 'v' + STABLE_VERSION
 # Current firmware: keep NEXT_PUBLISHED False until the qualified release
 # exists. When True, website/firmware/<NEXT_VERSION>/ must hold the exact
 # released files (see website/firmware/README.md); the build verifies them.
-NEXT_VERSION = '3.0.27'
+NEXT_VERSION = '3.0.28'
 NEXT_PUBLISHED = True
 FIRMWARE_DIR = SRC / 'firmware'
 EWT_VERSION = '10.4.0'   # ESP Web Tools bundle vendored in website/assets/esp-web-tools/

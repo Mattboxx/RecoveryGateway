@@ -93,7 +93,7 @@ try:
         fixture(Path(d) / build_site.NEXT_VERSION)
         for renamed, published in ((False, False), (False, True), (True, True)):
             build_site.RENAMED, build_site.NEXT_PUBLISHED = renamed, published
-            build_site.REPO_SLUG = 'esp32-tailnet-gateway' if renamed else 'esp32-tailscale-gateway-NAS-recovery'
+            build_site.REPO_SLUG = 'RecoveryGateway' if renamed else 'esp32-tailnet-gateway'
             build_site.REPO_URL = 'https://github.com/Mattboxx/' + build_site.REPO_SLUG
             build_site.SITE_URL = 'https://mattboxx.github.io/' + build_site.REPO_SLUG + '/'
             build_site.FIRMWARE_DIR = Path(d)

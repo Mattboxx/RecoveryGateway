@@ -7,28 +7,41 @@ Tailnet Gateway). Same firmware, same settings: the internal identity
 (`esp32_tsr`, saved settings, the updater's checks) does not change, and the
 first-boot Wi-Fi is now `RecoveryGateway-Setup-XXXX`.
 
-The repository and the website keep their addresses for now
-(`Mattboxx/esp32-tailnet-gateway`, `mattboxx.github.io/esp32-tailnet-gateway`).
-3.0.28 prepares a later rename of the repository to `Mattboxx/RecoveryGateway`:
+With 3.0.28 the repository was renamed to `Mattboxx/RecoveryGateway` and the
+website moved to `mattboxx.github.io/RecoveryGateway`.
 
-- the updater asks `Mattboxx/RecoveryGateway` first, then
+- **Updater.** 3.0.28 asks `Mattboxx/RecoveryGateway` first, then
   `Mattboxx/esp32-tailnet-gateway` only if that answers 404, then the older
-  name, and accepts downloads from any of the three release paths;
-- before the repository is renamed, wait until most gateways run 3.0.28 or
-  later: 3.0.27 and earlier ask only `esp32-tailnet-gateway` and cannot follow
-  GitHub's redirect, so they would show "GitHub check failed" and need a manual
-  update (System → Firmware with a file, or the web installer, keeping
-  settings);
-- after the rename, never create a new repository at `esp32-tailnet-gateway`;
-- GitHub redirects the code pages but not the website: keep the website at its
-  address or publish a redirect page when it moves.
+  name, and accepts downloads from any of the three release paths.
+- **Redirect repository.** Firmware 3.0.27 and older asks only
+  `Mattboxx/esp32-tailnet-gateway`, with redirects disabled, so it cannot follow
+  GitHub's rename redirect. A small repository therefore keeps that name: it
+  holds no source, only the 3.0.28 **transition release** (the same files as
+  the 3.0.28 release here, including `firmware.bin`) and redirect pages. Those
+  gateways find 3.0.28 with a normal update check; from then on they use this
+  repository. Give it a new release only when a newer transition image is
+  needed, and never delete or rename it.
+- **Website.** GitHub Pages does not follow a rename. The redirect repository
+  publishes `mattboxx.github.io/esp32-tailnet-gateway/`, whose pages (including
+  its 404 page for every deep link) send visitors to the same path under
+  `mattboxx.github.io/RecoveryGateway/`.
+- **Code links.** Because the old name is taken by the redirect repository,
+  GitHub no longer redirects `github.com/Mattboxx/esp32-tailnet-gateway/...`:
+  its front page points here, but old deep links (a file, a tag, an issue)
+  answer 404 there. Maintained documents link the new name. Firmware 3.0.28
+  still links the old repository from System → About (the next firmware links
+  the new one) and hides the release-notes link for releases of the new name.
+- **Git remotes.** Point clones to `https://github.com/Mattboxx/RecoveryGateway.git`:
+  the old URL now reaches the redirect repository, not this one.
+- The oldest name, `Mattboxx/esp32-tailscale-gateway-NAS-recovery`, still
+  redirects here.
 
 ## Earlier rename
 
 The project was **ESP32 Tailnet Gateway — Mattboxx Edition**.
 The existing repository has moved from
 `Mattboxx/esp32-tailscale-gateway-NAS-recovery` to
-[`Mattboxx/esp32-tailnet-gateway`](https://github.com/Mattboxx/esp32-tailnet-gateway).
+`Mattboxx/esp32-tailnet-gateway` (now [`Mattboxx/RecoveryGateway`](https://github.com/Mattboxx/RecoveryGateway)).
 Its history, fork relationship, issues, tags and historical releases remain.
 Do not create another repository at the old name: it would break redirects.
 
@@ -52,9 +65,9 @@ its `firmware.bin` directly to a 1.x/2.x layout.
 
 1. Back up your configuration and check the [3.x hardware requirements](HARDWARE.md).
 2. For a cable-based upgrade, use the current [Easy Install keep-settings
-   option](https://mattboxx.github.io/esp32-tailnet-gateway/easy-install/).
+   option](https://mattboxx.github.io/RecoveryGateway/easy-install/).
 3. For the staged network route, first upload `firmware.bin` from the
-   [legacy 1.100 bridge](https://github.com/Mattboxx/esp32-tailnet-gateway/releases/tag/v0.1.38-Mattboxx-1.100)
+   [legacy 1.100 bridge](https://github.com/Mattboxx/RecoveryGateway/releases/tag/v0.1.38-Mattboxx-1.100)
    in **System → Firmware**. This is the old-layout bridge, not the latest 3.x image.
 4. Continue through the **2.1.0 bridge** and its **Move to the 3.0 flash layout**
    action as described in [Moving to 3.0](MIGRATION-3.0.md).

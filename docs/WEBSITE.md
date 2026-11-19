@@ -42,7 +42,7 @@ No partial translation is published.
 ## Publishing (owner authorization required)
 
 `.github/workflows/pages.yml` runs only on manual dispatch. Pages is published
-from `Main` at `https://mattboxx.github.io/esp32-tailnet-gateway/` after the
+from `Main` at `https://mattboxx.github.io/RecoveryGateway/` after the
 repository rename. `NEXT_VERSION` selects the versioned installer; its files
 must remain byte-identical to the released package. Presentation-only changes
 do not rebuild firmware or replace release assets. CSS URLs include a content

@@ -12,7 +12,7 @@ reference to its commit before and after the edit, so those records stay
 verifiable: check out the "now" commit and the source files are the ones the
 release was built from.
 
-## Firmware repository (`Mattboxx/esp32-tailnet-gateway`)
+## Firmware repository (`Mattboxx/RecoveryGateway`, formerly `Mattboxx/esp32-tailnet-gateway`)
 
 | Reference | Commit before | Commit now |
 |---|---|---|

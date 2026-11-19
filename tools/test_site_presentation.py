@@ -20,8 +20,12 @@ for file in site.rglob('*.html'):
             and text.strip() == 'google-site-verification: ' + file.name):
         continue  # Ownership proof is an exact plain-text file, not a site page.
     if not build_site.RENAMED:
-        assert 'https://github.com/Mattboxx/esp32-tailnet-gateway' not in text, file
-        assert 'https://mattboxx.github.io/esp32-tailnet-gateway/' not in text, file
+        assert 'https://github.com/Mattboxx/RecoveryGateway' not in text, file
+        assert 'https://mattboxx.github.io/RecoveryGateway/' not in text, file
+    else:
+        # The old name is only the redirect repository: the site never links it.
+        assert 'github.com/Mattboxx/esp32-tailnet-gateway' not in text, file
+        assert 'mattboxx.github.io/esp32-tailnet-gateway' not in text, file
     if not build_site.NEXT_PUBLISHED:
         assert not re.search(r'releases/download/[^\s"<>]*(?:1\.14|v2\.)', text), file
         assert 'esp-web-install-button' not in text, file

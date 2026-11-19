@@ -14,9 +14,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   same settings: nothing to reconfigure. The web interface, Home Assistant
   device, notifications, logo, covers, website and release files carry the new
   name. The first-boot Wi-Fi of a new device is now `RecoveryGateway-Setup-XXXX`.
-- The updater also follows a later rename of the repository to
-  `Mattboxx/RecoveryGateway`: it asks that name first and the current one when
-  it does not exist yet. Update to 3.0.28 before that rename happens.
+- **New addresses:** the repository is now `Mattboxx/RecoveryGateway` and the
+  website moved with it.
+  Old website links open the same page at the new address.
+- The updater looks for releases in `Mattboxx/RecoveryGateway` first.
+  Gateways on 3.0.27 or older still look under the old name, where a redirect
+  repository keeps this 3.0.28 release for them: check for updates, install
+  3.0.28, and later updates come from the new repository.
 
 ### Website
 
