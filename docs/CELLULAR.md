@@ -1,4 +1,4 @@
-# Cellular uplink (GSM/LTE with a SIM) — experimental
+# Cellular uplink (GSM/LTE with a SIM)
 
 Firmware 3.0 can use an external cellular modem as its Internet uplink: as the
 main uplink, or only while WiFi and Ethernet are down (failover). The modem
@@ -113,7 +113,9 @@ modem's own default context (or the stick's settings) is used.
 
 ### Compatibility
 
-Nothing below has been tested with real hardware yet. "Expected" means the
+Tested with real hardware: a **TCL LinkKey IK41 4G USB stick** (`1bbb:0195`, USB
+network mode) as the main Internet uplink. Nothing else below has been tested
+with real hardware yet. "Expected" means the
 device exposes interfaces this firmware drives; firmware variants of the same
 model can differ.
 
