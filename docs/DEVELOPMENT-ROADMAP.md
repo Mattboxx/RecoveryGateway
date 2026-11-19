@@ -255,6 +255,15 @@ PSRAM placement, cache tuning) is the base of this branch (`v3`).
    Telegram/SMTP/DuckDNS/Cloudflare accounts, DNS clients, throughput).
 7. Everything already planned stays planned (this roadmap, F01–F49).
 
+## Next firmware (after 3.0.29) — owner requests to carry
+
+- **System → About, "Source":** the link already opens `Mattboxx/RecoveryGateway`
+  (3.0.29), but its visible text still reads
+  `github.com/Mattboxx/esp32-tailnet-gateway` (`main/index.html` and the
+  `main/i18n/*.json` entries). Show `github.com/Mattboxx/RecoveryGateway`
+  (owner, 2026-11-19: "ricorda nella prossima versione di aggiustare questo
+  nelle info del firmware").
+
 ## 3.0.26 and later — Tailnet reach (owner decision, 2026-11-18)
 
 Owner: "procedi in tutti i punti" after the 3.0.25 review
