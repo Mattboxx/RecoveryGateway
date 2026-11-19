@@ -144,7 +144,7 @@ VARIANTS = {
     'eth': ('esp32-s3-eth', 'firmware-eth.bin', 'firmware-eth-factory.bin', '-eth'),
 }
 # The current repository name keeps working after the rename (GitHub redirects).
-SOURCE_URL = 'https://github.com/Mattboxx/esp32-tailnet-gateway'
+SOURCE_URL = 'https://github.com/Mattboxx/RecoveryGateway'
 
 
 def release_readme(version, prerelease, variant):

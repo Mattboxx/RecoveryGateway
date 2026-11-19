@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import zipfile
 
-from package_v2 import (CURRENT_REPOSITORY, RENAMED_REPOSITORY, check_build,
+from package_v2 import (CURRENT_REPOSITORY, RENAMED_REPOSITORY, RECOVERYGATEWAY_REPOSITORY, check_build,
                         repository_url, validate_version, write_sums, zip_dir)
 
 
@@ -27,6 +27,8 @@ class V2PackagingTests(unittest.TestCase):
                          'https://github.com/Mattboxx/esp32-tailscale-gateway-NAS-recovery')
         self.assertEqual(repository_url(RENAMED_REPOSITORY),
                          'https://github.com/Mattboxx/esp32-tailnet-gateway')
+        self.assertEqual(repository_url(RECOVERYGATEWAY_REPOSITORY),
+                         'https://github.com/Mattboxx/RecoveryGateway')
         for value in ('https://example.com', '../other', 'OtherOwner/firmware', ''):
             with self.assertRaises(AssertionError): repository_url(value)
 
