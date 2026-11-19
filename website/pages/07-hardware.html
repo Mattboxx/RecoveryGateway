@@ -13,6 +13,14 @@ order: 7
 </figure>
 
 <p class="lead">The firmware runs on an <strong>ESP32-S3 with 8 MB octal PSRAM and at least 8 MB of quad flash</strong>: N8R8 and N16R8 modules. One image serves both; a 16 MB board uses the first 8 MB.</p>
+<section class="card" id="buy">
+  <h2>Buy the tested board</h2>
+  <p>The gateway is developed and tested on the <strong>ESP32-S3-DevKitC-1 N16R8</strong> (16 MB flash, 8 MB octal PSRAM). If you do not have a board yet, these are the ones used for development:</p>
+  <p class="cta"><a class="btn primary" href="https://link.amazon/B0hzOWAlV" rel="sponsored nofollow noopener" target="_blank">ESP32-S3-DevKitC-1 N16R8 on Amazon (1)</a> <a class="btn" href="https://link.amazon/B0891h232" rel="sponsored nofollow noopener" target="_blank">ESP32-S3-DevKitC-1 N16R8 on Amazon (2)</a></p>
+  <p>For a wired connection: an ESP32-S3 board with <strong>built-in Ethernet and a PoE module</strong>. <a class="btn" href="https://link.amazon/B02rb02fJ" rel="sponsored nofollow noopener" target="_blank">ESP32-S3 with Ethernet and PoE on Amazon</a></p>
+  <p><small>Ethernet support (W5500) is experimental and not yet validated on real hardware; check that the board has 8 MB octal PSRAM (R8) and at least 8 MB of flash, and set its W5500 pins under Network → Ethernet.</small></p>
+  <p class="note"><small>Affiliate links: buying through them supports the project at no extra cost to you. As an Amazon Associate I earn from qualifying purchases. Any supported board below works.</small></p>
+</section>
 <h2 id="supported">Supported ESP32-S3 boards</h2>
 <table>
   <thead><tr><th>Board</th><th>Flash · PSRAM</th><th>Status</th></tr></thead>
@@ -45,7 +53,7 @@ order: 7
 
 <h2>W5500 Ethernet and cellular (experimental)</h2>
 <p class="note">From 3.0.25 a USB LTE modem, a 4G stick, a USB Ethernet adapter or phone tethering can also use the board's USB port. The board does not power that port: read <a href="{{root}}usb-devices/">USB modems, sticks and Ethernet adapters</a> before plugging anything in.</p>
-<p>The standard firmware image includes a driver for an explicitly wired W5500 SPI module: off until configured, explicit pins, DHCP or static IPv4, WiFi-first or Ethernet-first. It is host-tested only and <strong>not validated on real hardware</strong>; wire it as documented in <a href="{{repo}}/blob/Main/docs/ETHERNET.md">docs/ETHERNET.md</a>. A UART cellular modem with a SIM can be used as a primary or failover uplink, also off until configured and not yet tested with a real modem (<a href="{{repo}}/blob/Main/docs/CELLULAR.md">docs/CELLULAR.md</a>).</p>
+<p>The standard firmware image includes a driver for an explicitly wired W5500 SPI module: off until configured, explicit pins, DHCP or static IPv4, WiFi-first or Ethernet-first. It is host-tested only and <strong>not validated on real hardware</strong>; wire it as documented in <a href="{{repo}}/blob/Main/docs/ETHERNET.md">docs/ETHERNET.md</a>, or use an ESP32-S3 board with built-in Ethernet and PoE (<a href="#buy">see above</a>). A UART cellular modem with a SIM can be used as a primary or failover uplink, also off until configured and not yet tested with a real modem (<a href="{{repo}}/blob/Main/docs/CELLULAR.md">docs/CELLULAR.md</a>).</p>
 
 <h2>Single radio</h2>
 <p>The uplink and the access point share one 2.4 GHz radio and channel. After a roam to a different channel the device realigns the AP, which briefly interrupts AP clients.</p>

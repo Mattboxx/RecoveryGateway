@@ -18,6 +18,15 @@ current candidate.
 | `esp32-s3` (3.x, releases) | W5500 driver compiled, OFF until configured | One image for every board and language |
 | 2.x `esp32-s3-eth` (historical) | W5500 driver compiled | Separate English-only image of the 2.x line |
 
+## Boards with built-in Ethernet
+
+An ESP32-S3 board with a built-in W5500 and a PoE module needs no wiring:
+enter its W5500 pins (from the board's documentation) under Network →
+Ethernet. It must have 8 MB octal PSRAM (R8) and at least 8 MB of flash. Not
+yet validated on real hardware. The one considered for this project:
+[Amazon link](https://link.amazon/B02rb02fJ) (*affiliate link: buying through it supports
+the project at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.*)
+
 ## Wiring and settings
 
 Network → **Ethernet uplink**, *Connection*: *W5500 module on SPI pins* or
