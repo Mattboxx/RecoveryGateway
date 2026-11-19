@@ -47,7 +47,7 @@ struct netif;
 static bool microlink_wg_has_peer_ip(struct netif *wg, uint32_t ip);
 struct netif { struct netif *next; char name[2]; uint8_t num, napt, flags; bool up, link; ip4_addr_t ip, mask, gw; };
 #define NETIF_FLAG_ETHARP 0x08
-#define ip_addr_set_ip4_u32(a,v) ((a)->addr = (v))
+#define IPADDR4_INIT(v) {v}
 static struct netif *netif_list, *netif_default;
 #define netif_ip4_addr(n) (&(n)->ip)
 #define netif_ip4_netmask(n) (&(n)->mask)

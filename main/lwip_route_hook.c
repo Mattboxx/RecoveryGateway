@@ -240,15 +240,13 @@ static void cell_dns_follow(struct netif *cell, struct netif *lan)
         if (!lan_resolver) return;
         if (!s_dns_set) s_dns_saved = now;    /* keep the first LAN resolver seen */
         s_dns_set = gw;
-        ip_addr_t server;
-        ip_addr_set_ip4_u32(&server, gw);
+        ip_addr_t server = IPADDR4_INIT(gw);
         dns_setserver(0, &server);
         ESP_LOGW(TAG, "mobile uplink in use: DNS follows the modem's gateway");
         return;
     }
     if (s_dns_set && now == s_dns_set && s_dns_saved) {
-        ip_addr_t server;
-        ip_addr_set_ip4_u32(&server, s_dns_saved);
+        ip_addr_t server = IPADDR4_INIT(s_dns_saved);
         dns_setserver(0, &server);
         ESP_LOGW(TAG, "LAN uplink in use again: its DNS restored");
     }
