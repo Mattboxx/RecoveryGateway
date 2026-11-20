@@ -76,6 +76,26 @@
     });
   }
 
+  // Phones: the bar slides away while scrolling down and comes back on any
+  // scroll up, so it never sits over the text being read; it stays visible
+  // near the top of the page, while the menu is open and on keyboard focus.
+  var bar = document.querySelector('.top');
+  if (bar && window.matchMedia) {
+    var phone = window.matchMedia('(max-width: 760px)');
+    var lastY = window.scrollY;
+    var showBar = function () { bar.classList.remove('is-hidden'); };
+    var updateBar = function () {
+      var y = window.scrollY, nearTop = y <= bar.offsetHeight;
+      if (!phone.matches || nearTop || (nav && nav.classList.contains('open'))) showBar();
+      else if (y > lastY + 8) bar.classList.add('is-hidden');
+      else if (y < lastY - 8) showBar();
+      if (nearTop || Math.abs(y - lastY) > 8) lastY = y;
+    };
+    window.addEventListener('scroll', updateBar, { passive: true });
+    bar.addEventListener('focusin', showBar);
+    if (phone.addEventListener) phone.addEventListener('change', showBar);
+  }
+
   var theme = document.querySelector('.theme');
   if (theme) theme.addEventListener('click', function () {
     var current = doc.getAttribute('data-theme') ||

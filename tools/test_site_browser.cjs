@@ -82,14 +82,25 @@ pages.unshift('');
         await page.click('.menu');
         if (!(await page.isVisible('#site-nav'))) failures.push(`${width}: mobile menu does not open`);
         if (shots) await page.screenshot({ path: path.join(shots, `site-${width}-menu.png`) });
-        // The bar stays on top while scrolling; the open menu fits the screen
-        // and closes on page scroll, a tap outside or Escape.
+        // The open menu fits the screen and closes on page scroll, a tap
+        // outside or Escape. The bar slides away while scrolling down (it never
+        // covers the text being read) and comes back on scroll up and at the top.
         const fits = await page.evaluate(() => document.getElementById('site-nav').getBoundingClientRect().bottom <= innerHeight + 1);
         if (!fits) failures.push(`${width}: open menu taller than the screen`);
-        await page.evaluate(() => scrollTo(0, 600)); await page.waitForTimeout(250);
+        const barTop = () => page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().bottom));
+        await page.evaluate(() => scrollTo(0, 600)); await page.waitForTimeout(400);
         if (await page.isVisible('#site-nav')) failures.push(`${width}: menu stays open while the page scrolls`);
+        await page.evaluate(() => scrollTo(0, 900)); await page.waitForTimeout(400);
+        if (await barTop() > 1) failures.push(`${width}: header covers the text while scrolling down`);
+        await page.evaluate(() => scrollTo(0, 700)); await page.waitForTimeout(400);
         if (await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top)) !== 0)
-          failures.push(`${width}: header does not follow the scroll`);
+          failures.push(`${width}: header does not come back on scroll up`);
+        await page.evaluate(() => scrollTo(0, 1100)); await page.waitForTimeout(400);
+        await page.evaluate(() => scrollTo(0, 0)); await page.waitForTimeout(400);
+        if (await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top)) !== 0)
+          failures.push(`${width}: header hidden at the top of the page`);
+        await page.evaluate(() => scrollTo(0, 400)); await page.waitForTimeout(400);
+        await page.evaluate(() => scrollTo(0, 300)); await page.waitForTimeout(400);
         await page.click('.menu'); await page.click('main h2, main p');
         if (await page.isVisible('#site-nav')) failures.push(`${width}: menu stays open after a tap outside`);
         await page.click('.menu'); await page.keyboard.press('Escape');
