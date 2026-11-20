@@ -132,7 +132,7 @@ For the historical 3.0.2 notice bundles, see [their separate checksums](licenses
 ## Supported hardware
 
 <p align="center">
-<img src="assets/diagrams/hardware.svg" alt="ESP32-S3 N16R8 or N8R8 board, independent USB power, optional microSD and optional W5500 Ethernet." width="100%">
+<img src="assets/diagrams/hardware.svg" alt="ESP32-S3 N16R8 or N8R8 board. Tested 4G setup: one charger on an OTG Y-cable powers the board and a TCL LinkKey IK41 SIM stick; computer on the COM port optional; optional microSD, W5500 Ethernet and UART modem." width="100%">
 </p>
 
 Firmware 3.x runs on **ESP32-S3 with 8 MB octal PSRAM and at least 8 MB of
@@ -182,13 +182,17 @@ you. As an Amazon Associate I earn from qualifying purchases.*
 
 - **The board does not supply 5 V on its USB port.** Use a powered USB-C OTG
   Y-cable with a 5 V charger (at least 2.5 A for a modem or stick), or the
-  device's own 5 V supply with grounds connected. LTE modems draw **up to 2 A**
+  device's own 5 V supply with grounds connected. **Tested:** a single charger
+  on the Y-cable's power input runs both the board and a TCL LinkKey IK41
+  stick (cable plug in the board's USB port, stick in the cable's socket),
+  with nothing on the COM port. LTE modems draw **up to 2 A**
   in bursts: a computer's USB port is not enough (modem resets, reset reason
   BROWNOUT).
 - Never connect two 5 V sources together: if you bridge the board's USB-OTG
   pad, never plug that port into a computer or charger.
-- After the restart the USB port is a USB host: flash, logs and power go
-  through the COM port. One device, no hubs, about 10 Mbit/s at most.
+- After the restart the USB port is a USB host: flash and logs go through the
+  COM port; power can come from the Y-cable alone. One device, no hubs, about
+  10 Mbit/s at most.
 - **While a USB connection is on, the Wi-Fi keeps 16 receive buffers instead of
   24** to leave internal RAM for the device. Bursts of Wi-Fi traffic, such as
   a speed test from a phone on the gateway's access point, can be slower or

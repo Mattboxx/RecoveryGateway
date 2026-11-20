@@ -128,3 +128,34 @@
     });
   }
 })();
+/* Interactive hardware diagram: choosing a part shows its details below.
+ * Without JavaScript every detail stays visible as a list. */
+(function () {
+  var fig = document.getElementById('hw-diagram');
+  if (!fig) return;
+  var parts = fig.querySelectorAll('.hw-part');
+  var details = document.querySelectorAll('.hw-detail');
+  if (!parts.length || !details.length) return;
+  document.documentElement.classList.add('hw-js');
+  function select(key, focusDetail) {
+    for (var i = 0; i < parts.length; i++) {
+      var on = parts[i].getAttribute('data-part') === key;
+      parts[i].classList.toggle('is-active', on);
+      parts[i].setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    for (var j = 0; j < details.length; j++) {
+      details[j].classList.toggle('is-active', details[j].getAttribute('data-part') === key);
+    }
+    if (focusDetail && window.matchMedia('(max-width: 700px)').matches) {
+      var d = document.getElementById('hw-d-' + key);
+      if (d) d.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+  for (var i = 0; i < parts.length; i++) {
+    parts[i].addEventListener('click', function () { select(this.getAttribute('data-part'), true); });
+    parts[i].addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(this.getAttribute('data-part'), true); }
+    });
+  }
+  select(details[0].getAttribute('data-part'), false);
+})();

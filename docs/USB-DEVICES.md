@@ -86,6 +86,9 @@ socket for the device, and one power input for a USB charger.
 ```
 
 - The charger powers the device and, through the cable, usually the board too.
+  **Tested** on an ESP32-S3-DevKitC-1 N16R8 with a TCL LinkKey IK41 stick: one
+  charger on the power input runs both the board and the stick, with nothing
+  connected to the COM port.
 - Check the cable's description: it must pass **data** to the USB-C plug and
   **power** to the USB-A socket. Charge-only splitters do not work.
 - Keep the COM port free or connected to a computer only for logs; both can be
