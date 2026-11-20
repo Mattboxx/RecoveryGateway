@@ -27,7 +27,7 @@ const server = http.createServer((req, res) => {
   fs.createReadStream(file).pipe(res);
 });
 
-const viewports = [[320, 640], [360, 740], [390, 844], [430, 932], [768, 1024], [1024, 768], [1440, 900], [1920, 1080], [844, 390]];
+const viewports = [[320, 640], [360, 740], [390, 844], [430, 932], [768, 1024], [820, 1180], [1024, 768], [1180, 820], [1440, 900], [1920, 1080], [844, 390]];
 const pages = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory() && fs.existsSync(path.join(root, d.name, 'index.html'))
   && !/noindex/.test(fs.readFileSync(path.join(root, d.name, 'index.html'), 'utf8'))).map(d => d.name + '/');
 pages.unshift('');
@@ -108,6 +108,15 @@ pages.unshift('');
       }
       await page.goto(base, { waitUntil: 'load' });
       if (width > 760 && await page.isVisible('.menu')) failures.push(`${width}: mobile menu button visible on a wide screen`);
+      // Tablets (iPad) and desktops: the name, the links and the icons never overlap.
+      if (width > 760 && await page.evaluate(() => {
+        const r = s => document.querySelector(s).getBoundingClientRect();
+        const name = r('.brand > span'), nav = r('.site-nav'), tools = r('.tools');
+        return name.right > nav.left + 1 || nav.right > tools.left + 1;
+      })) failures.push(`${width}: header name, links or icons overlap`);
+      // The chip icon opens the hardware diagram, fully below the header.
+      if (!(await page.getAttribute('.tools .buy', 'href') || '').endsWith('hardware/#hw-diagram'))
+        failures.push(`${width}: chip icon does not open the hardware diagram`);
       if (width > 760 && !(await page.isVisible('#site-nav'))) failures.push(`${width}: main navigation hidden on a wide screen`);
       await page.click('.search-open');
       await page.fill('#search-input', 'headscale');
