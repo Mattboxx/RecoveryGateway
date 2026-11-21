@@ -14,7 +14,7 @@ typedef struct {
 } ota_remote_config_t;
 typedef struct {
     ota_remote_config_t config;
-    bool busy, checked, update_available;
+    bool busy, checked, update_available, restart_pending;
     uint32_t last_check, asset_size;
     unsigned progress;
     uint8_t repo; /* ota_repo() index that answered the last release check */

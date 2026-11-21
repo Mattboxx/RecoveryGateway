@@ -68,6 +68,8 @@ void       wifi_networks_init(void);
 
 /* Number of valid configured networks (0..WIFI_NETWORKS_MAX). */
 int        wifi_networks_count(void);
+/* An explicitly empty saved table is authoritative on boot. */
+bool       wifi_networks_has_saved_table(void);
 
 /* Copy the network at index i into *out. Returns false when i is out of
  * range, the slot is empty, or out is NULL. */
@@ -77,6 +79,12 @@ bool       wifi_networks_get(int i, wifi_network_t *out);
  * count is clamped to WIFI_NETWORKS_MAX and entries with empty ssid
  * are dropped before persisting. */
 esp_err_t  wifi_networks_set_all(const wifi_network_t *arr, int count);
+/* On success, the caller must finish the staged table after the enclosing
+ * settings transaction ends. Readers continue using the old table. */
+esp_err_t  wifi_networks_stage(const wifi_network_t *arr, int count);
+void       wifi_networks_finish_staged(bool publish);
+/* Persist for the next boot without changing the active station table. */
+esp_err_t  wifi_networks_store_for_reboot(const wifi_network_t *arr, int count);
 
 #ifdef __cplusplus
 }

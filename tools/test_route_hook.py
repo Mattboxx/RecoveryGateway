@@ -9,11 +9,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / 'main/lwip_route_hook.c').read_text(encoding='utf-8')
-helpers = source.split('/* Tailscale CGNAT: 100.64.0.0/10 */', 1)[1].split('static struct netif *s_original_default', 1)[0]
+helpers = source.split('/* Tailscale CGNAT: 100.64.0.0/10 */', 1)[1].split('static bool s_wg_udp_pinned', 1)[0]
 hook_start = 'static struct netif *route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest);'
 hook = hook_start + source.split(hook_start, 1)[1].split('/* ---------------------------------------------------------------------', 1)[0]
 diagnostic = 'static void name_netif' + source.split('static void name_netif', 1)[1].split('/* ---------------------------------------------------------------------', 1)[0]
-default_update = 'static void set_default_callback' + source.split('static void set_default_callback', 1)[1].split('typedef struct {', 1)[0]
 napt_start = 'static err_t napt_forward(struct pbuf *p, struct ip_hdr *iphdr, struct netif *inp, struct netif *outp);'
 napt = napt_start + source.split(napt_start, 1)[1]
 # Release definitions of the test-only counters (empty macros).
@@ -31,7 +30,8 @@ typedef struct { uint32_t addr; } ip4_addr_t;
 typedef ip4_addr_t ip_addr_t;
 typedef unsigned char u8_t;
 #define DNS_MAX_SERVERS 2
-#define IP_IS_V4(a) true
+#define IP_IS_V4(a) ((a) != non_ipv4_dns)
+static const ip_addr_t *non_ipv4_dns;
 #define ip_2_ip4(a) (a)
 #define ip_addr_isany(a) ((a)->addr == 0)
 #define ip_addr_isany_val(a) ((a).addr == 0)
@@ -39,7 +39,7 @@ typedef unsigned char u8_t;
 static ip_addr_t dns_servers[DNS_MAX_SERVERS];
 static const ip_addr_t *dns_getserver(u8_t i) { return &dns_servers[i]; }
 static int dns_sets;
-static void dns_setserver(u8_t i, const ip_addr_t *a) { dns_servers[i] = *a; dns_sets++; }
+static void dns_setserver(u8_t i, const ip_addr_t *a) { dns_servers[i] = a ? *a : (ip_addr_t){0}; dns_sets++; }
 static struct dhcp { ip_addr_t server_ip_addr; } dhcp_state;
 #define netif_dhcp_data(n) (&dhcp_state)
 static uint32_t known_peer_nbo;
@@ -64,12 +64,9 @@ static uint32_t swap32(uint32_t x) { return ((x&255)<<24)|((x&0xff00)<<8)|((x>>8
 #define ESP_LOGW(...) ((void)0)
 #define ESP_OK 0
 #define ERR_OK 0
-static bool queue_fails;
 static int tcpip_callback_wait(void (*callback)(void *), void *arg) {
-    if(queue_fails) return -1;
     callback(arg); return ERR_OK;
 }
-static void netif_set_default(struct netif *n) { netif_default=n; }
 #define TAILSCALE_ACCEPTED_ROUTES_MAX 32
 typedef struct { uint32_t network; uint8_t prefix_len; } tailscale_accepted_route_t;
 static tailscale_accepted_route_t tailscale_accepted_routes[TAILSCALE_ACCEPTED_ROUTES_MAX];
@@ -216,9 +213,7 @@ int main(void) {
     assert(napt_enabled_at_call && !wg.napt);
     tailscale_snat_subnet_routes=0;
     reset();
-    set_default_via_tcpip(&sta); assert(netif_default==&sta);
-    queue_fails=true; set_default_via_tcpip(&wg); assert(netif_default==&sta);
-    queue_fails=false; reset();
+    reset();
     /* New 0.1.30 CGNAT exceptions work without exit-node/LAN-bypass mode. */
     sta.ip.addr=swap32(0x64600114); sta.mask.addr=swap32(0xffc00000);
     expect(0,0x6450463d,&sta);
@@ -313,9 +308,9 @@ int main(void) {
     cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fe) && dns_sets==0);   /* LAN in use: untouched */
     cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101) && dns_sets==1);  /* follows the stick */
     cell_dns_follow(&stick,&sta); assert(dns_sets==1);                                             /* stable: no rewrite */
-    dns_servers[0].addr=swap32(0xc0a801fe);                                                        /* a Wi-Fi lease renewal */
+    dns_servers[0].addr=swap32(0xc0a801fd);                                                        /* a renewal supplies a different DNS */
     cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101) && dns_sets==2);
-    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fe) && dns_sets==3);    /* restored */
+    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fd) && dns_sets==3);    /* newest lease restored */
     cell_dns_follow(NULL,&sta); assert(dns_sets==3);
     dns_servers[0].addr=swap32(0x01010101);                                                        /* user's public resolver */
     cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0x01010101) && dns_sets==3);
@@ -324,7 +319,15 @@ int main(void) {
     sta.link=true; dns_servers[0].addr=swap32(0x08080808);                                         /* changed meanwhile */
     cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0x08080808));                   /* not overwritten */
     dns_servers[0].addr=0; cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101));   /* none yet */
-    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a80101));                   /* nothing to restore */
+    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==0);                                                   /* empty slot restored */
+    dns_servers[0].addr=1; non_ipv4_dns=&dns_servers[0]; dns_sets=0;
+    cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==1 && dns_sets==0);           /* IPv6 untouched */
+    non_ipv4_dns=NULL;
+    dns_servers[0].addr=swap32(0xc0a801fd);
+    cell_dns_follow(&stick,&sta);
+    stick.gw.addr=swap32(0xc0a80201);
+    cell_dns_follow(&stick,&sta); assert(dns_servers[0].addr==stick.gw.addr);             /* replacement modem */
+    cell_dns_follow(NULL,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fd));
     struct netif ppp2={.name={'p','p'},.up=true,.link=true,.ip={swap32(0x0a400001)},.mask={swap32(0xffffffff)},.gw={swap32(0x0a404040)}};
     dns_servers[0].addr=swap32(0xc0a801fe); dns_sets=0;
     cell_dns_follow(&ppp2,&sta); assert(dns_servers[0].addr==swap32(0xc0a801fe) && dns_sets==0);  /* PPP: left alone */
@@ -367,15 +370,228 @@ int main(void) {
         reads++;
     }
     assert(!pthread_join(producer,NULL));
-    puts("PASS: real hook/diagnostic parity, Ethernet/Wi-Fi Service Gateway, CGNAT identity, exit routing, every prefix width, queued default updates/failure and concurrent route publication");
+    puts("PASS: real hook/diagnostic parity, Ethernet/Wi-Fi Service Gateway, CGNAT identity, exit routing, every prefix width and concurrent route publication");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='route-hook-') as directory:
     path = Path(directory)
-    (path / 'test.c').write_text(fixture + perf_hooks + helpers + default_update + hook + diagnostic + napt + tests, encoding='utf-8')
+    (path / 'test.c').write_text(fixture + perf_hooks + helpers + hook + diagnostic + napt + tests, encoding='utf-8')
     flags = ['-std=c11', '-pthread', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-Wno-unused-variable']
     if os.environ.get('ROUTE_SANITIZE') == '1':
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     binary = path / ('test.exe' if os.name == 'nt' else 'test')
     subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(path / 'test.c'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
+
+
+def function(signature):
+    start = source.index(signature)
+    return source[start:source.index('\n}', start) + 2] + '\n'
+
+
+startup = 'typedef struct {\n    atomic_bool pending;' + source.split(
+    'typedef struct {\n    atomic_bool pending;', 1)[1].split('static void route_supervisor_task(', 1)[0]
+startup += source[source.index('static void route_supervisor_task('):].split('    while (1) {', 1)[0]
+startup += '    assert(msg && msg->ctx == &request);\n}\n'
+startup += ''.join(map(function, ('static bool start_route_supervisor(', 'static void retry_route_supervisor(',
+                                   'void lwip_route_hook_init(', 'bool lwip_route_hook_supervisor_running(',
+                                   'bool lwip_route_hook_supervisor_degraded(')))
+microlink = (ROOT / 'external/microlink/components/microlink/src/ml_wg_mgr.c').read_text(encoding='utf-8')
+pin_start = microlink.index('esp_err_t microlink_pin_wg_output_netif_core(')
+microlink_pin = microlink[pin_start:microlink.index('\n}', pin_start) + 2] + '\n'
+coordinator = (ROOT / 'external/microlink/components/microlink/src/ml_coord.c').read_text(encoding='utf-8')
+bind_start = coordinator.index('void ml_bind_sock_to_upstream(')
+microlink_pin += coordinator[bind_start:coordinator.index('\n}', bind_start) + 2] + '\n'
+
+startup_fixture = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef struct {void (*callback)(void *); const char *name; bool skip_unhandled_events;} esp_timer_create_args_t;
+typedef esp_timer_create_args_t *esp_timer_handle_t;
+struct tcpip_callback_msg {void (*callback)(void *); void *ctx;};
+#define ESP_OK 0
+#define ESP_ERR_INVALID_STATE 0x103
+#define ERR_OK 0
+#define ESP_LOGW(...) ((void)0)
+#define ESP_LOGI(...) ((void)0)
+#define ESP_LOGE(...) ((void)0)
+#define MALLOC_CAP_SPIRAM 1
+#define pdPASS 1
+#define pdMS_TO_TICKS(ms) (ms)
+bool lwip_route_hook_supervisor_running(void);
+static esp_timer_create_args_t timer;
+static struct tcpip_callback_msg fixture_msg, *queued;
+static int mode, msg_calls, delays, task_calls, timer_deleted;
+static bool timer_active, can_spawn;
+static void (*worker)(void *);
+static bool core, leased, reject_mailbox, tailnet_on=true, upstream_present=true, upstream_changed;
+static uint32_t generation=1, tailscale_exit_node_ip;
+static bool tailscale_accept_routes=true, s_wg_udp_pinned;
+static int64_t now_us;
+static int pins, publications, published_count;
+struct netif {bool up;uint8_t ifindex;};
+static struct netif sta={true,1}, wg={true,2}, eth={true,3};
+static struct netif *netif_default=&sta, *preferred, *last_pin;
+typedef int esp_err_t;
+typedef struct {uint8_t upstream_ifindex;} microlink_t;
+static microlink_t active;
+struct udp_pcb {int unused;};
+static struct udp_pcb pcb, *s_wg_output_pcb=&pcb;
+#define LWIP_ASSERT_CORE_LOCKED() assert(core)
+struct ifreq {char ifr_name[6];};
+#define SOL_SOCKET 1
+#define SO_BINDTODEVICE 2
+static unsigned socket_binds;
+static int netifapi_netif_index_to_name(uint8_t index,char *name){
+    assert(!core && !leased && index==eth.ifindex);
+    if(!upstream_present)return -1;
+    if(upstream_changed)__atomic_store_n(&active.upstream_ifindex,sta.ifindex,__ATOMIC_RELEASE);
+    strcpy(name,"en2");return ERR_OK;
+}
+static int ml_setsockopt(int fd,int level,int option,const struct ifreq *ifr,size_t size){
+    assert(fd==7 && level==SOL_SOCKET && option==SO_BINDTODEVICE && size==sizeof *ifr && !strcmp(ifr->ifr_name,"en2"));
+    socket_binds++;return 0;
+}
+#define TAILSCALE_ACCEPTED_ROUTES_MAX 32
+typedef struct {uint32_t network; uint8_t prefix_len;} tailscale_accepted_route_t;
+typedef struct {int subnet_route_count; tailscale_accepted_route_t subnet_routes[1];} microlink_peer_info_t;
+static bool tailscale_lifecycle_try_acquire(void){if(leased)return false;leased=true;return true;}
+static void tailscale_lifecycle_release(void){assert(leased);leased=false;}
+static uint32_t tailscale_lifecycle_generation(void){assert(leased);return generation;}
+static microlink_t *tailscale_get_microlink(void){assert(leased);return tailnet_on ? &active : NULL;}
+static int microlink_get_peer_count(microlink_t *ml){assert(ml==&active && leased && !core);return 1;}
+static int microlink_get_peer_info(microlink_t *ml,int i,microlink_peer_info_t *p){
+    assert(ml==&active && i==0 && leased && !core);
+    *p=(microlink_peer_info_t){.subnet_route_count=1,.subnet_routes={{0xc0000200,24}}};return ESP_OK;
+}
+static struct netif *find_sta_netif(void){assert(core && leased);return &sta;}
+static struct netif *find_wg_netif(void){assert(core && leased);return &wg;}
+static struct netif *eth_uplink_lwip_select(struct netif *n){assert(n==&sta && core);return preferred;}
+static struct netif *cell_uplink_lwip_select(struct netif *n){assert(n && core);return NULL;}
+static void cell_dns_follow(struct netif *n,struct netif *lan){assert(!n && lan && core);}
+static bool netif_is_up(struct netif *n){assert(core);return n->up;}
+static void netif_set_default(struct netif *n){
+    assert(core && leased);
+    if(n==&wg)assert(last_pin==&sta || last_pin==&eth);
+    netif_default=n;
+}
+static uint8_t netif_get_index(struct netif *n){assert(core && n);return n->ifindex;}
+static void udp_bind_netif(struct udp_pcb *p, struct netif *n){
+    assert(core && leased && p==&pcb);
+    last_pin=n;pins++;
+}
+static void publish_accepted_routes(const tailscale_accepted_route_t *routes,int count){
+    assert(core && leased && (count==0 || (count==1 && routes[0].prefix_len==24)));
+    publications++;published_count=count;
+}
+static int64_t esp_timer_get_time(void){return now_us;}
+static int tcpip_callbackmsg_trycallback(struct tcpip_callback_msg *msg){
+    assert(!queued && !leased && !core && msg==&fixture_msg);
+    if(reject_mailbox)return -1;
+    queued=msg;return ERR_OK;
+}
+static void run_queued(void){
+    assert(queued);
+    struct tcpip_callback_msg *msg=queued;queued=NULL;
+    core=true;msg->callback(msg->ctx);core=false;
+}
+static struct tcpip_callback_msg *tcpip_callbackmsg_new(void (*callback)(void *),void *ctx){
+    assert(ctx && !lwip_route_hook_supervisor_running());
+    if(++msg_calls<7)return NULL;
+    fixture_msg=(struct tcpip_callback_msg){callback,ctx};
+    return &fixture_msg;
+}
+static void vTaskDelay(unsigned ms){
+    const unsigned expected[]={2000,4000,8000,16000,30000,30000};
+    assert(!lwip_route_hook_supervisor_running() && delays<6 && ms==expected[delays++]);
+}
+static int xTaskCreateWithCaps(void (*entry)(void *),const char *name,int stack,void *arg,int priority,void *out,int caps){
+    assert(entry && !strcmp(name,"exit_route") && stack==5120 && !arg && priority==5 && !out && caps==MALLOC_CAP_SPIRAM);
+    assert(!worker && !lwip_route_hook_supervisor_running());
+    task_calls++;
+    if(!can_spawn)return -1;
+    worker=entry;return pdPASS;
+}
+static int esp_timer_create(const esp_timer_create_args_t *args,esp_timer_handle_t *out){
+    assert(args->callback && args->name && args->skip_unhandled_events);
+    if(mode==2)return -1;
+    timer=*args;*out=&timer;return ESP_OK;
+}
+static int esp_timer_start_periodic(esp_timer_handle_t handle,uint64_t delay){
+    assert(handle==&timer && delay==5000000 && !timer_active);
+    if(mode==3)return -1;
+    timer_active=true;return ESP_OK;
+}
+static void esp_timer_stop(esp_timer_handle_t handle){assert(handle==&timer && timer_active);timer_active=false;}
+static void esp_timer_delete(esp_timer_handle_t handle){assert(handle==&timer && !timer_active);timer_deleted++;}
+@@MICROLINK@@
+@@STARTUP@@
+int main(int argc,char **argv){
+    assert(argc==2);
+    mode=atoi(argv[1]);can_spawn=mode==0;
+    assert(!lwip_route_hook_supervisor_running());
+    lwip_route_hook_init();lwip_route_hook_init();
+    assert(task_calls==1);
+    if(mode>=2){
+        assert(!s_supervisor_retry && !timer_active && timer_deleted==(mode==3));
+        assert(!worker && !lwip_route_hook_supervisor_running());
+        return 0;
+    }
+    if(mode==1){
+        assert(!worker && timer_active && s_supervisor_retry);
+        timer.callback(NULL);
+        assert(task_calls==2 && timer_active && !worker && !lwip_route_hook_supervisor_running());
+        can_spawn=true;timer.callback(NULL);
+        assert(task_calls==3 && !timer_active && !s_supervisor_retry && timer_deleted==1);
+        lwip_route_hook_init();assert(task_calls==3);
+    } else {
+        assert(!timer_active && !s_supervisor_retry);
+    }
+    assert(worker && !lwip_route_hook_supervisor_running());
+    worker(NULL);
+    assert(lwip_route_hook_supervisor_running() && msg_calls==7 && delays==6);
+    supervisor_request_t *request=fixture_msg.ctx;
+    reject_mailbox=true;route_supervisor_poll(request,&fixture_msg);
+    assert(!leased && !queued && !request->pending && lwip_route_hook_supervisor_degraded());
+    reject_mailbox=false;route_supervisor_poll(request,&fixture_msg);
+    assert(!leased && queued && request->pending);
+    now_us+=ROUTE_REQUEST_MAX_US+1;route_supervisor_poll(request,&fixture_msg);
+    assert(queued && request->pending && lwip_route_hook_supervisor_degraded());
+    run_queued();assert(!request->pending && !publications && !leased);
+    route_supervisor_poll(request,&fixture_msg);
+    generation++;run_queued();assert(!publications && !request->pending);
+    route_supervisor_poll(request,&fixture_msg);
+    leased=true;run_queued();assert(leased && !publications);leased=false;
+    tailscale_exit_node_ip=0x64400001;s_wg_output_pcb=NULL;
+    route_supervisor_poll(request,&fixture_msg);run_queued();
+    assert(!pins && netif_default==&sta && lwip_route_hook_supervisor_degraded());
+    s_wg_output_pcb=&pcb;preferred=&eth;
+    route_supervisor_poll(request,&fixture_msg);run_queued();
+    assert(pins==1 && netif_default==&wg && last_pin==&eth && !lwip_route_hook_supervisor_degraded());
+    assert(s_supervisor_keepalive==tailscale_exit_node_ip && published_count==1 && active.upstream_ifindex==eth.ifindex);
+    ml_bind_sock_to_upstream(&active,7);
+    assert(socket_binds==1);
+    upstream_present=false;ml_bind_sock_to_upstream(&active,7);
+    assert(socket_binds==1);
+    upstream_present=true;upstream_changed=true;ml_bind_sock_to_upstream(&active,7);
+    assert(socket_binds==1);
+    tailscale_accept_routes=false;tailscale_exit_node_ip=0;
+    route_supervisor_poll(request,&fixture_msg);run_queued();
+    assert(netif_default==&eth && !last_pin && !s_wg_udp_pinned && s_supervisor_keepalive==0 && published_count==0);
+    assert(!active.upstream_ifindex);
+    puts("PASS: route supervisor admission, bounded mailbox, route pin before default, stale generation and recovery");
+}
+'''
+with tempfile.TemporaryDirectory(prefix='route-supervisor-') as directory:
+    path = Path(directory)
+    c = path / 'test.c'
+    c.write_text(startup_fixture.replace('@@STARTUP@@', startup).replace('@@MICROLINK@@', microlink_pin), encoding='utf-8')
+    binary = path / ('test.exe' if os.name == 'nt' else 'test')
+    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(c), '-o', str(binary)], check=True)
+    for mode in range(4):
+        subprocess.run([str(binary), str(mode)], check=True, timeout=10)

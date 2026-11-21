@@ -165,7 +165,7 @@ mib_program = mib_program.replace('assert(visited==MIB_LEN);',
 
 # Real worker allocation/reservation functions; only SDK calls are fixtures.
 worker = 'static void snmp_task(void *arg);' + section(
-    'static void snmp_task(void *arg);', 'static void start_snmp_task_if_needed')
+    'static void snmp_task(void *arg);', 'static void snmp_task(void *arg)\n{')
 worker_fixture = r'''
 typedef int BaseType_t;
 #define pdPASS 1
@@ -174,7 +174,10 @@ typedef int BaseType_t;
 #define MALLOC_CAP_SPIRAM 1
 #define MALLOC_CAP_8BIT 2
 #define ESP_LOGE(...) ((void)0)
-static bool s_starting;
+static bool s_starting,s_running,s_stopping,s_enabled;
+static int64_t now;
+static void *s_strings;
+static int64_t esp_timer_get_time(void){return now;}
 static int s_mutex, requested_result, internal_calls, caps_calls, takes, gives;
 static int internal_deletes, caps_deletes;
 static void check_task(void (*fn)(void *), const char *name, unsigned stack,
@@ -213,6 +216,17 @@ int main(void) {
 #else
     assert(internal_calls==2 && !caps_calls && internal_deletes==1 && !caps_deletes && !reaper_deletes);
 #endif
+    s_starting=false;s_enabled=true;
+    snmp_agent_retry();assert(internal_calls+caps_calls==2); /* no initialized config */
+    s_strings=&s_mutex;requested_result=0;
+    start_snmp_task_if_needed(true);assert(!s_starting&&internal_calls+caps_calls==3);
+    now=29999999;snmp_agent_retry();assert(internal_calls+caps_calls==3);
+    now++;requested_result=pdPASS;snmp_agent_retry();assert(s_starting&&internal_calls+caps_calls==4);
+    /* Simulate bind/buffer failure clearing the worker reservation. */
+    s_starting=false;now+=29999999;snmp_agent_retry();assert(internal_calls+caps_calls==4);
+    now++;snmp_agent_retry();assert(s_starting&&internal_calls+caps_calls==5);
+    s_starting=false;s_running=true;now+=30000000;snmp_agent_retry();assert(internal_calls+caps_calls==5);
+    s_running=false;s_enabled=false;snmp_agent_retry();assert(!s_starting&&internal_calls+caps_calls==5);
     puts("PASS: actual SNMP worker allocation caps, matching teardown and OOM reservation release (SDK fixtures)");
 }
 '''

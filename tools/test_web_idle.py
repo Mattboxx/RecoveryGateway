@@ -3,7 +3,7 @@
 Checks the idle clock (open, receive and send activity), the 5 s close
 threshold, sessions that disappear, unknown sessions found by the sweep, a
 full tracking table, a refused close that is retried, socket error mapping
-without activity, and a sweep timer that cannot be created. The web_ui.c
+without activity, pending input, a busy HTTP control queue, and timer failure. The web_ui.c
 wiring (no LRU purge, open_fn, start after httpd_start) is checked
 structurally. HOTLOOP_SANITIZE=1 enables ASan/UBSan on Linux.
 """
@@ -37,7 +37,12 @@ STUBS = {
 typedef int esp_err_t;
 #define ESP_OK 0
 #define ESP_FAIL -1
+#define ESP_ERR_INVALID_ARG -9
 typedef void *httpd_handle_t;
+typedef struct { int fd; } httpd_req_t;
+int httpd_req_to_sockfd(httpd_req_t *);
+esp_err_t httpd_req_async_handler_begin(httpd_req_t *, httpd_req_t **);
+esp_err_t httpd_req_async_handler_complete(httpd_req_t *);
 #define HTTPD_SOCK_ERR_FAIL -1
 #define HTTPD_SOCK_ERR_INVALID -2
 #define HTTPD_SOCK_ERR_TIMEOUT -3
@@ -46,7 +51,6 @@ typedef int (*httpd_recv_func_t)(httpd_handle_t, int, char *, size_t, int);
 typedef void (*httpd_work_fn_t)(void *);
 esp_err_t httpd_sess_set_send_override(httpd_handle_t, int, httpd_send_func_t);
 esp_err_t httpd_sess_set_recv_override(httpd_handle_t, int, httpd_recv_func_t);
-esp_err_t httpd_sess_trigger_close(httpd_handle_t, int);
 esp_err_t httpd_get_client_list(httpd_handle_t, size_t *, int *);
 esp_err_t httpd_queue_work(httpd_handle_t, httpd_work_fn_t, void *);
 ''',
@@ -61,8 +65,28 @@ int esp_timer_create(const esp_timer_create_args_t *, esp_timer_handle_t *);
 int esp_timer_start_periodic(esp_timer_handle_t, uint64_t);
 int esp_timer_stop(esp_timer_handle_t);
 ''',
-    'lwip/sockets.h': '#pragma once\n#include <stddef.h>\n#define SHUT_RDWR 2\n'
-                      'int send(int, const void *, size_t, int);\nint recv(int, void *, size_t, int);\nint shutdown(int, int);\n',
+    'freertos/FreeRTOS.h': r'''
+#pragma once
+#include <assert.h>
+typedef int portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define taskENTER_CRITICAL(p) do { assert(!*(p)); *(p) = 1; } while (0)
+#define taskEXIT_CRITICAL(p) do { assert(*(p)); *(p) = 0; } while (0)
+''',
+    'lwip/sockets.h': r'''
+#pragma once
+#include <stddef.h>
+#define SHUT_RD 0
+#define SHUT_RDWR 2
+typedef struct { int fd; } fd_set;
+struct timeval { long tv_sec; long tv_usec; };
+#define FD_ZERO(set) ((set)->fd = -1)
+#define FD_SET(sock, set) ((set)->fd = (sock))
+int select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
+int send(int, const void *, size_t, int);
+int recv(int, void *, size_t, int);
+int shutdown(int, int);
+''',
 }
 
 TEST = r'''
@@ -81,19 +105,52 @@ static int override_fail;   /* 1: recv override refused, 2: send override refuse
 esp_err_t httpd_sess_set_send_override(httpd_handle_t h, int fd, httpd_send_func_t f) { (void)h; (void)fd; if (override_fail == 2) return ESP_FAIL; send_fn = f; return ESP_OK; }
 esp_err_t httpd_sess_set_recv_override(httpd_handle_t h, int fd, httpd_recv_func_t f) { (void)h; (void)fd; if (override_fail == 1) return ESP_FAIL; recv_fn = f; return ESP_OK; }
 static int shut_fd = -1, shut_how, shuts;
-int shutdown(int fd, int how) { shut_fd = fd; shut_how = how; shuts++; return 0; }
 static int closed[64], n_closed, refuse_close;
-esp_err_t httpd_sess_trigger_close(httpd_handle_t h, int fd) {
-    (void)h;
-    if (refuse_close) return ESP_FAIL;
-    closed[n_closed++] = fd; return ESP_OK;
+int shutdown(int fd, int how) {
+    if (how == SHUT_RD) {
+        if (refuse_close) return -1;
+        closed[n_closed++] = fd;
+    } else {
+        shut_fd = fd; shut_how = how; shuts++;
+    }
+    return 0;
+}
+static int ready_fd = -1, select_error;
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
+    assert(readfds && nfds == readfds->fd + 1 && !writefds && !exceptfds);
+    assert(timeout && !timeout->tv_sec && !timeout->tv_usec);
+    if (select_error) return -1;
+    return readfds->fd == ready_fd;
+}
+static int async_error, async_completed, expect_shut_fd=-1;
+static httpd_req_t async_request;
+int httpd_req_to_sockfd(httpd_req_t *req) { return req->fd; }
+esp_err_t httpd_req_async_handler_begin(httpd_req_t *req, httpd_req_t **copy) {
+    if (async_error) return ESP_FAIL;
+    async_request = *req;
+    *copy = &async_request;
+    return ESP_OK;
+}
+esp_err_t httpd_req_async_handler_complete(httpd_req_t *req) {
+    assert(req == &async_request);
+    if (expect_shut_fd >= 0) assert(shut_fd == expect_shut_fd);
+    async_completed++;
+    return ESP_OK;
 }
 static int clients[16]; static size_t n_clients;
 esp_err_t httpd_get_client_list(httpd_handle_t h, size_t *n, int *fds) {
     (void)h; assert(*n >= n_clients); for (size_t i = 0; i < n_clients; i++) fds[i] = clients[i]; *n = n_clients; return ESP_OK;
 }
 static httpd_work_fn_t work; static void *work_arg;
-esp_err_t httpd_queue_work(httpd_handle_t h, httpd_work_fn_t f, void *a) { (void)h; work = f; work_arg = a; return ESP_OK; }
+static int queue_calls, queue_fail;
+esp_err_t httpd_queue_work(httpd_handle_t h, httpd_work_fn_t f, void *a) {
+    (void)h;
+    queue_calls++;
+    if (queue_fail) return ESP_FAIL;
+    assert(!work);
+    work = f; work_arg = a;
+    return ESP_OK;
+}
 static void (*timer_cb)(void *); static int timer_fail, timer_running;
 int esp_timer_create(const esp_timer_create_args_t *a, esp_timer_handle_t *t) {
     if (timer_fail) return -1;
@@ -175,12 +232,64 @@ int main(void) {
     }
     override_fail = 0;
     assert(web_idle_refuse(hd, 72) == ESP_OK && web_idle_refused() == 2 && shut_fd == 72);
+    /* The control queue runs before data sessions. Bytes arriving at expiry
+     * must reach the handler, and a failed readiness check defers shutdown. */
+    now_us = S(800); web_idle_open(hd, 73); clients[0] = 73;
+    n_clients = 1; before = n_closed;
+    ready_fd = 73;
+    sweep_at(S(805)); assert(n_closed == before);
+    ready_fd = -1; select_error = 1;
+    sweep_at(S(806)); assert(n_closed == before);
+    select_error = 0;
+    assert(recv_fn(hd, 73, buf, 1, 0) == 1);
+    sweep_at(S(810)); assert(n_closed == before);
+    sweep_at(S(811)); assert(n_closed == before + 1 && closed[before] == 73);
+
+    /* No delayed close remains when SDK reuses the same descriptor. */
+    now_us = S(811) + 1; web_idle_open(hd, 73);
+    sweep_at(S(815)); assert(n_closed == before + 1);
+
+    /* A busy HTTP task retains only one pending sweep. A failed submission
+     * releases the reservation for the following tick. */
+    const int queued = queue_calls;
+    timer_cb(NULL); assert(work);
+    timer_cb(NULL); timer_cb(NULL); assert(queue_calls == queued + 1);
+    sweep_at(S(815)); assert(!work && queue_calls == queued + 1);
+    queue_fail = 1; timer_cb(NULL); assert(!work && queue_calls == queued + 2);
+    queue_fail = 0; sweep_at(S(815)); assert(!work && queue_calls == queued + 3);
+
+    timer_cb(NULL); assert(work);
     web_idle_stop(); assert(!timer_running);
-    timer_cb(NULL); assert(!work);                    /* stopped: no work queued */
+    work(work_arg); work = NULL;  /* The stopped server's pending sweep is inert. */
+    timer_cb(NULL); assert(!work && n_closed == before + 1);
+    /* A worker outlives the idle deadline while another session still closes.
+     * Completing the worker starts a fresh idle grace period. */
+    web_idle_start(hd);
+    now_us = S(900); web_idle_open(hd, 74); web_idle_open(hd, 75);
+    clients[0] = 74; clients[1] = 75; n_clients = 2; before = n_closed;
+    httpd_req_t req = {.fd = 74}, *clone = NULL;
+    assert(web_idle_async_begin(&req, &clone) == ESP_OK);
+    sweep_at(S(908)); assert(n_closed == before + 1 && closed[before] == 75);
+    assert(send_fn(hd, 74, buf, 1, 0) == 1);
+    now_us = S(910);
+    web_idle_async_complete(clone, ESP_OK);
+    n_clients = 1;
+    sweep_at(S(914)); assert(n_closed == before + 1 && async_completed == 1);
+    sweep_at(S(915)); assert(n_closed == before + 2 && closed[before + 1] == 74);
+
+    now_us = S(920); web_idle_open(hd, 74);
+    async_error = 1; assert(web_idle_async_begin(&req, &clone) == ESP_FAIL);
+    sweep_at(S(925)); assert(n_closed == before + 3);
+    now_us = S(930); web_idle_open(hd, 74);
+    async_error = 0; assert(web_idle_async_begin(&req, &clone) == ESP_OK);
+    expect_shut_fd = 74;
+    web_idle_async_complete(clone, ESP_FAIL);
+    assert(async_completed == 2);
+    web_idle_stop();
     puts("PASS: web_idle (fresh session kept < 5 s, recv/send restart the clock, close at 5 s, errors mapped and "
          "not activity, refused close retried, sweep-found and gone sessions, full table, timer failure; "
          "out-of-scope connection never read, shut down, counted, idle backstop, override failure fails closed); "
-         "web_ui wiring structural");
+         "ready input wins, descriptor reuse, async ownership and completion, one pending sweep and queue retry; web_ui wiring structural");
     return 0;
 }
 '''

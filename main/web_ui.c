@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include "runtime_metrics.h"
@@ -19,6 +20,7 @@
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "cJSON.h"
 #include "lwip/ip4_addr.h"
@@ -27,7 +29,10 @@
 #include "history.h"
 #include "storage_store.h"
 #include "web_ui.h"
+#include "web_restart.h"
 #include "web_idle.h"
+#include "web_transfer.h"
+#include "mtg_build_identity.h"
 #include "lan_name.h"
 #include "first_boot_core.h"
 #include "json_guard.h"
@@ -72,6 +77,7 @@
 #include "ota.h"
 #include "ota_remote.h"
 #include "ota_validation.h"
+#include "task_reaper.h"
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
@@ -111,6 +117,7 @@ extern void wifi_sta_pause_for_scan(void);
 extern void wifi_sta_resume_after_scan(void);
 extern bool wifi_ap_policy_auto_off(void);
 extern bool wifi_ap_runtime_enabled(void);
+extern bool wifi_ap_napt_ready(void);
 extern void wifi_ap_policy_set_auto_off(bool auto_off);
 
 /* sdkconfig.defaults does not override an existing generated sdkconfig.
@@ -121,6 +128,9 @@ extern void wifi_ap_policy_set_auto_off(bool auto_off);
 #endif
 
 static const char *TAG = "web_ui";
+/* Successful deferred saves in this server instance. Uplinks and the
+ * admin listener can also detect when their active configuration is restored. */
+static bool s_config_restart_pending;
 
 static const char *reg_state_name(uint8_t s)
 {
@@ -344,6 +354,17 @@ static float sample_cpu_temp_c(void)
     return tc;
 }
 
+static bool web_restart_required(void)
+{
+    uint16_t port = web_ui_active_port();
+    if (s_config_restart_pending || (port && port != web_ui_configured_port()) ||
+        eth_uplink_restart_required() || cell_uplink_restart_required() ||
+        ota_upload_restart_pending()) return true;
+    ota_remote_state_t ota;
+    ota_remote_get_state(&ota);
+    return ota.restart_pending;
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     if (require_auth(req) != ESP_OK) return ESP_FAIL;
@@ -357,6 +378,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     const esp_app_desc_t *desc = esp_app_get_description();
     cJSON_AddStringToObject(root, "version",      desc ? desc->version : "?");
     cJSON_AddNumberToObject(root, "uptime_s",     esp_timer_get_time() / 1000000);
+    cJSON_AddBoolToObject(root, "restart_required", web_restart_required());
     cJSON_AddNumberToObject(root, "free_heap",    esp_get_free_heap_size());
     /* Heap total tracks the largest-known-free moment since boot; the
      * SPA only uses it to draw the % bar, so the exact denominator
@@ -472,10 +494,15 @@ static esp_err_t status_handler(httpd_req_t *req)
                     cJSON_AddStringToObject(uplink, "dns", address);
                 }
             }
-            cJSON_AddNumberToObject(uplink, "bytes_in", ethernet ?
-                (double)netif_hooks_get_eth_bytes_in() : (double)netif_hooks_get_ppp_bytes_in());
-            cJSON_AddNumberToObject(uplink, "bytes_out", ethernet ?
-                (double)netif_hooks_get_eth_bytes_out() : (double)netif_hooks_get_ppp_bytes_out());
+            uint64_t rx, tx;
+            if (ethernet) {
+                rx = netif_hooks_get_eth_bytes_in();
+                tx = netif_hooks_get_eth_bytes_out();
+            } else {
+                netif_hooks_get_mobile_bytes(&rx, &tx);
+            }
+            cJSON_AddNumberToObject(uplink, "bytes_in", (double)rx);
+            cJSON_AddNumberToObject(uplink, "bytes_out", (double)tx);
             if (!ethernet) {
                 cell_status_t cell;
                 cell_uplink_get_status(&cell);
@@ -488,6 +515,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON *ap = cJSON_CreateObject();
     cJSON_AddBoolToObject(ap, "enabled", wifi_ap_runtime_enabled());
     cJSON_AddBoolToObject(ap, "auto_off_when_connected", wifi_ap_policy_auto_off());
+    cJSON_AddBoolToObject(ap, "napt_ready", wifi_ap_napt_ready());
     cJSON_AddNumberToObject(ap, "clients", connect_count);
     wifi_config_t ap_cfg;
     if (esp_wifi_get_config(WIFI_IF_AP, &ap_cfg) == ESP_OK) {
@@ -828,26 +856,27 @@ static esp_err_t send_save_response(httpd_req_t *req);
  * silent NVS-out-of-space failure instead of a green "Saved" lie. */
 static void nvs_save_errors_attach(cJSON *root) {
     bool ok = (s_save_err.count == 0);
-    cJSON_AddBoolToObject(root, "ok", ok);
+    if (!cJSON_AddBoolToObject(root, "ok", ok)) return;
     if (!ok) {
-        cJSON *e = cJSON_CreateObject();
+        cJSON *e = cJSON_AddObjectToObject(root, "nvs_save_error");
+        if (!e) return;
         cJSON_AddNumberToObject(e, "count",     s_save_err.count);
         cJSON_AddStringToObject(e, "first_key", s_save_err.first_key);
         cJSON_AddStringToObject(e, "first_err", esp_err_to_name(s_save_err.first_err));
-        cJSON_AddItemToObject(root, "nvs_save_error", e);
     }
 }
 
 static esp_err_t send_save_response(httpd_req_t *req)
 {
+    bool ok = s_save_err.count == 0;
     cJSON *resp = cJSON_CreateObject();
     nvs_save_errors_attach(resp);
-    char *body = cJSON_PrintUnformatted(resp);
+    const cJSON *ack = cJSON_GetObjectItemCaseSensitive(resp, "ok");
+    char *body = cJSON_IsBool(ack) ? cJSON_PrintUnformatted(resp) : NULL;
     cJSON_Delete(resp);
-    if (!body) return httpd_resp_send_500(req);
     httpd_resp_set_type(req, "application/json");
-    esp_err_t e = httpd_resp_sendstr(req, body);
-    free(body);
+    esp_err_t e = httpd_resp_sendstr(req, body ? body : ok ? "{\"ok\":true}" : "{\"ok\":false}");
+    cJSON_free(body);
     return e;
 }
 
@@ -1158,14 +1187,25 @@ static esp_err_t network_save_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, ap_error);
         return ESP_FAIL;
     }
+    const cJSON *relay = cJSON_GetObjectItem(ap, "dns_relay");
+    const cJSON *relay_enable = cJSON_GetObjectItem(relay, "enabled");
+    const cJSON *relay_upstream = cJSON_GetObjectItem(relay, "upstream");
+    ip4_addr_t relay_ip = {0};
+    if ((relay && !cJSON_IsObject(relay)) || (relay_enable && !cJSON_IsBool(relay_enable)) ||
+        (relay_upstream && (!cJSON_IsString(relay_upstream) ||
+            (*relay_upstream->valuestring && !ip4addr_aton(relay_upstream->valuestring, &relay_ip))))) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid DNS relay settings");
+        return ESP_FAIL;
+    }
     if (!save_txn_begin()) {
         cJSON_Delete(root);
         return send_save_response(req);
     }
     /* Live changes wait until every write of the request is kept. */
-    int apply_ttl = -1, apply_auto_off = -1, apply_relay_en = -1;
-    bool apply_relay_up = false, ap_seen = false;
-    uint32_t relay_up_nbo = 0;
+    int apply_ttl = -1, apply_auto_off = -1;
+    bool wifi_staged = false;
+    bool ap_seen = false;
     char old_cidr[32] = "";
 
     /* networks[] — preferred shape. Replaces the WHOLE list. Each entry
@@ -1231,7 +1271,8 @@ static esp_err_t network_save_handler(httpd_req_t *req)
             n->valid = 1;
             n_out++;
         }
-        esp_err_t save_err = wifi_networks_set_all(arr, n_out);
+        esp_err_t save_err = wifi_networks_stage(arr, n_out);
+        wifi_staged = save_err == ESP_OK;
         nvs_save_record_err("wifi_nets", save_err);
     }
 
@@ -1262,7 +1303,8 @@ static esp_err_t network_save_handler(httpd_req_t *req)
                 if (cJSON_IsString(dns))  strlcpy(one.dns,       dns->valuestring,  sizeof one.dns);
             }
             one.valid = 1;
-            esp_err_t save_err = wifi_networks_set_all(&one, 1);
+            esp_err_t save_err = wifi_networks_stage(&one, 1);
+            wifi_staged = save_err == ESP_OK;
             nvs_save_record_err("wifi_nets", save_err);
         }
         save_str_if_present(sta, "hostname", "hostname");
@@ -1315,32 +1357,23 @@ static esp_err_t network_save_handler(httpd_req_t *req)
             apply_auto_off = auto_off;
         }
 
-        /* DNS relay (its own namespace, outside the transaction): applied
-         * and stored only once the rest of the request is kept. The relay
-         * task re-runs softap on health transitions, so no direct
-         * softap_set_dns_addr() here (a second DHCP-server restart would
-         * knock newly-leased clients off their DNS-server entry). */
-        const cJSON *dr = cJSON_GetObjectItem(ap, "dns_relay");
-        if (cJSON_IsObject(dr)) {
-            const cJSON *en = cJSON_GetObjectItem(dr, "enabled");
-            if (cJSON_IsBool(en)) apply_relay_en = cJSON_IsTrue(en);
-            const cJSON *up = cJSON_GetObjectItem(dr, "upstream");
-            if (cJSON_IsString(up)) {
-                relay_up_nbo = 0;
-                if (up->valuestring[0]) {
-                    ip4_addr_t a;
-                    if (ip4addr_aton(up->valuestring, &a)) relay_up_nbo = a.addr;
-                }
-                apply_relay_up = true;
-            }
+        /* Use the same undo journal and keys as the rest of the AP settings. */
+        if (relay_enable) nvs_save_u8(DNS_RELAY_KEY_ENABLED, cJSON_IsTrue(relay_enable));
+        if (relay_upstream) {
+            char ip[16] = "";
+            if (relay_ip.addr) ip4addr_ntoa_r(&relay_ip, ip, sizeof ip);
+            nvs_save_str(DNS_RELAY_KEY_UPSTREAM, ip);
         }
     }
 
-    if (save_txn_end()) {
+    bool saved = save_txn_end();
+    if (saved) s_config_restart_pending = true;
+    if (wifi_staged) wifi_networks_finish_staged(saved);
+    if (saved) {
         if (apply_ttl >= 0) netif_hooks_set_sta_ttl((uint8_t)apply_ttl);
         if (apply_auto_off >= 0) wifi_ap_policy_set_auto_off(apply_auto_off != 0);
-        if (apply_relay_en >= 0) dns_relay_set_enabled(apply_relay_en != 0);
-        if (apply_relay_up) dns_relay_set_upstream(relay_up_nbo);
+        if (relay_upstream) dns_relay_apply_upstream(relay_ip.addr);
+        if (relay_enable) dns_relay_apply_enabled(cJSON_IsTrue(relay_enable));
         if (ap_seen) {
             char new_cidr[32];
             char proposed[512];
@@ -1358,16 +1391,13 @@ static esp_err_t network_save_handler(httpd_req_t *req)
                 cJSON_AddStringToObject(root, "_proposed_routes", proposed);
             }
         }
-    } else {
-        /* Nothing was kept: the Wi-Fi list cache follows NVS again. */
-        wifi_networks_init();
     }
 
     cJSON *resp_json = cJSON_CreateObject();
     /* nvs_save_errors_attach decides ok=true/false based on whether
      * any nvs_save_* call recorded a write failure for this request. */
     nvs_save_errors_attach(resp_json);
-    cJSON_AddBoolToObject(resp_json, "restart_required", true);
+    cJSON_AddBoolToObject(resp_json, "restart_required", saved);
     cJSON *offer = cJSON_GetObjectItem(root, "_ap_cidr_offer");
     cJSON *proposed = cJSON_GetObjectItem(root, "_proposed_routes");
     if (offer && cJSON_IsString(offer)) {
@@ -1433,7 +1463,9 @@ typedef enum {
 } scan_state_t;
 
 #define SCAN_CACHE_MAX 32
-static volatile scan_state_t s_scan_state    = SCAN_IDLE;
+#define SCAN_TIMEOUT_US (12LL * 1000000)
+#define SCAN_WATCHDOG_US 1000000
+static scan_state_t          s_scan_state    = SCAN_IDLE;
 static uint16_t              s_scan_count    = 0;
 /* Internal RAM is the gateway's scarce resource: application tables live
  * in PSRAM .bss (CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY). Only task
@@ -1441,33 +1473,77 @@ static uint16_t              s_scan_count    = 0;
 EXT_RAM_BSS_ATTR static wifi_ap_record_t      s_scan_cache[SCAN_CACHE_MAX];
 static uint32_t              s_scan_done_ms  = 0;
 static SemaphoreHandle_t     s_scan_mutex    = NULL;
+static esp_timer_handle_t    s_scan_timer;
+static int64_t               s_scan_deadline;
+
+/* The scan worker, timeout and completion event share the scan mutex. */
+static void scan_timeout(void *arg)
+{
+    (void)arg;
+    if (xSemaphoreTake(s_scan_mutex, 0) != pdTRUE) return;
+    int64_t now = esp_timer_get_time();
+    if (s_scan_state == SCAN_RUNNING && now >= s_scan_deadline) {
+        s_scan_state = SCAN_ERROR;
+        /* Let any delayed completion from the aborted scan be drained. */
+        s_scan_deadline = now + SCAN_WATCHDOG_US;
+        (void)esp_timer_stop(s_scan_timer);
+        (void)esp_wifi_scan_stop();
+        (void)esp_wifi_clear_ap_list();
+        wifi_sta_resume_after_scan();
+    }
+    xSemaphoreGive(s_scan_mutex);
+}
 
 static void scan_done_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    (void)arg; (void)data;
+    (void)arg;
     if (base != WIFI_EVENT || id != WIFI_EVENT_SCAN_DONE) return;
-    uint16_t n = 0;
-    esp_wifi_scan_get_ap_num(&n);
-    if (n > SCAN_CACHE_MAX) n = SCAN_CACHE_MAX;
     xSemaphoreTake(s_scan_mutex, portMAX_DELAY);
-    if (n) esp_wifi_scan_get_ap_records(&n, s_scan_cache);
+    if (s_scan_state != SCAN_RUNNING) {
+        xSemaphoreGive(s_scan_mutex);
+        return;
+    }
+    const wifi_event_sta_scan_done_t *completion = data;
+    uint16_t n = 0;
+    bool ok = completion && completion->status == 0 && esp_wifi_scan_get_ap_num(&n) == ESP_OK;
+    if (n > SCAN_CACHE_MAX) n = SCAN_CACHE_MAX;
+    if (ok && n) ok = esp_wifi_scan_get_ap_records(&n, s_scan_cache) == ESP_OK;
+    if (!ok || !n) (void)esp_wifi_clear_ap_list();
+    if (!ok) {
+        n = 0;
+    }
     s_scan_count   = n;
     s_scan_done_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    s_scan_state   = SCAN_READY;
-    xSemaphoreGive(s_scan_mutex);
+    s_scan_state   = ok ? SCAN_READY : SCAN_ERROR;
+    s_scan_deadline = 0;
+    (void)esp_timer_stop(s_scan_timer);
     wifi_sta_resume_after_scan();
+    xSemaphoreGive(s_scan_mutex);
     ESP_LOGI("web_ui", "async scan done: %u networks", (unsigned)n);
 }
 
 /* Lazy init — first scan request creates the mutex + subscribes to the
  * SCAN_DONE event. Keeps the init footprint zero until somebody actually
  * uses the scan endpoint. */
-static void scan_init_once(void)
+static bool scan_init_once(void)
 {
-    if (s_scan_mutex) return;
+    if (s_scan_mutex) return true;
     s_scan_mutex = xSemaphoreCreateMutex();
-    esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE,
-                                scan_done_event, NULL);
+    if (!s_scan_mutex) return false;
+    const esp_timer_create_args_t args = {
+        .callback = scan_timeout,
+        .name = "web_wifi_scan",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&args, &s_scan_timer) == ESP_OK) {
+        if (esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, scan_done_event, NULL) == ESP_OK)
+            return true;
+        (void)esp_timer_delete(s_scan_timer);
+        s_scan_timer = NULL;
+    }
+    vSemaphoreDelete(s_scan_mutex);
+    s_scan_mutex = NULL;
+    return false;
 }
 
 /* Scanning reveals nothing secret; the setup wizard may use it on the AP. */
@@ -1477,17 +1553,34 @@ static esp_err_t scan_allowed(httpd_req_t *req)
     return require_auth(req);
 }
 
+static esp_err_t scan_unavailable(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"status\":\"error\",\"reason\":\"Wi-Fi scan unavailable; retry shortly\"}");
+}
+
 static esp_err_t network_scan_handler(httpd_req_t *req)
 {
     if (scan_allowed(req) != ESP_OK) return ESP_FAIL;
-    scan_init_once();
+    if (!scan_init_once()) return scan_unavailable(req);
 
     xSemaphoreTake(s_scan_mutex, portMAX_DELAY);
     bool kick = (s_scan_state != SCAN_RUNNING);
-    if (kick) s_scan_state = SCAN_RUNNING;
-    xSemaphoreGive(s_scan_mutex);
+    if (s_scan_state == SCAN_ERROR && esp_timer_get_time() < s_scan_deadline) {
+        xSemaphoreGive(s_scan_mutex);
+        return scan_unavailable(req);
+    }
 
     if (kick) {
+        s_scan_deadline = esp_timer_get_time() + SCAN_TIMEOUT_US;
+        if (esp_timer_start_periodic(s_scan_timer, SCAN_WATCHDOG_US) != ESP_OK) {
+            s_scan_state = SCAN_ERROR;
+            s_scan_deadline = 0;
+            xSemaphoreGive(s_scan_mutex);
+            return scan_unavailable(req);
+        }
+        s_scan_state = SCAN_RUNNING;
         /* Passive scan — listens for beacons, never disassociates the
          * STA (which used to kill the very TCP socket carrying this
          * request back in the synchronous era). */
@@ -1507,9 +1600,10 @@ static esp_err_t network_scan_handler(httpd_req_t *req)
             scan_err = esp_wifi_scan_start(&cfg, false);
         }
         if (scan_err != ESP_OK) {
+            (void)esp_timer_stop(s_scan_timer);
             wifi_sta_resume_after_scan();
-            xSemaphoreTake(s_scan_mutex, portMAX_DELAY);
             s_scan_state = SCAN_ERROR;
+            s_scan_deadline = 0;
             xSemaphoreGive(s_scan_mutex);
             ESP_LOGE("web_ui", "esp_wifi_scan_start failed: %s",
                      esp_err_to_name(scan_err));
@@ -1521,6 +1615,7 @@ static esp_err_t network_scan_handler(httpd_req_t *req)
             return httpd_resp_sendstr(req, body);
         }
     }
+    xSemaphoreGive(s_scan_mutex);
 
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"status\":\"scanning\"}");
@@ -1529,10 +1624,15 @@ static esp_err_t network_scan_handler(httpd_req_t *req)
 static esp_err_t network_scan_result_handler(httpd_req_t *req)
 {
     if (scan_allowed(req) != ESP_OK) return ESP_FAIL;
-    scan_init_once();
+    if (!scan_init_once()) return scan_unavailable(req);
 
     cJSON *root = cJSON_CreateObject();
     cJSON *arr  = cJSON_CreateArray();
+    if (!root || !arr) {
+        cJSON_Delete(root);
+        cJSON_Delete(arr);
+        return httpd_resp_send_500(req);
+    }
 
     xSemaphoreTake(s_scan_mutex, portMAX_DELAY);
     scan_state_t st = s_scan_state;
@@ -1655,66 +1755,89 @@ static esp_err_t tools_query_get(httpd_req_t *req, const char *key,
     return httpd_query_key_value(qs, key, out, out_size);
 }
 
-static esp_err_t tools_ping_handler(httpd_req_t *req)
+typedef struct {
+    httpd_req_t *req;
+    bool trace;
+    int count;
+    char target[80];
+    char output[2048];
+} web_probe_t;
+
+static atomic_bool s_probe_busy;
+
+static void web_probe_worker(void *arg)
+{
+    web_probe_t *job = arg;
+    job->output[0] = '\0';
+    if (job->trace)
+        net_diag_trace(job->target, job->count, 1500, job->output, sizeof job->output);
+    else
+        net_diag_ping(job->target, job->count, 1000, job->output, sizeof job->output);
+    httpd_resp_set_type(job->req, "text/plain; charset=utf-8");
+    esp_err_t err = httpd_resp_sendstr(job->req, job->output);
+    web_idle_async_complete(job->req, err);
+    free(job);
+    atomic_store(&s_probe_busy, false);
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    task_reaper_self_delete();
+#else
+    vTaskDelete(NULL);
+#endif
+}
+
+static esp_err_t tools_probe_handler(httpd_req_t *req, bool trace)
 {
     if (require_auth(req) != ESP_OK) return ESP_FAIL;
-
     char target[80];
-    if (tools_query_get(req, "target", target, sizeof target) != ESP_OK) {
+    if (tools_query_get(req, "target", target, sizeof target) != ESP_OK || !target[0]) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing target");
         return ESP_FAIL;
     }
-    char count_str[8];
-    int count = 4;
-    if (tools_query_get(req, "count", count_str, sizeof count_str) == ESP_OK) {
-        count = atoi(count_str);
-        if (count < 1)  count = 1;
-        if (count > 10) count = 10;
+    if (atomic_exchange(&s_probe_busy, true)) {
+        httpd_resp_set_status(req, "429 Too Many Requests");
+        return httpd_resp_sendstr(req, "A network diagnostic is already running");
     }
 
-    /* net_diag writes plain text into the buffer; we expose it as text/plain
-     * so the SPA can render it in a <pre>. */
-    size_t buf_size = 2048;
-    char *buf = malloc_body_buf(buf_size);
-    if (!buf) { httpd_resp_send_500(req); return ESP_FAIL; }
-    buf[0] = '\0';
+    web_probe_t *job = homelab_ops_admit() ? (web_probe_t *)malloc_body_buf(sizeof *job) : NULL;
+    if (!job || web_idle_async_begin(req, &job->req) != ESP_OK) {
+        free(job);
+        atomic_store(&s_probe_busy, false);
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Network diagnostic resources are unavailable");
+    }
+    job->trace = trace;
+    strlcpy(job->target, target, sizeof job->target);
+    char count_str[8];
+    job->count = trace ? 16 : 4;
+    if (tools_query_get(req, trace ? "max_hops" : "count", count_str, sizeof count_str) == ESP_OK) {
+        int count = atoi(count_str), limit = trace ? 30 : 10;
+        job->count = count < 1 ? 1 : (count > limit ? limit : count);
+    }
 
-    net_diag_ping(target, count, 1000, buf, buf_size);
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    BaseType_t started = xTaskCreateWithCaps(web_probe_worker, "web_probe", 4096, job, 2, NULL,
+                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+    BaseType_t started = xTaskCreate(web_probe_worker, "web_probe", 4096, job, 2, NULL);
+#endif
+    if (started != pdPASS) {
+        httpd_resp_set_status(job->req, "503 Service Unavailable");
+        esp_err_t err = httpd_resp_sendstr(job->req, "Network diagnostic worker is unavailable");
+        web_idle_async_complete(job->req, err);
+        free(job);
+        atomic_store(&s_probe_busy, false);
+    }
+    return ESP_OK;
+}
 
-    httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    esp_err_t err = httpd_resp_sendstr(req, buf);
-    free(buf);
-    return err;
+static esp_err_t tools_ping_handler(httpd_req_t *req)
+{
+    return tools_probe_handler(req, false);
 }
 
 static esp_err_t tools_trace_handler(httpd_req_t *req)
 {
-    if (require_auth(req) != ESP_OK) return ESP_FAIL;
-
-    char target[80];
-    if (tools_query_get(req, "target", target, sizeof target) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing target");
-        return ESP_FAIL;
-    }
-    char hops_str[8];
-    int max_hops = 16;
-    if (tools_query_get(req, "max_hops", hops_str, sizeof hops_str) == ESP_OK) {
-        max_hops = atoi(hops_str);
-        if (max_hops < 1)  max_hops = 1;
-        if (max_hops > 30) max_hops = 30;
-    }
-
-    size_t buf_size = 2048;
-    char *buf = malloc_body_buf(buf_size);
-    if (!buf) { httpd_resp_send_500(req); return ESP_FAIL; }
-    buf[0] = '\0';
-
-    net_diag_trace(target, max_hops, 1500, buf, buf_size);
-
-    httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    esp_err_t err = httpd_resp_sendstr(req, buf);
-    free(buf);
-    return err;
+    return tools_probe_handler(req, true);
 }
 
 static const httpd_uri_t uri_tools_ping = {
@@ -2144,6 +2267,7 @@ static esp_err_t mqtt_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(status, "connecting", mqtt_status.connecting);
         cJSON_AddNumberToObject(status, "retry_level", mqtt_status.retry_level);
         cJSON_AddNumberToObject(status, "retry_in_seconds", mqtt_status.retry_in_seconds);
+        cJSON_AddBoolToObject(status, "commands_ready", mqtt_status.commands_ready);
         cJSON_AddBoolToObject(status, "discovery_pending", mqtt_status.discovery_pending);
         cJSON_AddNumberToObject(status, "discovery_entities", mqtt_status.discovery_entities);
         /* The resource admission guard (Devices & Recovery) pauses connects. */
@@ -2548,6 +2672,10 @@ static esp_err_t dhcp_leases_handler(httpd_req_t *req)
     /* Pull both views first so we can cross-reference them in one pass. */
     dhcp_lease_info_t leases[DHCP_LEASES_MAX_REPORT];
     int lease_count = dhcps_get_active_leases(leases, DHCP_LEASES_MAX_REPORT);
+    if (lease_count < 0) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "DHCP lease snapshot unavailable");
+    }
 
     wifi_sta_list_t sta_list;
     memset(&sta_list, 0, sizeof sta_list);
@@ -2771,6 +2899,7 @@ static esp_err_t portmap_handler(httpd_req_t *req)
     }
     cJSON_AddItemToObject(root, "mappings", arr);
     cJSON_AddNumberToObject(root, "max", PORTMAP_MAX);
+    cJSON_AddBoolToObject(root, "refresh_pending", portmap_refresh_pending());
 
     char *body = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -2902,6 +3031,7 @@ static esp_err_t tailnet_forward_handler(httpd_req_t *req)
     char uplink_ip[16] = "";
     if (uplink) snprintf(uplink_ip, sizeof uplink_ip, IPSTR, IP2STR(&ip.ip));
     if (!cJSON_AddNumberToObject(root, "max", TAILNET_FORWARD_MAX)
+        || !cJSON_AddBoolToObject(root, "refresh_pending", portmap_refresh_pending())
         || !cJSON_AddBoolToObject(root, "uplink_has_ipv4", uplink)
         || !cJSON_AddStringToObject(root, "uplink_ip", uplink_ip)
         || !cJSON_AddBoolToObject(root, "tailscale_control_connected", control)
@@ -3216,27 +3346,25 @@ static const httpd_uri_t uri_log_precrash_clear = {
     .user_ctx = NULL,
 };
 
-/* GET /api/log/raw?since=<seq> — JSON delta endpoint for the live log
- * tail poller. since=0 (the default) returns the full preserved ring;
- * non-zero asks for "everything appended after I last saw seq N".
- * "lost":true means the ring wrapped past the caller's cursor, so the
- * client should clear its view and treat data as a fresh dump. */
+/* Cursors are only meaningful within one device boot. An older boot ID
+ * asks for the full preserved window, even when sequence numbers overlap. */
 static esp_err_t log_raw_handler(httpd_req_t *req)
 {
     if (require_auth(req) != ESP_OK) return ESP_FAIL;
 
-    uint64_t since = 0;
-    size_t qlen = httpd_req_get_url_query_len(req) + 1;
-    if (qlen > 1) {
-        char *q = malloc(qlen);
-        if (q && httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
-            char val[32] = {0};
-            if (httpd_query_key_value(q, "since", val, sizeof val) == ESP_OK) {
-                since = strtoull(val, NULL, 10);
-            }
-        }
-        free(q);
+    static char boot_id[17];  /* local to this HTTP server's lifetime */
+    if (!boot_id[0]) {
+        uint64_t nonce;
+        esp_fill_random(&nonce, sizeof nonce);
+        snprintf(boot_id, sizeof boot_id, "%016llx", (unsigned long long)nonce);
     }
+    char cursor[32], boot[sizeof boot_id];
+    uint64_t since = tools_query_get(req, "since", cursor, sizeof cursor) == ESP_OK
+                     ? strtoull(cursor, NULL, 10) : 0;
+    esp_err_t boot_query = tools_query_get(req, "boot", boot, sizeof boot);
+    if ((boot_query == ESP_OK && strcmp(boot, boot_id)) ||
+        (boot_query != ESP_OK && boot_query != ESP_ERR_NOT_FOUND))
+        since = 0;
 
     /* Scratch matches the full ring so a single poll can return
      * everything written since the client's cursor — otherwise
@@ -3277,11 +3405,12 @@ static esp_err_t log_raw_handler(httpd_req_t *req)
     }
     char hdr[200];
     snprintf(hdr, sizeof hdr,
-             "{\"seq\":%llu,\"lost\":%s,\"size\":%u,\"cap\":%u,\"boot_ms\":%lld,\"data\":\"",
+             "{\"seq\":%llu,\"lost\":%s,\"size\":%u,\"cap\":%u,\"boot_ms\":%lld,\"boot_id\":\"%s\",\"data\":\"",
              (unsigned long long)new_seq, lost ? "true" : "false",
              (unsigned)log_capture_size(),
-             (unsigned)log_capture_capacity(), boot_ms);
-    httpd_resp_sendstr_chunk(req, hdr);
+             (unsigned)log_capture_capacity(), boot_ms, boot_id);
+    esp_err_t err = httpd_resp_sendstr_chunk(req, hdr);
+    if (err != ESP_OK) goto done;
 
     /* Stream JSON-escaped payload. Buffer into 1 KB chunks before
      * calling httpd_resp_send_chunk(): the previous one-byte-per-call
@@ -3292,7 +3421,11 @@ static esp_err_t log_raw_handler(httpd_req_t *req)
     char  obuf[1024];
     size_t op = 0;
     #define LRH_FLUSH() do { \
-        if (op > 0) { httpd_resp_send_chunk(req, obuf, op); op = 0; } \
+        if (op > 0) { \
+            err = httpd_resp_send_chunk(req, obuf, op); \
+            if (err != ESP_OK) goto done; \
+            op = 0; \
+        } \
     } while (0)
     #define LRH_EMIT(s, l) do { \
         if (op + (size_t)(l) > sizeof obuf) LRH_FLUSH(); \
@@ -3316,10 +3449,12 @@ static esp_err_t log_raw_handler(httpd_req_t *req)
     LRH_FLUSH();
     #undef LRH_EMIT
     #undef LRH_FLUSH
+    err = httpd_resp_sendstr_chunk(req, "\"}");
+    if (err == ESP_OK) err = httpd_resp_sendstr_chunk(req, NULL);
+
+done:
     free(scratch);
-    httpd_resp_sendstr_chunk(req, "\"}");
-    httpd_resp_sendstr_chunk(req, NULL);
-    return ESP_OK;
+    return err;
 }
 
 /* POST /api/log/clear — wipes the live ring (precrash buffer is on its
@@ -3452,6 +3587,8 @@ static esp_err_t tailscale_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(settings, "exit_server_configured", tailscale_exit_server_configured());
     cJSON_AddBoolToObject(settings, "manual_exit_advertisement", tailscale_manual_exit_configured());
     cJSON_AddBoolToObject(settings, "exit_dns_running", peer_dns_is_running());
+    cJSON_AddBoolToObject(settings, "route_supervisor_running", lwip_route_hook_supervisor_running());
+    cJSON_AddBoolToObject(settings, "route_supervisor_degraded", lwip_route_hook_supervisor_degraded());
     cJSON_AddNumberToObject(settings, "peerapi_port", tailscale_peerapi_port());
     {
         int32_t saved = 0;
@@ -3862,6 +3999,7 @@ static esp_err_t tailscale_save_handler(httpd_req_t *req)
     }
 
     if (save_txn_end()) {
+        s_config_restart_pending = true;
         if (cJSON_IsObject(s)) {
             /* tailscale_init only reads these globals at boot, so the
              * /api/tailscale GET that immediately follows this POST would
@@ -3925,7 +4063,7 @@ static esp_err_t tailscale_save_handler(httpd_req_t *req)
      * state isn't actually changing. */
     cJSON *resp = cJSON_CreateObject();
     nvs_save_errors_attach(resp);
-    cJSON_AddBoolToObject(resp, "restart_required", true);
+    cJSON_AddBoolToObject(resp, "restart_required", !s_save_err.count);
     char *body = cJSON_PrintUnformatted(resp);
     cJSON_Delete(resp);
     httpd_resp_set_type(req, "application/json");
@@ -4057,6 +4195,7 @@ static esp_err_t tailscale_ca_handler(httpd_req_t *req)
             cJSON_AddStringToObject(out, "subject", subject);
         }
         cJSON_AddBoolToObject(out, "restart_required", true);
+        s_config_restart_pending = true;
         ESP_LOGI(TAG, "Login server certificate %s (applies after a restart)", n ? "saved" : "removed");
     }
     char *body = cJSON_PrintUnformatted(out);
@@ -4259,10 +4398,20 @@ static void delayed_restart_task(void *arg)
 
 /* Reserve the internal stack before accepting a write that needs a reboot.
  * The task stays blocked during upload and never delays the HTTP response. */
+esp_err_t web_ui_reserve_restart(TaskHandle_t *task)
+{
+    return xTaskCreate(delayed_restart_task, "reboot", 2048, NULL, 5, task) == pdPASS ?
+           ESP_OK : ESP_ERR_NO_MEM;
+}
+
+void web_ui_finish_restart(TaskHandle_t task, bool commit)
+{
+    xTaskNotify(task, commit ? WEB_RESTART_COMMIT : WEB_RESTART_CANCEL, eSetValueWithOverwrite);
+}
+
 static esp_err_t reserve_restart(httpd_req_t *req, TaskHandle_t *task)
 {
-    if (xTaskCreate(delayed_restart_task, "reboot", 2048, NULL, 5, task) == pdPASS)
-        return ESP_OK;
+    if (web_ui_reserve_restart(task) == ESP_OK) return ESP_OK;
     httpd_resp_set_status(req, "503 Service Unavailable");
     httpd_resp_sendstr(req, "Insufficient memory to schedule a restart; try again");
     return ESP_ERR_NO_MEM;
@@ -4440,6 +4589,7 @@ static esp_err_t system_save_handler(httpd_req_t *req)
     }
 
     if (save_txn_end()) {
+        if (tz_changed || tx_default_restart) s_config_restart_pending = true;
         if (cJSON_IsString(tz_j)) {
             setenv("TZ", tz_j->valuestring[0] ? tz_j->valuestring : "UTC0", 1);
             tzset();
@@ -4617,6 +4767,7 @@ static esp_err_t updates_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(json, "beta_channel", state.config.beta_channel);
     cJSON_AddNumberToObject(json, "install_hour", state.config.install_hour);
     cJSON_AddBoolToObject(json, "busy", state.busy);
+    cJSON_AddBoolToObject(json, "restart_pending", state.restart_pending);
     cJSON_AddBoolToObject(json, "checked", state.checked);
     cJSON_AddBoolToObject(json, "update_available", state.update_available);
     cJSON_AddNumberToObject(json, "last_check", state.last_check);
@@ -4636,7 +4787,7 @@ static esp_err_t updates_result(httpd_req_t *req, esp_err_t err)
 {
     if (err != ESP_OK) {
         httpd_resp_set_status(req, err == ESP_ERR_INVALID_STATE ? "409 Conflict" : err == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error");
-        return httpd_resp_sendstr(req, err == ESP_ERR_INVALID_STATE ? "An update operation is already active" : "Update operation failed; check settings");
+        return httpd_resp_sendstr(req, err == ESP_ERR_INVALID_STATE ? "An update is active or awaiting restart" : "Update operation failed; check settings");
     }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_status(req, "202 Accepted");
@@ -4751,6 +4902,20 @@ static const httpd_uri_t uri_system_secrets_get = {
     .handler = system_secrets_get_handler,
 };
 
+/* The portable restore saves the network settings before importing secrets.
+ * Keep the freshly saved addressing and other fields of the same profile. */
+static void restore_network_base(wifi_network_t *net, int index, const char *ssid)
+{
+    if (!(wifi_networks_get(index, net) && strcmp(net->ssid, ssid) == 0)) {
+        int count = wifi_networks_count();
+        for (int i = 0; i < count; i++) {
+            if (wifi_networks_get(i, net) && strcmp(net->ssid, ssid) == 0) return;
+        }
+        memset(net, 0, sizeof *net);
+        strlcpy(net->ssid, ssid, sizeof net->ssid);
+    }
+}
+
 static esp_err_t system_secrets_post_handler(httpd_req_t *req)
 {
     if (require_password_session(req) != ESP_OK) return ESP_FAIL;
@@ -4804,6 +4969,7 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
      * so a partial restore (e.g. just the auth_key) doesn't wipe the
      * existing uplink table. */
     cJSON *nets_j = cJSON_GetObjectItem(root, "networks");
+    bool wifi_staged = false;
     if (cJSON_IsArray(nets_j)) {
         wifi_network_t arr[WIFI_NETWORKS_MAX];
         memset(arr, 0, sizeof arr);
@@ -4814,7 +4980,7 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
             const cJSON *ssid_j = cJSON_GetObjectItem(e, "ssid");
             if (!cJSON_IsString(ssid_j) || !ssid_j->valuestring[0]) continue;
             wifi_network_t *n = &arr[n_out];
-            strlcpy(n->ssid, ssid_j->valuestring, sizeof n->ssid);
+            restore_network_base(n, n_out, ssid_j->valuestring);
 
             const cJSON *pw  = cJSON_GetObjectItem(e, "password");
             const cJSON *m   = cJSON_GetObjectItem(e, "eap_method");
@@ -4833,7 +4999,8 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
             n->valid = 1;
             n_out++;
         }
-        esp_err_t serr = wifi_networks_set_all(arr, n_out);
+        esp_err_t serr = wifi_networks_stage(arr, n_out);
+        wifi_staged = serr == ESP_OK;
         if (serr != ESP_OK) nvs_save_record_err("wifi_nets", serr);
     }
 
@@ -4847,7 +5014,7 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
         esp_err_t err = ntfy_integration_set_config(&ntfy);
         if (err != ESP_OK) {
             (void)nvs_param_txn_end(false);
-            wifi_networks_init();
+            if (wifi_staged) wifi_networks_finish_staged(false);
             cJSON_Delete(root);
             httpd_resp_send_err(req, err == ESP_ERR_INVALID_ARG ? HTTPD_400_BAD_REQUEST :
                                HTTPD_500_INTERNAL_SERVER_ERROR, "ntfy token could not be restored");
@@ -4855,21 +5022,12 @@ static esp_err_t system_secrets_post_handler(httpd_req_t *req)
         }
         ntfy_applied = true;
     }
-    if (!save_txn_end()) {
-        wifi_networks_init();
-        if (ntfy_applied) (void)ntfy_integration_set_config(&ntfy_prev);
-    }
+    bool saved = save_txn_end();
+    if (wifi_staged) wifi_networks_finish_staged(saved);
+    if (!saved && ntfy_applied) (void)ntfy_integration_set_config(&ntfy_prev);
     cJSON_Delete(root);
 
-    /* Mirror the standard save-handler response: { ok, nvs_save_error? }. */
-    cJSON *resp = cJSON_CreateObject();
-    nvs_save_errors_attach(resp);
-    char *out = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-    httpd_resp_set_type(req, "application/json");
-    esp_err_t e = httpd_resp_sendstr(req, out ? out : "{\"ok\":true}");
-    free(out);
-    return e;
+    return send_save_response(req);
 }
 static const httpd_uri_t uri_system_secrets_post = {
     .uri = "/api/system/secrets", .method = HTTP_POST,
@@ -5591,7 +5749,9 @@ static esp_err_t auth_status_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "setup_mode", first_boot_active());
     cJSON_AddBoolToObject(root, "auth_required",
                           s_web_auth_enabled && is_web_password_set());
-    cJSON_AddBoolToObject(root, "authenticated", request_authenticated(req));
+    bool authenticated = request_authenticated(req);
+    cJSON_AddBoolToObject(root, "authenticated", authenticated);
+    if (authenticated) cJSON_AddBoolToObject(root, "restart_required", web_restart_required());
     /* Device name is fine to expose pre-auth — it's a label, not a secret. */
     char *name = device_name_dup();
     if (name) { cJSON_AddStringToObject(root, "device_name", name); free(name); }
@@ -5774,6 +5934,17 @@ static esp_err_t auth_challenge_handler(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t send_session_cookie_response(httpd_req_t *req, const char *token)
+{
+    /* The server owns the sliding idle window. A fixed browser expiry at
+     * login would invalidate the cookie while the server session is active. */
+    char cookie[128];
+    snprintf(cookie, sizeof cookie, "ts_session=%s; Path=/; HttpOnly; SameSite=Strict", token);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
 static esp_err_t auth_login_handler(httpd_req_t *req)
 {
     if (browser_request_refused(req, false)) return ESP_FAIL;
@@ -5844,18 +6015,7 @@ static esp_err_t auth_login_handler(httpd_req_t *req)
 
     const char *new_token = session_create(req);
     if (!new_token) {httpd_resp_send_500(req); return ESP_FAIL;}   /* client address unknown */
-    char cookie[160];
-    if (s_session_timeout_s == 0) {
-        snprintf(cookie, sizeof cookie,
-                 "ts_session=%s; Path=/; HttpOnly; SameSite=Strict", new_token);
-    } else {
-        snprintf(cookie, sizeof cookie,
-                 "ts_session=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%u",
-                 new_token, (unsigned)s_session_timeout_s);
-    }
-    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"ok\":true}");
+    return send_session_cookie_response(req, new_token);
 }
 
 static esp_err_t auth_logout_handler(httpd_req_t *req)
@@ -5981,18 +6141,7 @@ static esp_err_t auth_setup_handler(httpd_req_t *req)
      * from the wizard into the normal dashboard without a second POST. */
     const char *setup_token = session_create(req);
     if (!setup_token) {httpd_resp_send_500(req); return ESP_FAIL;}
-    char cookie[160];
-    if (s_session_timeout_s == 0) {
-        snprintf(cookie, sizeof cookie,
-                 "ts_session=%s; Path=/; HttpOnly; SameSite=Strict", setup_token);
-    } else {
-        snprintf(cookie, sizeof cookie,
-                 "ts_session=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%u",
-                 setup_token, (unsigned)s_session_timeout_s);
-    }
-    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"ok\":true}");
+    return send_session_cookie_response(req, setup_token);
 }
 
 static const httpd_uri_t uri_auth_setup = {
@@ -6223,10 +6372,44 @@ static esp_err_t sdlog_query_str(httpd_req_t *req, const char *key,
 }
 
 /* Forward each file chunk straight into the HTTP response. */
+typedef struct {
+    httpd_req_t *req;
+    const char *disposition;
+    bool started;
+} sdlog_download_t;
+
 static esp_err_t sdlog_dl_chunk_cb(void *ctx, const char *buf, size_t len)
 {
-    httpd_req_t *req = ctx;
-    return (httpd_resp_send_chunk(req, buf, len) == ESP_OK) ? ESP_OK : ESP_FAIL;
+    sdlog_download_t *dl = ctx;
+    if (!dl->started) {
+        dl->started = true;
+        if (httpd_resp_set_type(dl->req, "text/plain; charset=utf-8") != ESP_OK ||
+            httpd_resp_set_hdr(dl->req, "Content-Disposition", dl->disposition) != ESP_OK)
+            return ESP_FAIL;
+    }
+    return httpd_resp_send_chunk(dl->req, buf, len);
+}
+
+static esp_err_t sdlog_serve_download(httpd_req_t *req, const void *argument)
+{
+    const char *name = argument;
+    char disp[64];
+    snprintf(disp, sizeof disp, "attachment; filename=\"%s\"", name);
+    sdlog_download_t dl = {.req = req, .disposition = disp};
+
+    esp_err_t err = sdlog_read_file(name, sdlog_dl_chunk_cb, &dl);
+    if (err != ESP_OK) {
+        if (!dl.started) {
+            if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_ARG)
+                httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such log file");
+            else
+                httpd_resp_send_500(req);
+        }
+        /* After any attempted chunk, close the connection without the final
+         * zero chunk so clients can detect an incomplete download. */
+        return ESP_FAIL;
+    }
+    return sdlog_dl_chunk_cb(&dl, NULL, 0);
 }
 
 /* GET /sdlog/download?file=NAME — streams the raw log file. */
@@ -6240,22 +6423,7 @@ static esp_err_t sdlog_download_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    httpd_resp_set_type(req, "text/plain; charset=utf-8");
-    char disp[64];
-    snprintf(disp, sizeof disp, "attachment; filename=\"%s\"", name);
-    httpd_resp_set_hdr(req, "Content-Disposition", disp);
-
-    esp_err_t err = sdlog_read_file(name, sdlog_dl_chunk_cb, req);
-    if (err != ESP_OK) {
-        /* If nothing was streamed yet, a 404 is still valid; once chunks
-         * are in flight we can only cut the stream. */
-        if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_ARG) {
-            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such log file");
-            return ESP_FAIL;
-        }
-    }
-    httpd_resp_send_chunk(req, NULL, 0);   /* terminate chunked response */
-    return ESP_OK;
+    return web_transfer_start(req, sdlog_serve_download, name, strlen(name) + 1);
 }
 
 /* GET /sdlog/tail?file=NAME&n=N — last N lines as plain text. */
@@ -6284,7 +6452,10 @@ static esp_err_t sdlog_tail_handler(httpd_req_t *req)
     esp_err_t err = sdlog_tail_file(name, n_lines, buf, cap, &out_len);
     if (err != ESP_OK) {
         free(buf);
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such log file");
+        if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_ARG)
+            httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such log file");
+        else
+            httpd_resp_send_500(req);
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
@@ -6554,7 +6725,7 @@ esp_err_t web_ui_init(void)
     }
     web_idle_start(server);
     if (ota_flash_bind_httpd(server) != ESP_OK)
-        ESP_LOGE(TAG, "Cannot bind internal-stack OTA work to admin server");
+        ESP_LOGW(TAG, "OTA dispatcher identification could not be queued at startup");
     /* Old stored rules may conflict with the boot listener. Keep their
      * records, but do not install a DNAT binding over the admin service. */
     portmap_install_all();

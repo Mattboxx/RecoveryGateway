@@ -37,7 +37,15 @@ void tg_updates_parse(const char *json, size_t len, const char *chat, uint32_t n
 {
     memset(out, 0, sizeof *out);
     if (!json || !len || !chat || !chat[0]) return;
-    cJSON *root = json_guard_preflight(json, len) ? cJSON_ParseWithLength(json, len) : NULL;
+    const char *end = NULL;
+    cJSON *root = json_guard_preflight(json, len) ? cJSON_ParseWithLengthOpts(json, len, &end, false) : NULL;
+    if (root) {
+        while (end < json + len && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) end++;
+        if (end != json + len || !json_guard_unique(root)) {
+            cJSON_Delete(root);
+            return;
+        }
+    }
     const cJSON *ok = root ? cJSON_GetObjectItemCaseSensitive(root, "ok") : NULL;
     const cJSON *result = root ? cJSON_GetObjectItemCaseSensitive(root, "result") : NULL;
     if (!cJSON_IsTrue(ok) || !cJSON_IsArray(result)) {
@@ -84,6 +92,7 @@ bool telegram_commands_config_valid(const telegram_commands_config_t *c)
 #include "freertos/task.h"
 #include "ml_tls_distrust.h"
 #include "notify_channels.h"
+#include "homelab_ops.h"
 #include "nvs_params.h"
 #include "remote_commands.h"
 #include "tailscale_config.h"
@@ -146,6 +155,7 @@ static void set_error(const char *why)
  * same TLS connection is reused (keep-alive) instead of a new handshake per
  * poll: a 15 s poll cost about 2 % of a core in handshakes on board A. */
 #define TG_LONG_POLL_S 25
+enum {TG_FETCH_FAILED = -1, TG_FETCH_TOO_LARGE = -2};
 
 /* GET getUpdates on the task's connection (*client, created on first use and
  * kept while it works; dropped after any failure). The token is wiped from
@@ -154,7 +164,7 @@ static int fetch(esp_http_client_handle_t *client, const char *token, const char
 {
     char url[200];
     int n = snprintf(url, sizeof url, "https://api.telegram.org/bot%s/getUpdates?%s", token, query);
-    if (n <= 0 || (size_t)n >= sizeof url) { memset(url, 0, sizeof url); return -1; }
+    if (n <= 0 || (size_t)n >= sizeof url) { memset(url, 0, sizeof url); return TG_FETCH_FAILED; }
     if (!*client) {
         esp_http_client_config_t hc = {.url = url, .method = HTTP_METHOD_GET,
                                        .timeout_ms = (TG_LONG_POLL_S + 10) * 1000, .keep_alive_enable = true,
@@ -165,8 +175,8 @@ static int fetch(esp_http_client_handle_t *client, const char *token, const char
         *client = NULL;
     }
     memset(url, 0, sizeof url);
-    if (!*client) return -1;
-    int total = -1;
+    if (!*client) return TG_FETCH_FAILED;
+    int total = TG_FETCH_FAILED;
     if (esp_http_client_open(*client, 0) == ESP_OK && esp_http_client_fetch_headers(*client) >= 0
         && esp_http_client_get_status_code(*client) == 200) {
         total = 0;
@@ -176,7 +186,8 @@ static int fetch(esp_http_client_handle_t *client, const char *token, const char
             total += got;
         }
         answer[total] = 0;
-        if ((size_t)total >= cap - 1 || !esp_http_client_is_complete_data_received(*client)) total = -1;
+        if (!esp_http_client_is_complete_data_received(*client))
+            total = (size_t)total == cap - 1 ? TG_FETCH_TOO_LARGE : TG_FETCH_FAILED;
     }
     if (total < 0) {   /* a broken or partly read connection is never reused */
         esp_http_client_cleanup(*client);
@@ -185,40 +196,55 @@ static int fetch(esp_http_client_handle_t *client, const char *token, const char
     return total;
 }
 
-static void reply(const char *text)
+static esp_err_t reply(uint32_t destination, const char *text, unsigned shortcuts)
 {
     char why[80] = "";
-    if (notify_telegram_send_text(text, why, sizeof why) != ESP_OK) set_error(why);
+    esp_err_t err = notify_telegram_send_text(destination, text, shortcuts, why, sizeof why);
+    if (err != ESP_OK) set_error(why[0] ? why : esp_err_to_name(err));
+    return err;
 }
 
-static void send_info(const telegram_commands_config_t *c)
+static esp_err_t send_info(const telegram_commands_config_t *c, uint32_t destination)
 {
     char *text = remote_info_text(c->info_include_details, false);
-    if (!text) { reply("info: not enough memory"); return; }
+    if (!text) {
+        reply(destination, "Gateway status is temporarily unavailable: not enough memory.", 0);
+        return ESP_ERR_NO_MEM;
+    }
     /* Telegram notification bodies are bounded: send line-aligned parts. */
     size_t len = strlen(text), off = 0;
+    esp_err_t result = ESP_OK;
     while (off < len) {
         size_t take = len - off > 900 ? 900 : len - off;
         if (off + take < len) { size_t cut = take; while (cut > 200 && text[off + cut - 1] != '\n') cut--; if (cut > 200) take = cut; }
+        while (((unsigned char)text[off + take] & 0xc0u) == 0x80u) take--;
         char saved = text[off + take];
         text[off + take] = 0;
-        reply(text + off);
+        result = reply(destination, text + off, 0);
         text[off + take] = saved;
+        if (result != ESP_OK) break;
         off += take;
     }
     free(text);
+    return result;
 }
 
-static void run(const telegram_commands_config_t *c, const char *command)
+static void run(const telegram_commands_config_t *c, const char *command, uint32_t destination, bool private_chat)
 {
-    char text[160];
+    char text[REMOTE_REPLY_MAX];
     const char *title = NULL;
-    remote_cmd_kind_t kind = remote_command_run(command, c->info_enabled, c->allow_direct_mac, OPS_RECOVERY_TELEGRAM, text, sizeof text, &title);
+    remote_cmd_kind_t kind = remote_command_run(command, c->info_enabled, c->allow_direct_mac,
+                                               OPS_RECOVERY_TELEGRAM, destination, text, sizeof text, &title);
     if (kind == REMOTE_CMD_NONE) return;
-    if (kind == REMOTE_CMD_INFO) send_info(c);
-    else if (text[0]) reply(text);
+    unsigned shortcuts = 0;
+    if (kind == REMOTE_CMD_HELP && private_chat) {
+        shortcuts = TG_SHORTCUTS;
+        if (c->info_enabled) shortcuts |= TG_SHORTCUT_STATUS;
+        if (homelab_ops_recovery_allowed(OPS_RECOVERY_TELEGRAM)) shortcuts |= TG_SHORTCUT_CHECKS;
+    }
+    esp_err_t sent = kind == REMOTE_CMD_INFO ? send_info(c, destination) : reply(destination, text, shortcuts);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (kind == REMOTE_CMD_ERROR) s_st.command_errors++;
+    if (kind == REMOTE_CMD_ERROR || sent != ESP_OK) s_st.command_errors++;
     else s_st.commands_received++;
     xSemaphoreGive(s_lock);
 }
@@ -230,7 +256,7 @@ static bool poll_current(uint32_t generation, const char *token, const char *cha
     char current_token[96], current_chat[40];
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool enabled = generation == s_generation && s_cfg.commands_enabled &&
-        (!s_cfg.commands_only_when_tailscale_down || (tailscale_enabled && !tailscale_is_connected()));
+        (!s_cfg.commands_only_when_tailscale_down || !tailscale_enabled || !tailscale_is_connected());
     bool current = enabled && notify_telegram_target(current_token, sizeof current_token,
         current_chat, sizeof current_chat) && !strcmp(current_token, token) && !strcmp(current_chat, chat);
     xSemaphoreGive(s_lock);
@@ -241,6 +267,8 @@ static bool poll_current(uint32_t generation, const char *token, const char *cha
 static bool poll_once(esp_http_client_handle_t *client, const telegram_commands_config_t *c,
                       const char *token, const char *chat, uint32_t generation)
 {
+    uint32_t destination = notify_telegram_destination(token, chat);
+    if (!destination || !poll_current(generation, token, chat)) return false;
     char *answer = heap_caps_malloc(TG_ANSWER_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!answer) { set_error("not enough memory"); return false; }
     bool ok = false;
@@ -254,7 +282,7 @@ static bool poll_once(esp_http_client_handle_t *client, const telegram_commands_
             tg_updates_parse(answer, (size_t)n, chat, 0, &u);
             if (u.valid) { s_last_update = u.last_update_id; s_have_offset = true; set_error(""); ok = true; }
             else set_error("unexpected answer from Telegram");
-        } else set_error("cannot reach api.telegram.org");
+        } else set_error(n == TG_FETCH_TOO_LARGE ? "Telegram update exceeds the receive limit" : "cannot reach api.telegram.org");
         free(answer);
         return ok;
     }
@@ -263,17 +291,17 @@ static bool poll_once(esp_http_client_handle_t *client, const telegram_commands_
         snprintf(query, sizeof query, "offset=%lu&limit=%d&timeout=%d",
                  (unsigned long)s_last_update + 1, attempt ? 1 : 5, attempt ? 0 : TG_LONG_POLL_S);
         int n = fetch(client, token, query, answer, TG_ANSWER_MAX);
-        if (n <= 0) { set_error("cannot reach api.telegram.org"); break; }
         if (!poll_current(generation, token, chat)) break;
+        if (n == TG_FETCH_TOO_LARGE && attempt == 0) continue;
+        if (n <= 0) {
+            set_error(n == TG_FETCH_TOO_LARGE ? "Telegram update exceeds the receive limit" : "cannot reach api.telegram.org");
+            break;
+        }
         tg_updates_parse(answer, (size_t)n, chat, wall(), &u);
         if (!u.valid && attempt == 0) continue;      /* retry one update at a time */
         if (!u.valid) {
-            /* One update this firmware cannot read: skip it by its id. */
-            const char *p = strstr(answer, "\"update_id\":");
-            unsigned long id = p ? strtoul(p + 12, NULL, 10) : 0;
-            if (id > s_last_update) s_last_update = (uint32_t)id;
-            set_error("skipped an unreadable update");
-            ok = true;
+            /* Do not acknowledge a command from an unvalidated envelope. */
+            set_error("unexpected answer from Telegram");
             break;
         }
         if (u.last_update_id > s_last_update) s_last_update = u.last_update_id;   /* before running */
@@ -283,7 +311,7 @@ static bool poll_once(esp_http_client_handle_t *client, const telegram_commands_
         xSemaphoreGive(s_lock);
         for (int i = 0; i < u.count; i++) {
             if (!poll_current(generation, token, chat)) break;
-            run(c, u.cmd[i].text);
+            run(c, u.cmd[i].text, destination, chat[0] != '-');
         }
         ok = true;
         break;
@@ -314,7 +342,7 @@ static void task_main(void *arg)
             memset(token, 0, sizeof token);
             break;
         }
-        bool due = !c.commands_only_when_tailscale_down || (tailscale_enabled && !tailscale_is_connected());
+        bool due = !c.commands_only_when_tailscale_down || !tailscale_enabled || !tailscale_is_connected();
         bool polled = due && uplink_up() && poll_once(&client, &c, token, chat, generation);
         memset(token, 0, sizeof token);
         if (!due && client) { esp_http_client_cleanup(client); client = NULL; }   /* idle: no open connection */
@@ -352,6 +380,7 @@ void telegram_commands_init(void)
     if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     load(&s_cfg);
+    notify_telegram_set_commands_enabled(s_cfg.commands_enabled);
     start_or_wake_locked();
     xSemaphoreGive(s_lock);
 }
@@ -361,6 +390,7 @@ void telegram_commands_refresh(void)
     if (!s_lock) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_generation++;
+    notify_telegram_set_commands_enabled(s_cfg.commands_enabled);
     start_or_wake_locked();
     xSemaphoreGive(s_lock);
 }
@@ -395,6 +425,7 @@ void telegram_commands_apply_config(const telegram_commands_config_t *c)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_cfg = *c;
     s_generation++;
+    notify_telegram_set_commands_enabled(s_cfg.commands_enabled);
     start_or_wake_locked();
     xSemaphoreGive(s_lock);
 }

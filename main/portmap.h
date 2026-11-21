@@ -52,6 +52,8 @@ bool               portmap_listen_conflicts(uint8_t proto, uint16_t port);
 void               portmap_install_all(void);
 /* Same refresh, for callers already running on the TCP/IP thread. */
 void               portmap_install_now(void);
+bool               portmap_refresh_pending(void);
+void               portmap_retry_pending(void);
 
 #ifdef __cplusplus
 }

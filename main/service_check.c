@@ -18,27 +18,31 @@
 #include "lwip/inet.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <string.h>
 
 typedef struct {bool ready, connected, authority; uint32_t resolved_ip;} sc_path_t;
 /* Platform hooks; the core below is also compiled against host fixtures. */
 static uint64_t sc_now_ms(void);
-static bool sc_rule(int index, tailnet_forward_rule_t *rule);
+static bool sc_rule(int index, tailnet_forward_rule_t *rule, uint32_t *revision);
 static void sc_path(const tailnet_forward_rule_t *rule, sc_path_t *out);
 static int sc_connect(uint32_t ip_hbo, uint16_t port, uint32_t timeout_ms);
 static bool sc_admit(void);
 static esp_err_t sc_start_worker(void);
-static void sc_notify(int index, bool recovered);
+static void sc_notify(int index, const tailnet_forward_rule_t *rule, bool recovered);
 #define SC_LOCK() xSemaphoreTake(sc_lock, portMAX_DELAY)
 #define SC_UNLOCK() xSemaphoreGive(sc_lock)
 static SemaphoreHandle_t sc_lock;
 
 /* --- service check core (begin) --- */
 static service_check_result_t sc_results[TAILNET_FORWARD_MAX];
-static struct {bool active; int index; uint32_t token;} sc_pending;
+static uint32_t sc_result_revision[TAILNET_FORWARD_MAX];
+static struct {bool active; int index; uint32_t token, revision, watch_generation;} sc_pending;
 static service_watch_config_t sc_watch = {.interval_s = 900};
 static uint64_t sc_watch_next;
 static int sc_watch_cursor;
+static uint32_t sc_watch_generation;
+static uint32_t sc_watch_revision[TAILNET_FORWARD_MAX];
 static uint8_t sc_watch_fails[TAILNET_FORWARD_MAX];
 static bool sc_watch_alerted[TAILNET_FORWARD_MAX];
 
@@ -55,19 +59,31 @@ static void sc_watch_schedule_locked(uint64_t now)
     for (int n = 0; n < TAILNET_FORWARD_MAX; n++) {
         int i = (sc_watch_cursor + n) % TAILNET_FORWARD_MAX;
         tailnet_forward_rule_t rule;
-        if (!sc_rule(i, &rule) || !rule.enabled || rule.proto != TAILNET_FORWARD_PROTO_TCP) continue;
+        uint32_t revision;
+        if (!sc_rule(i, &rule, &revision) || !rule.enabled || rule.proto != TAILNET_FORWARD_PROTO_TCP) {
+            sc_watch_revision[i] = 0;
+            continue;
+        }
         uint32_t token = service_lease_token(&rule);
         sc_watch_cursor = (i + 1) % TAILNET_FORWARD_MAX;
         sc_pending.active = true; sc_pending.index = i; sc_pending.token = token;
+        sc_pending.revision = revision;
+        sc_pending.watch_generation = sc_watch_generation;
         sc_results[i] = (service_check_result_t){.state = SC_PENDING, .token = token};
+        sc_result_revision[i] = revision;
         return;
     }
 }
 
 /* Locked: 0 nothing, 1 newly unreachable, 2 recovered. Only handshake
  * outcomes count; tunnel/resource states are not evidence about the service. */
-static int sc_watch_observe_locked(int index, uint8_t state)
+static int sc_watch_observe_locked(int index, uint32_t revision, uint8_t state)
 {
+    if (sc_watch_revision[index] != revision) {
+        sc_watch_revision[index] = revision;
+        sc_watch_fails[index] = 0;
+        sc_watch_alerted[index] = false;
+    }
     if (state == SC_REACHABLE) {
         sc_watch_fails[index] = 0;
         if (sc_watch_alerted[index]) {sc_watch_alerted[index] = false; return 2;}
@@ -113,22 +129,31 @@ const char *service_check_next_step(unsigned s) {return s < SC_STATE_COUNT ? sc_
 static esp_err_t sc_request_locked(int index, uint32_t expected, uint64_t now)
 {
     tailnet_forward_rule_t rule;
-    if (index < 0 || index >= TAILNET_FORWARD_MAX || !sc_rule(index, &rule)) return ESP_ERR_INVALID_ARG;
+    uint32_t revision;
+    if (index < 0 || index >= TAILNET_FORWARD_MAX || !sc_rule(index, &rule, &revision)) return ESP_ERR_INVALID_ARG;
     if (!expected || service_lease_token(&rule) != expected) return ESP_ERR_INVALID_STATE;
     if (sc_pending.active) return ESP_ERR_NOT_FINISHED;
     const service_check_result_t *last = &sc_results[index];
-    if (last->token == expected && last->observed_ms && now >= last->observed_ms
+    if (sc_result_revision[index] == revision && last->token == expected &&
+        last->observed_ms && now >= last->observed_ms
         && now - last->observed_ms < SERVICE_CHECK_COOLDOWN_MS) return ESP_ERR_TIMEOUT;
     sc_pending.active = true;
     sc_pending.index = index;
     sc_pending.token = expected;
+    sc_pending.revision = revision;
+    sc_pending.watch_generation = sc_watch_generation;
     sc_results[index] = (service_check_result_t){.state = SC_PENDING, .token = expected};
+    sc_result_revision[index] = revision;
     return ESP_OK;
 }
 
 static bool sc_get_locked(int index, uint32_t current, service_check_result_t *out)
 {
     if (index < 0 || index >= TAILNET_FORWARD_MAX || !current || sc_results[index].token != current) return false;
+    tailnet_forward_rule_t rule;
+    uint32_t revision;
+    if (!sc_rule(index, &rule, &revision) || sc_result_revision[index] != revision ||
+        service_lease_token(&rule) != current) return false;
     *out = sc_results[index];
     return out->state != SC_NONE;
 }
@@ -142,12 +167,16 @@ static void sc_run(void)
     bool active = sc_pending.active;
     int index = sc_pending.index;
     uint32_t token = sc_pending.token;
+    uint32_t revision = sc_pending.revision;
+    uint32_t watch_generation = sc_pending.watch_generation;
     SC_UNLOCK();
     if (!active) return;
     service_check_result_t r = {.token = token};
-    tailnet_forward_rule_t rule;
+    tailnet_forward_rule_t rule = {0};
+    uint32_t live_revision;
     uint64_t started = sc_now_ms();
-    if (!sc_rule(index, &rule) || service_lease_token(&rule) != token) r.state = SC_CHANGED;
+    if (!sc_rule(index, &rule, &live_revision) || live_revision != revision ||
+        service_lease_token(&rule) != token) r.state = SC_CHANGED;
     else if (rule.proto == TAILNET_FORWARD_PROTO_UDP) r.state = SC_UDP_UNVERIFIABLE;
     else {
         sc_path_t path = {0};
@@ -168,14 +197,19 @@ static void sc_run(void)
     int event = 0;
     bool notify = false;
     SC_LOCK();
-    if (sc_pending.active && sc_pending.index == index && sc_pending.token == token) {
+    if (sc_pending.active && sc_pending.index == index && sc_pending.token == token && sc_pending.revision == revision) {
         sc_results[index] = r;
         sc_pending.active = false;
-        event = sc_watch_observe_locked(index, r.state);
-        notify = sc_watch.enabled && sc_watch.notify;
+        tailnet_forward_rule_t current;
+        if (sc_watch.enabled && watch_generation == sc_watch_generation &&
+            sc_rule(index, &current, &live_revision) && live_revision == revision &&
+            current.enabled && service_lease_token(&current) == token) {
+            event = sc_watch_observe_locked(index, revision, r.state);
+            notify = sc_watch.notify;
+        }
     }
     SC_UNLOCK();
-    if (event && notify) sc_notify(index, event == 2);
+    if (event && notify) sc_notify(index, &rule, event == 2);
 }
 /* --- service check core (end) --- */
 
@@ -210,12 +244,28 @@ bool service_check_get(int index, uint32_t current_token, service_check_result_t
 void service_check_poll(void) {sc_init(); sc_run();}
 
 typedef struct {uint8_t enabled, notify, reserved[2]; uint32_t interval_s;} sc_watch_blob_t;
+static atomic_bool sc_retry_pending;
+static uint64_t sc_retry_at;
+
+void service_watch_retry_worker(void)
+{
+    if (!atomic_load(&sc_retry_pending) || xSemaphoreTake(sc_lock, 0) != pdTRUE) return;
+    bool attempt = sc_watch.enabled && sc_now_ms() >= sc_retry_at;
+    if (attempt) sc_retry_at = sc_now_ms() + 30000u;
+    SC_UNLOCK();
+    if (attempt && sc_start_worker() == ESP_OK) atomic_store(&sc_retry_pending, false);
+}
+
+bool service_watch_waiting(void)
+{
+    return atomic_load(&sc_retry_pending);
+}
 
 void service_check_init(void)
 {
     sc_init();
     nvs_handle_t nvs;
-    sc_watch_blob_t blob;
+    sc_watch_blob_t blob = {0};
     size_t size = sizeof blob;
     bool loaded = false;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
@@ -224,13 +274,19 @@ void service_check_init(void)
             && blob.enabled <= 1 && blob.notify <= 1 && !blob.reserved[0] && !blob.reserved[1];
         nvs_close(nvs);
     }
+    if (!loaded) return;
     service_watch_config_t stored = {.enabled = blob.enabled, .notify = blob.notify, .interval_s = blob.interval_s};
-    if (!loaded || !sc_watch_valid(&stored)) return;
+    if (!sc_watch_valid(&stored)) return;
     SC_LOCK();
     sc_watch = stored;
     sc_watch_next = sc_now_ms() + (uint64_t)stored.interval_s * 1000u;
     SC_UNLOCK();
-    if (stored.enabled) (void)sc_start_worker();
+    if (stored.enabled && sc_start_worker() != ESP_OK) {
+        SC_LOCK();
+        sc_retry_at = sc_now_ms() + 30000u;
+        atomic_store(&sc_retry_pending, true);
+        SC_UNLOCK();
+    }
 }
 
 void service_watch_get(service_watch_config_t *out)
@@ -257,28 +313,35 @@ esp_err_t service_watch_set(const service_watch_config_t *config)
     }
     if (err != ESP_OK) return err;   /* RAM keeps the previous watch */
     SC_LOCK();
+    if (sc_watch.enabled != stored.enabled || sc_watch.notify != stored.notify ||
+        sc_watch.interval_s != stored.interval_s) {
+        sc_watch_generation++;
+        memset(sc_watch_revision, 0, sizeof sc_watch_revision);
+    }
     sc_watch = stored;
     sc_watch_next = sc_now_ms() + (uint64_t)stored.interval_s * 1000u;
-    if (!stored.enabled) {memset(sc_watch_fails, 0, sizeof sc_watch_fails); memset(sc_watch_alerted, 0, sizeof sc_watch_alerted);}
+    atomic_store(&sc_retry_pending, false);
     SC_UNLOCK();
     return ESP_OK;
 }
 
-static void sc_notify(int index, bool recovered)
+static void sc_notify(int index, const tailnet_forward_rule_t *rule, bool recovered)
 {
-    tailnet_forward_rule_t rule;
     char message[160];
-    bool named = sc_rule(index, &rule) && rule.name[0];
+    bool named = rule->name[0] != 0;
     snprintf(message, sizeof message, recovered
              ? "Service watch: rule %d%s%.31s%s answers again (TCP handshake from this gateway)."
              : "Service watch: rule %d%s%.31s%s gave no TCP answer twice in a row. This is not proof the peer is offline.",
-             index + 1, named ? " (" : "", named ? rule.name : "", named ? ")" : "");
+             index + 1, named ? " (" : "", named ? rule->name : "", named ? ")" : "");
     (void)ntfy_integration_queue_event(message);
     mqtt_integration_publish_now();
 }
 
 static uint64_t sc_now_ms(void) {return (uint64_t)esp_timer_get_time() / 1000;}
-static bool sc_rule(int index, tailnet_forward_rule_t *rule) {return tailnet_forward_get(index, rule, NULL);}
+static bool sc_rule(int index, tailnet_forward_rule_t *rule, uint32_t *revision)
+{
+    return tailnet_forward_get_revisioned(index, rule, NULL, revision);
+}
 static bool sc_admit(void) {return homelab_ops_admit();}
 static esp_err_t sc_start_worker(void) {return homelab_ops_start_optional_worker();}
 

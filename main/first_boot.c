@@ -4,6 +4,7 @@
 #include "first_boot_core.h"
 
 #include <stdio.h>
+#include <stdatomic.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -32,6 +33,7 @@
 #include "sockaddr_ipv4.h"
 #include "nvs_params.h"
 #include "web_password.h"
+#include "web_restart.h"
 #include "web_ui.h"
 #include "wifi_networks.h"
 
@@ -47,7 +49,7 @@ int ml_x25519(unsigned char out[32], const unsigned char scalar[32], const unsig
 #define FB_TASK_STACK 6144
 
 static bool s_active;
-static bool s_finished;
+static atomic_bool s_finished;
 static fb_ctx_t s_ctx;
 static StaticSemaphore_t s_lock_storage;
 static SemaphoreHandle_t s_lock;
@@ -143,8 +145,6 @@ void first_boot_init(void)
 
 bool first_boot_active(void) { return s_active; }
 
-static void restart_cb(void *arg) { (void)arg; esp_restart(); }
-
 static void button_task(void *arg)
 {
     (void)arg;
@@ -184,7 +184,6 @@ void first_boot_start(void)
     esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     esp_netif_ip_info_t info = {0};
     if (ap && esp_netif_get_ip_info(ap, &info) == ESP_OK) s_ap_ip_nbo = info.ip.addr;
-    if (!dns_relay_is_enabled()) dns_relay_set_enabled(true);
     dns_relay_set_captive(s_ap_ip_nbo);
     if (xTaskCreateWithCaps(button_task, "first_boot", FB_TASK_STACK, NULL, 3, &s_task,
                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
@@ -237,7 +236,7 @@ static uint32_t client_ip(httpd_req_t *req)
  * own AP, and keep the ordinary same-origin request screening. */
 static bool setup_request(httpd_req_t *req)
 {
-    if (!s_active) {
+    if (!s_active || s_finished) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "setup is complete");
         return false;
     }
@@ -521,19 +520,29 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     char cidr[24] = "";
     if (share_lan && !tested_lan_cidr(cidr, sizeof cidr)) return send_error(req, "400 Bad Request", "invalid", "test the Wi-Fi connection before sharing the home network");
 
-    /* Order matters for power loss: the protected AP first, then the admin
-     * password (which ends setup mode), then the rest, then the marker. */
-    esp_err_t e = nvs_param_set_str("ap_ssid", ap_ssid);
+    TaskHandle_t reboot = NULL;
+    if (web_ui_reserve_restart(&reboot) != ESP_OK) {
+        memset(&cell, 0, sizeof cell);
+        return send_error(req, "503 Service Unavailable", "restart", "Cannot reserve a restart. Try finishing setup again.");
+    }
+    esp_err_t e = nvs_param_txn_begin();
+    if (e != ESP_OK) {
+        memset(&cell, 0, sizeof cell);
+        web_ui_finish_restart(reboot, false);
+        return send_error(req, "503 Service Unavailable", "storage", esp_err_to_name(e));
+    }
+    /* Use the boot-recovered settings journal for the complete save. Uplink
+     * caches still describe the running test configuration until restart. */
+    e = nvs_param_set_str("ap_ssid", ap_ssid);
     if (e == ESP_OK) e = nvs_param_set_str("ap_passwd", ap_open ? "" : ap_pw);
     if (e == ESP_OK) e = nvs_param_set_u8("ap_open", ap_open ? 1 : 0);
     if (e == ESP_OK) e = nvs_param_set_u8("ap_auto_off", ap_recovery ? 1 : 0);
-    if (e == ESP_OK) e = set_web_password_hashed(admin);
     if (e == ESP_OK && has_wifi) {
         wifi_network_t n = {0};
         strlcpy(n.ssid, ssid, sizeof n.ssid);
         strlcpy(n.passwd, wpw ? wpw : "", sizeof n.passwd);
         n.valid = 1;
-        e = wifi_networks_set_all(&n, 1);
+        e = wifi_networks_store_for_reboot(&n, 1);
         memset(&n, 0, sizeof n);
     }
     bool join = key && *key;
@@ -545,8 +554,8 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     if (e == ESP_OK && lan && *lan) e = nvs_param_set_str("hostname", lan);
     if (e == ESP_OK) e = nvs_param_set_int("ts_adv_ap", share_ap ? 1 : 0);
     if (e == ESP_OK) e = nvs_param_set_str("ts_routes", cidr);
-    if (e == ESP_OK && eth_up) e = eth_uplink_set_config(&eth, why, sizeof why);
-    if (e == ESP_OK && cell_up) e = cell_uplink_set_config(&cell, why, sizeof why);
+    if (e == ESP_OK && eth_up) e = eth_uplink_store_for_reboot(&eth, why, sizeof why);
+    if (e == ESP_OK && cell_up) e = cell_uplink_store_for_reboot(&cell, why, sizeof why);
     memset(&cell, 0, sizeof cell);                         /* SIM PIN and APN password */
     if (e == ESP_OK && tz && *tz) e = nvs_param_set_str("tz", tz);
     if (e == ESP_OK) e = nvs_param_set_int("ts_adv_exit", exit_node ? 1 : 0);
@@ -572,8 +581,12 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     if (e == ESP_OK) e = nvs_flags_save(&tailnet_names_flags, bool_of(extras, "tailnet_names", false) ? 1 : 0);
     const char *name = str_of(cmd, "device_name");
     if (e == ESP_OK && name && *name && strlen(name) <= 32) e = nvs_param_set_str("dev_name", name);
+    if (e == ESP_OK) e = web_password_store_for_reboot(admin, nvs_param_set_str);
     if (e == ESP_OK) e = nvs_param_set_u8("setup_done", 1);
+    esp_err_t end = nvs_param_txn_end(e == ESP_OK);
+    if (e == ESP_OK) e = end;
     if (e != ESP_OK) {
+        web_ui_finish_restart(reboot, false);
         ESP_LOGE(TAG, "setup could not be saved: %s", esp_err_to_name(e));
         return send_error(req, "500 Internal Server Error", "storage", esp_err_to_name(e));
     }
@@ -582,21 +595,19 @@ static esp_err_t finish(httpd_req_t *req, const cJSON *cmd)
     fb_wipe(&s_ctx);
     xSemaphoreGive(s_lock);
     dns_relay_set_captive(0);
-    static esp_timer_handle_t timer;
-    const esp_timer_create_args_t args = { .callback = restart_cb, .name = "fb_restart" };
-    if (!timer && esp_timer_create(&args, &timer) == ESP_OK) esp_timer_start_once(timer, 3000000);
     ESP_LOGW(TAG, "first-boot setup saved; restarting into normal mode");
-    cJSON *out = cJSON_CreateObject();
-    if (out) {
-        cJSON_AddBoolToObject(out, "ok", true);
-        cJSON_AddNumberToObject(out, "restart_in_s", 3);
-        cJSON_AddBoolToObject(out, "tailnet", join);
-        cJSON_AddStringToObject(out, "uplink", type);
-        char lan[LAN_NAME_MAX + 1];
-        lan_name_get(lan, sizeof lan);
-        cJSON_AddStringToObject(out, "lan_name", lan);
-    }
-    return send_json(req, NULL, out);
+    /* The type and LAN name are validated above. Avoid allocating a response
+     * after a durable save, when a low heap would report a false failure. */
+    char saved_name[LAN_NAME_MAX + 1], response[128];
+    lan_name_get(saved_name, sizeof saved_name);
+    snprintf(response, sizeof response,
+             "{\"ok\":true,\"restart_in_s\":1,\"tailnet\":%s,\"uplink\":\"%s\",\"lan_name\":\"%s\"}",
+             join ? "true" : "false", type, saved_name);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t result = httpd_resp_sendstr(req, response);
+    web_ui_finish_restart(reboot, true);
+    return result;
 }
 
 static esp_err_t apply_handler(httpd_req_t *req)

@@ -53,12 +53,13 @@ worker = function('static void worker_task(void *arg)')
 assert 'uint32_t up_id = esp_random();' in worker and 'rbuf[0] = client_id[0];' in worker
 assert 'recvfrom(up, rbuf, DNS_RELAY_BUF_SIZE, 0, NULL, NULL)' not in source
 assert 'upstream_recv(up, rbuf, DNS_RELAY_BUF_SIZE + 1, w->q, w->qlen, &up_addr)' in worker
-assert '(void)dns_edns_clamp(w->q, w->qlen, DNS_RELAY_BUF_SIZE);' in worker
+assert '(void)dns_edns_clamp(qbuf, qlen, DNS_RELAY_BUF_SIZE);' in function('static void listener_task(')
 assert 'dns_truncated_reply(rbuf, rlen, w->q, w->qlen)' in worker
 
 helpers = (function('static int dns_question_len(') + function('static int dns_skip_name(')
            + function('static bool dns_edns_clamp(') + function('static int dns_truncated_reply(')
-           + function('static uint32_t dns_resp_ttl(')
+           + function('static bool dns_is_std_query(') + function('static int dns_cache_key_len(')
+           + function('static uint32_t dns_read_u32(') + function('static uint32_t dns_resp_ttl(')
            + function('static bool dns_reply_matches(') + function('static int upstream_recv('))
 checked = re.sub(r'\bp\[([^\]]+)\]', r'AT(\1)', helpers)
 tcp_helpers = function('static bool tcp_all(') + function('static int tcp_read_msg(') + function('static bool tcp_write_msg(')
@@ -143,6 +144,12 @@ static void build_r(uint32_t ttl) {           /* answer to q: one A record via p
     uint8_t rr[] = {0xC0, 0x0C, 0, 1, 0, 1, ttl >> 24, ttl >> 16, ttl >> 8, ttl, 0, 4, 192, 0, 2, 1};
     memcpy(r + rlen, rr, sizeof rr); rlen += sizeof rr;
 }
+static void store_response(const uint8_t *query, int len, uint32_t upstream, uint32_t ttl)
+{
+    memcpy(q, query, len); qlen = len;
+    build_r(ttl);
+    cache_put(q, dns_cache_key_len(q, qlen), upstream, 1, r, rlen, ttl);
+}
 static void add(const uint8_t *d, int len, uint32_t ip, uint16_t port) {
     dgram_t *g = &script[nscript++]; memcpy(g->d, d, len); g->len = len; g->ip = ip; g->port = port; g->err = 0;
 }
@@ -154,11 +161,42 @@ int main(void) {
     dns_cache_entry_t entries[DNS_CACHE_ENTRIES] = {0};
     s_cache = entries;
     s_cache_mtx = entries;
-    int key_len = qlen - 12, cached_len = 0;
+    int key_len = dns_cache_key_len(q, qlen), cached_len = 0;
+    CHECK(key_len == qlen - 2);
     cache_put(q, key_len, SRV, 1, r, rlen, 300);
     CHECK(cache_get(q, key_len, SRV, 1, buf, &cached_len) && cached_len == rlen);
+    now_us += 3000001;
+    CHECK(cache_get(q, key_len, SRV, 1, buf, &cached_len));
+    CHECK(dns_read_u32(buf + qlen + 6) == 296 && buf[0] == 0xBE && buf[1] == 0xEF);
+    now_us += 296999999;
+    CHECK(!cache_get(q, key_len, SRV, 1, buf, &cached_len));
+    now_us = 1000000;
     CHECK(!cache_get(q, key_len, SRV + 1, 1, buf, &cached_len));
     CHECK(!cache_get(q, key_len, SRV, 2, buf, &cached_len));
+    q[3] = 0x10; /* checking disabled */
+    CHECK(!cache_get(q, key_len, SRV, 1, buf, &cached_len));
+    q[3] = 0;
+    q[1] = 0xED;
+    CHECK(cache_get(q, key_len, SRV, 1, buf, &cached_len) && buf[1] == 0xED);
+    {
+        const uint8_t opt[] = {0, 0, 41, 4, 0, 0, 0, 0, 0, 0, 0};
+        int question_end = qlen;
+        memcpy(q + qlen, opt, sizeof opt); qlen += sizeof opt; q[11] = 1;
+        int edns_key = dns_cache_key_len(q, qlen);
+        CHECK(edns_key == qlen - 2 && !cache_get(q, edns_key, SRV, 1, buf, &cached_len));
+        cache_put(q, edns_key, SRV, 1, r, rlen, 300);
+        CHECK(cache_get(q, edns_key, SRV, 1, buf, &cached_len));
+        q[question_end + 7] = 0x80;  /* DNSSEC OK */
+        CHECK(!cache_get(q, edns_key, SRV, 1, buf, &cached_len));
+        q[question_end + 7] = 0;
+        q[question_end + 3] = 2;     /* different advertised UDP size */
+        CHECK(!cache_get(q, edns_key, SRV, 1, buf, &cached_len));
+        q[question_end + 6] = 1;     /* unsupported EDNS version */
+        CHECK(dns_cache_key_len(q, qlen) == 0);
+        q[question_end + 6] = 0;
+        q[qlen - 1] = 4; memset(q + qlen, 0, 4);
+        CHECK(dns_cache_key_len(q, qlen + 4) == 0);
+    }
     /* Two-way sets: two names of the same set both stay; a third evicts the
      * one expiring first; the same name is updated in place. */
     {
@@ -167,21 +205,21 @@ int main(void) {
         uint32_t want = 0;
         for (int i = 0; i < 2000 && found < 3; i++) {
             snprintf(nm, sizeof nm, "host%d.example", i); build_q(1, nm);
-            if (found == 0) want = cache_set(q, qlen - 12);
-            if (cache_set(q, qlen - 12) != want) continue;
+            if (found == 0) want = cache_set(q, qlen - 2);
+            if (cache_set(q, qlen - 2) != want) continue;
             if (found == 0) {memcpy(qa, q, qlen); la = qlen;} else if (found == 1) {memcpy(qb, q, qlen); lb = qlen;} else {memcpy(qc, q, qlen); lc = qlen;}
             found++;
         }
         CHECK(found == 3);
-        cache_put(qa, la - 12, SRV, 1, r, rlen, 300);
+        store_response(qa, la, SRV, 300);
         now_us += 1000000;
-        cache_put(qb, lb - 12, SRV, 1, r, rlen, 300);
+        store_response(qb, lb, SRV, 300);
         int n = 0;
-        CHECK(cache_get(qa, la - 12, SRV, 1, buf, &n) && cache_get(qb, lb - 12, SRV, 1, buf, &n));
-        cache_put(qa, la - 12, SRV, 1, r, rlen, 600);                 /* same name: in place */
-        CHECK(cache_get(qb, lb - 12, SRV, 1, buf, &n));
-        cache_put(qc, lc - 12, SRV, 1, r, rlen, 300);                 /* b expires first: b goes */
-        CHECK(cache_get(qa, la - 12, SRV, 1, buf, &n) && cache_get(qc, lc - 12, SRV, 1, buf, &n) && !cache_get(qb, lb - 12, SRV, 1, buf, &n));
+        CHECK(cache_get(qa, la - 2, SRV, 1, buf, &n) && cache_get(qb, lb - 2, SRV, 1, buf, &n));
+        store_response(qa, la, SRV, 600);                             /* same name: in place */
+        CHECK(cache_get(qb, lb - 2, SRV, 1, buf, &n));
+        store_response(qc, lc, SRV, 300);                             /* b expires first: b goes */
+        CHECK(cache_get(qa, la - 2, SRV, 1, buf, &n) && cache_get(qc, lc - 2, SRV, 1, buf, &n) && !cache_get(qb, lb - 2, SRV, 1, buf, &n));
         now_us = 1000000;
         build_q(0xBEEF, "www.example.com"); build_r(300);
     }
@@ -216,17 +254,32 @@ int main(void) {
     /* TTL parsing */
     int ql = dns_question_len(q, qlen); CHECK(ql == qlen - 12);
     cur_p = r; cur_len = rlen;
-    CHECK(dns_resp_ttl(r, rlen, ql) == 300);
-    build_r(2); CHECK(dns_resp_ttl(r, rlen, ql) == DNS_CACHE_TTL_MIN_S);
-    build_r(999999); CHECK(dns_resp_ttl(r, rlen, ql) == DNS_CACHE_TTL_MAX_S);
-    cur_len = 11; CHECK(dns_resp_ttl(r, 11, ql) == 0);
+    CHECK(dns_resp_ttl(r, rlen, ql, NULL, 0) == 300);
+    build_r(2); CHECK(dns_resp_ttl(r, rlen, ql, NULL, 0) == 2);
+    build_r(0); CHECK(dns_resp_ttl(r, rlen, ql, NULL, 0) == 0);
+    build_r(999999); CHECK(dns_resp_ttl(r, rlen, ql, NULL, 0) == DNS_CACHE_TTL_MAX_S);
+    cur_len = 11; CHECK(dns_resp_ttl(r, 11, ql, NULL, 0) == 0);
     /* answer name "a" + pointer: labels then compression */
     build_r(300); { int at = qlen; uint8_t nm[] = {1, 'a', 0xC0, 0x0C}; memmove(r + at + 4, r + at + 2, rlen - at - 2);
         memcpy(r + at, nm, 4); rlen += 2; }
-    cur_len = rlen; CHECK(dns_resp_ttl(r, rlen, ql) == 300);
+    cur_len = rlen; CHECK(dns_resp_ttl(r, rlen, ql, NULL, 0) == 300);
 
     /* TC answers are not cached */
-    build_r(300); r[2] |= 0x02; cur_p = r; cur_len = rlen; CHECK(dns_resp_ttl(r, rlen, ql) == 0);
+    build_r(300); r[2] |= 0x02; cur_p = r; cur_len = rlen; CHECK(dns_resp_ttl(r, rlen, ql, NULL, 0) == 0);
+
+    /* NXDOMAIN needs an SOA; use its MINIMUM and preserve OPT's flags. */
+    memcpy(r, q, qlen); r[2] = 0x81; r[3] = 0x83; rlen = qlen;
+    cur_len = rlen; CHECK(dns_resp_ttl(r, rlen, ql, NULL, 0) == 0);
+    uint8_t soa[36] = {0xC0, 0x0C, 0, 6, 0, 1, 0, 0, 0, 60, 0, 24, 0xC0, 0x0C, 0xC0, 0x0C};
+    soa[35] = 7;
+    const uint8_t flags_opt[] = {0, 0, 41, 4, 0, 0, 0, 0x80, 0, 0, 0};
+    r[9] = r[11] = 1;
+    memcpy(r + rlen, soa, sizeof soa); rlen += sizeof soa;
+    memcpy(r + rlen, flags_opt, sizeof flags_opt); rlen += sizeof flags_opt;
+    cur_len = rlen; memcpy(buf, r, rlen);
+    CHECK(dns_resp_ttl(r, rlen, ql, buf, 2) == 7 && dns_read_u32(buf + qlen + 6) == 5);
+    CHECK(memcmp(buf + qlen + sizeof soa, flags_opt, sizeof flags_opt) == 0);
+    CHECK(dns_resp_ttl(r, rlen - 1, ql, NULL, 0) == 0);
 
     /* EDNS clamp: OPT RR in the additional section */
     build_q(0x1234, "big.example.com");
@@ -263,7 +316,7 @@ int main(void) {
     int tl = dns_truncated_reply(buf, got, q, qlen);
     CHECK(tl == qlen && (buf[2] & 0x02) && buf[7] == 0 && buf[9] == 0 && buf[11] == 0 && buf[5] == 1);
     CHECK(memcmp(buf + 12, q + 12, qlen - 12) == 0 && (buf[2] & 0x80));
-    cur_p = buf; cur_len = tl; CHECK(dns_resp_ttl(buf, tl, ql) == 0);                          /* not cached */
+    cur_p = buf; cur_len = tl; CHECK(dns_resp_ttl(buf, tl, ql, NULL, 0) == 0);                 /* not cached */
     CHECK(dns_truncated_reply(buf, 11, q, qlen) == 0);
 
     /* DNS over TCP framing */
@@ -288,7 +341,7 @@ int main(void) {
         seed = seed * 1664525u + 1013904223u; int len = (seed & 1) ? blen : (int)(seed >> 8) % (blen + 1);
         uint8_t *heap = malloc(len ? len : 1); memcpy(heap, r, len);
         cur_p = heap; cur_len = (size_t)len;
-        (void)dns_resp_ttl(heap, len, ql);
+        (void)dns_resp_ttl(heap, len, ql, NULL, 0);
         (void)dns_reply_matches(heap, len, q, qlen);
         (void)dns_question_len(heap, len);
         free(heap);
@@ -399,6 +452,8 @@ typedef struct {int n;} fd_set;
 static uint16_t htons(uint16_t v) {return (uint16_t)(v << 8 | v >> 8);}
 static volatile uint32_t st_stray, st_queries, st_tcp, st_hits, st_misses;
 static atomic_int s_tcp_active;
+static atomic_uint s_cache_epoch;
+static bool change_epoch_on_udp, change_epoch_on_tcp;
 static volatile uint32_t s_captive_nbo;
 typedef int (*dns_relay_local_cb_t)(const uint8_t *q, int len, uint8_t *out, int cap);
 typedef uint32_t (*dns_relay_route_cb_t)(const uint8_t *q, int len);
@@ -435,6 +490,7 @@ static int recvfrom(int f, void *b, size_t cap, int fl, struct sockaddr *from, s
     memcpy(b, udp_answer, 2);
     struct sockaddr_in *s = (struct sockaddr_in *)from; s->sin_addr.s_addr = 0x0101A8C0; s->sin_port = htons(53);
     udp_answer_len = 0;
+    if (change_epoch_on_udp) atomic_fetch_add(&s_cache_epoch, 1);
     return n;
 }
 static int recv(int f, void *b, size_t n, int fl)
@@ -449,7 +505,9 @@ static int recv(int f, void *b, size_t n, int fl)
         }
         if (up_reply_pos >= up_reply_len) return 0;
         int k = up_reply_len - up_reply_pos; if (k > (int)n) k = (int)n; if (k > 1460) k = 1460;
-        memcpy(b, up_reply + up_reply_pos, (size_t)k); up_reply_pos += k; return k;
+        memcpy(b, up_reply + up_reply_pos, (size_t)k); up_reply_pos += k;
+        if (change_epoch_on_tcp) atomic_fetch_add(&s_cache_epoch, 1);
+        return k;
     }
     if (f != 3) {errno = EBADF; return -1;}
     if (client_in_pos >= client_in_len) return 0;
@@ -463,7 +521,7 @@ static int send(int f, const void *b, size_t n, int fl)
     if (f != 3) return -1;
     memcpy(client_out + client_out_len, b, n); client_out_len += (int)n; return (int)n;
 }
-typedef struct {int tcp; int qlen; uint8_t q[DNS_RELAY_BUF_SIZE];} dns_work_t;
+typedef struct {int tcp; int qlen; uint32_t cache_epoch; uint8_t q[DNS_RELAY_BUF_SIZE];} dns_work_t;
 @@SERVE@@
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d\n", __LINE__); return 1; } } while (0)
 static uint8_t q[128]; static int qlen;
@@ -521,6 +579,23 @@ int main(void)
     build(0x5555, "x.example.com"); client_in[0] = 0; client_in[1] = 5; sends = udp_sends; atomic_store(&s_tcp_active, 1);
     tcp_serve(&w, ans);
     CHECK(udp_sends == sends && client_out_len == 0 && atomic_load(&s_tcp_active) == 0);
+    /* Drop replies across a resolver change during each transport. */
+    build(0x6666, "x.example.com"); answer_of(2500, false);
+    change_epoch_on_udp = true; atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(client_out_len == 0 && atomic_load(&s_tcp_active) == 0);
+    change_epoch_on_udp = false;
+    build(0x7777, "x.example.com"); answer_of(200, true);
+    w.cache_epoch = atomic_load(&s_cache_epoch);
+    tcp_connect_ok = 1; change_epoch_on_tcp = true; atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(client_out_len == 0 && atomic_load(&s_tcp_active) == 0);
+    change_epoch_on_tcp = false;
+    build(0x8888, "x.example.com"); answer_of(2500, false);
+    w.cache_epoch = atomic_load(&s_cache_epoch);
+    atomic_store(&s_tcp_active, 1);
+    tcp_serve(&w, ans);
+    CHECK(client_out_len == 2502 && client_out[2] == 0x88 && client_out[3] == 0x88);
     puts("tcp serve ok");
     return 0;
 }
@@ -546,3 +621,298 @@ old = 'rl = udp_ask(upstream, w->q, qlen, answer, DNS_UDP_LARGE_ANSWER);'
 assert old in serve_code
 assert run_serve(serve_code.replace(old, 'rl = 0;')).returncode != 0, 'TCP-only upstream must fail'
 print('dns relay tcp: UDP first with a 4 KB buffer, whole answer to the TCP client, TCP upstream only when truncated, local names, bounded')
+
+STARTUP = r"""
+#include <assert.h>
+#include <setjmp.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define DNS_WORKER_COUNT 2
+#define DNS_WORK_QUEUE_DEPTH 8
+#define DNS_RELAY_BUF_SIZE 1024
+#define DNS_TCP_MAX_ANSWER 16384
+#define DNS_WORKER_RETRY_US 2000000LL
+#define DNS_LISTENER_RETRY_US 5000000LL
+#define DNS_RELAY_BOOT_DELAY_MS 3000
+#define DNS_LISTENER_STACK 8192
+#define DNS_WORKER_STACK 8192
+#define DNS_RELAY_TASK_PRIO 4
+#define MALLOC_CAP_SPIRAM 1
+#define MALLOC_CAP_8BIT 2
+#define ESP_OK 0
+#define pdPASS 1
+#define pdTRUE 1
+#define pdMS_TO_TICKS(ms) (ms)
+#define ESP_LOGI(...) ((void)0)
+#define ESP_LOGW(...) ((void)0)
+#undef FD_SET
+#undef FD_ISSET
+#undef FD_ZERO
+#define fd_set fixture_fd_set
+typedef unsigned fixture_fd_set;
+#define FD_SET(fd, set) (*(set) |= 1u << (fd))
+#define FD_ISSET(fd, set) (*(set) & (1u << (fd)))
+#define FD_ZERO(set) (*(set) = 0)
+#define select fixture_select
+#define close fixture_close
+#define timeval fixture_timeval
+struct fixture_timeval { long tv_sec, tv_usec; };
+typedef unsigned socklen_t;
+struct sockaddr { uint32_t addr; };
+struct sockaddr_in { uint32_t addr; };
+typedef struct {
+    struct sockaddr_in client;
+    socklen_t client_len;
+    bool lan;
+    uint32_t upstream, cache_epoch;
+    unsigned udp_generation;
+    int tcp, qlen;
+    uint8_t q[DNS_RELAY_BUF_SIZE];
+} dns_work_t;
+typedef int (*dns_relay_local_cb_t)(const uint8_t *, int, uint8_t *, int);
+typedef uint32_t (*dns_relay_route_cb_t)(const uint8_t *, int);
+static dns_relay_local_cb_t s_local_cb;
+static dns_relay_route_cb_t s_route_cb;
+static atomic_uint s_bind_nbo=1, s_cache_epoch;
+static atomic_bool s_healthy;
+static bool s_enabled=true, s_lan_on, s_lan_dirty;
+static uint32_t s_captive_nbo=1, s_lan_nbo, s_upstream_nbo;
+static atomic_int s_listen_sock=-1, s_lan_sock=-1;
+static unsigned s_udp_generation[2], worker_replies;
+typedef bool StaticSemaphore_t;
+static StaticSemaphore_t *s_udp_io;
+#define portMAX_DELAY 0
+#define MSG_DONTWAIT 0x08
+static StaticSemaphore_t *xSemaphoreCreateMutexStatic(StaticSemaphore_t *s) { assert(!*s); return s; }
+static void xSemaphoreTake(StaticSemaphore_t *s, int timeout) { assert(!*s && timeout==portMAX_DELAY); *s=true; }
+static void xSemaphoreGive(StaticSemaphore_t *s) { assert(*s); *s=false; }
+static void *s_cache, *s_workq;
+static uint8_t *s_tcp_answer, *owned[DNS_WORKER_COUNT];
+static unsigned st_queries, st_hits, st_misses;
+static unsigned step, admissions, task_limit, closed, freed, captive_replies, tcp_accepts;
+static unsigned queue_attempts, transitions;
+static bool allow_queue, allow_psram_udp, allow_internal_udp, allow_tcp, fail_bind;
+static bool checked_backoff;
+static bool allow_listener, timer_alloc_ok, timer_start_ok, armed;
+static unsigned listener_attempts, timer_deleted;
+typedef struct { void (*callback)(void *); } fixture_timer_t;
+typedef fixture_timer_t *esp_timer_handle_t;
+typedef struct { void (*callback)(void *); const char *name; bool skip_unhandled_events; } esp_timer_create_args_t;
+static fixture_timer_t fixture_timer;
+static esp_timer_handle_t s_listener_retry;
+static int64_t clock_us;
+static jmp_buf finish;
+static void notify_state(bool healthy) {
+    static const bool expected[]={true, false, true, false, true};
+    assert(transitions < sizeof expected / sizeof *expected);
+    assert(healthy==expected[transitions++] && atomic_load(&s_healthy)==healthy);
+}
+static void *xQueueCreate(unsigned depth, size_t size) {
+    assert(depth==DNS_WORK_QUEUE_DEPTH && size==sizeof(dns_work_t *));
+    queue_attempts++;
+    return allow_queue ? &queue_attempts : NULL;
+}
+static int xQueueSend(void *queue, dns_work_t **work, int wait) {
+    (void)queue; (void)work; (void)wait;
+    abort(); /* This scenario serves only captive queries. */
+}
+static void *fixture_malloc(size_t size) {
+    assert(size==DNS_RELAY_BUF_SIZE+1);
+    return allow_internal_udp ? malloc(size) : NULL;
+}
+static void *heap_caps_malloc(size_t size, unsigned caps) {
+    assert(caps==(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    bool allow = size==DNS_TCP_MAX_ANSWER ? allow_tcp : allow_psram_udp;
+    return allow ? malloc(size) : NULL;
+}
+static void heap_caps_free(void *ptr) { freed++; free(ptr); }
+static void worker_task(void *arg) { (void)arg; abort(); }
+static void listener_task(void *arg);
+static int xTaskCreateWithCaps(void (*task)(void *), const char *name, int stack, void *arg,
+                               int priority, void *handle, unsigned caps) {
+    assert(priority==DNS_RELAY_TASK_PRIO && !handle && caps==MALLOC_CAP_SPIRAM);
+    if (task==listener_task) {
+        assert(!strcmp(name,"dns_relay") && stack==DNS_LISTENER_STACK && !arg);
+        listener_attempts++;
+        return allow_listener ? pdPASS : 0;
+    }
+    assert(task==worker_task && !strcmp(name,"dns_worker") && arg && s_workq);
+    assert(stack==DNS_WORKER_STACK);
+    if (admissions>=task_limit) return 0;
+    assert(admissions<DNS_WORKER_COUNT);
+    owned[admissions++]=arg;
+    return pdPASS;
+}
+static int64_t esp_timer_get_time(void) { return clock_us; }
+static void vTaskDelay(int ms) {
+    clock_us+=(int64_t)ms*1000;
+    if (fail_bind) {
+        assert(!atomic_load(&s_healthy) && s_listen_sock==-1 && closed==2);
+        fail_bind=false;
+    }
+}
+static int open_listen_sock(uint32_t ip) { return fail_bind ? -1 : ip==1 ? 11 : 12; }
+static int open_tcp_listen(uint32_t ip) { return ip==1 ? 13 : 14; }
+static void close(int fd) { assert(fd==11 || fd==12 || fd==13 || fd==16); assert(!*s_udp_io); closed++; }
+static void tcp_accept(int fd, bool lan) { assert(fd==13 && !lan && s_tcp_answer && admissions==2); tcp_accepts++; }
+static int select(int top, fd_set *ready, void *write, void *except, struct timeval *wait) {
+    (void)write; (void)except; assert(wait->tv_usec==500000);
+    clock_us+=DNS_WORKER_RETRY_US;
+    switch (step++) {
+    case 0:
+        assert(top==12 && atomic_load(&s_healthy) && !queue_attempts && !admissions);
+        return 1; /* A received captive query. */
+    case 1:
+        assert(captive_replies==1 && !admissions);
+        s_captive_nbo=0;
+        break;
+    case 2:
+        assert(queue_attempts==1 && !s_workq && !atomic_load(&s_healthy));
+        if (!checked_backoff) {
+            checked_backoff=true;
+            clock_us-=DNS_WORKER_RETRY_US-500000;
+            step--;
+            break;
+        }
+        allow_queue=true;
+        break;
+    case 3:
+        assert(queue_attempts==2 && s_workq && !admissions && !atomic_load(&s_healthy));
+        allow_internal_udp=true;
+        break;
+    case 4:
+        assert(!admissions && freed==1 && !atomic_load(&s_healthy));
+        task_limit=1;
+        break;
+    case 5:
+        assert(admissions==1 && freed==2 && atomic_load(&s_healthy) && !s_tcp_answer && top==12);
+        task_limit=2;
+        allow_psram_udp=true;
+        break;
+    case 6:
+        assert(admissions==2 && atomic_load(&s_healthy) && !s_tcp_answer && top==12);
+        allow_tcp=true;
+        break;
+    case 7:
+        assert(admissions==2 && s_tcp_answer && top==14);
+        *ready=1u<<13;
+        return 1;
+    case 8:
+        assert(tcp_accepts==1 && transitions==3);
+        atomic_store(&s_bind_nbo,2);
+        fail_bind=true;
+        break;
+    case 9:
+        assert(top==15 && atomic_load(&s_healthy) && s_listen_sock==12);
+        assert(closed==2 && transitions==5 && admissions==2 && queue_attempts==2);
+        longjmp(finish, 1);
+    default: abort();
+    }
+    return 0;
+}
+static int recvfrom(int fd, uint8_t *q, size_t cap, int flags, struct sockaddr *from, socklen_t *len) {
+    (void)flags; (void)from; (void)len;
+    assert(step==1 && fd==11 && cap>0);
+    *q=42; return 1;
+}
+static int dns_captive_answer(const uint8_t *q, int len, uint32_t ip, uint8_t *answer, int cap) {
+    assert(*q==42 && len==1 && ip==1 && cap>0);
+    *answer=99; return 1;
+}
+static int sendto(int fd, const uint8_t *answer, int len, int flags, const struct sockaddr *to, socklen_t to_len) {
+    (void)to; (void)to_len;
+    if (flags == MSG_DONTWAIT) {
+        assert(*s_udp_io && (fd==12 || fd==16) && *answer==55 && len==1);
+        worker_replies++;
+        return len;
+    }
+    assert(fd==11 && *answer==99 && len==1);
+    captive_replies++; return len;
+}
+static uint32_t pick_upstream(void) { return 0; }
+static bool dns_edns_clamp(uint8_t *q, int n, uint16_t limit) { (void)q; (void)n; (void)limit; return false; }
+static int dns_cache_key_len(const uint8_t *q, int n) { (void)q; (void)n; return 0; }
+static bool cache_get(const uint8_t *q, int len, uint32_t upstream, uint32_t epoch, uint8_t *res, int *rl) {
+    (void)q; (void)len; (void)upstream; (void)epoch; (void)res; (void)rl; return false;
+}
+static int esp_timer_create(const esp_timer_create_args_t *args, esp_timer_handle_t *out) {
+    assert(args->callback && args->skip_unhandled_events && !armed);
+    if (!timer_alloc_ok) return -1;
+    fixture_timer.callback=args->callback;
+    *out=&fixture_timer;
+    return ESP_OK;
+}
+static int esp_timer_start_periodic(esp_timer_handle_t timer, uint64_t period) {
+    assert(timer==&fixture_timer && period==DNS_LISTENER_RETRY_US && !armed);
+    if (!timer_start_ok) return -1;
+    armed=true;
+    return ESP_OK;
+}
+static int esp_timer_stop(esp_timer_handle_t timer) {
+    assert(timer==&fixture_timer && armed);
+    armed=false;
+    return ESP_OK;
+}
+static int esp_timer_delete(esp_timer_handle_t timer) {
+    assert(timer==&fixture_timer && !armed);
+    timer_deleted++;
+    return ESP_OK;
+}
+#define malloc fixture_malloc
+@@STARTUP@@
+#undef malloc
+int main(void) {
+    (void)s_cache; (void)s_upstream_nbo;
+    assert(!start_listener() && listener_attempts==1);
+    assert(!schedule_listener_retry() && !s_listener_retry && !timer_deleted);
+    timer_alloc_ok=true;
+    assert(!schedule_listener_retry() && !s_listener_retry && timer_deleted==1);
+    timer_start_ok=true;
+    assert(schedule_listener_retry() && armed);
+    fixture_timer.callback(NULL);
+    assert(listener_attempts==2 && armed && timer_deleted==1);
+    allow_listener=true;
+    fixture_timer.callback(NULL);
+    assert(listener_attempts==3 && !armed && !s_listener_retry && timer_deleted==2);
+    if (!setjmp(finish)) { listener_task(NULL); abort(); }
+    dns_work_t ap = {.udp_generation=2}, lan = {.lan=true, .udp_generation=1};
+    uint8_t reply=55;
+    publish_udp_listener(true, 16, 1);
+    udp_reply(&ap, &reply, 1);
+    udp_reply(&lan, &reply, 1);
+    assert(worker_replies==2);
+    publish_udp_listener(false, -1, 2);
+    udp_reply(&ap, &reply, 1);
+    assert(worker_replies==2);
+    publish_udp_listener(false, 12, 3); /* the same descriptor is reused */
+    udp_reply(&ap, &reply, 1);
+    udp_reply(&lan, &reply, 1);          /* LAN is unaffected by AP retirement */
+    assert(worker_replies==3);
+    ap.udp_generation=3;
+    udp_reply(&ap, &reply, 1);
+    publish_udp_listener(true, -1, 1);
+    publish_udp_listener(true, 16, 2);
+    udp_reply(&lan, &reply, 1);
+    assert(worker_replies==4);
+    atomic_fetch_add(&s_cache_epoch, 1);
+    udp_reply(&ap, &reply, 1);
+    assert(worker_replies==4);
+    for (unsigned i=0; i<admissions; i++) free(owned[i]);
+    free(s_tcp_answer);
+    puts("dns relay startup ok");
+}
+"""
+
+startup = (function('static void update_health(') + function('static void publish_udp_listener(')
+           + function('static void udp_reply(') + function('static void ensure_workers(') + function('static void listener_task(')
+           + function('static bool start_listener(') + function('static void retry_listener(') + function('static bool schedule_listener_retry('))
+with tempfile.TemporaryDirectory() as tmp:
+    c = Path(tmp) / 'startup.c'
+    c.write_text(STARTUP.replace('@@STARTUP@@', startup), encoding='utf-8')
+    exe = Path(tmp) / ('startup.exe' if os.name == 'nt' else 'startup')
+    subprocess.run(['gcc', '-std=gnu11', '-O1', '-Wall', '-Wextra', '-Werror', str(c), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], check=True, timeout=10)

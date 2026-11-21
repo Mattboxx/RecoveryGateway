@@ -4,14 +4,15 @@
 #pragma once
 
 /* Remote commands over the Telegram bot, with the same commands and options
- * as ntfy (remote_commands.h): info, wol, recover, check; commands only while
- * Tailscale is down; unsaved MAC addresses; private details in info.
+ * as ntfy (remote_commands.h): guide, status, device and TCP commands. Options:
+ * commands only while
+ * Tailscale is disconnected or disabled; unsaved MAC addresses; private details in info.
  *
  * Off by default. Off, nothing runs: the poller task (PSRAM stack) exists
  * only while commands are on and the Telegram channel is configured. Only
  * messages from the configured chat are executed; others are skipped. The
- * last processed update is saved before a command runs, so nothing runs
- * twice after a restart; on first use the backlog is skipped, and messages
+ * poll cursor advances in RAM before dispatch; the backlog is skipped after
+ * a restart, and messages
  * older than 10 minutes (with a known clock) are ignored. Replies go to the
  * same chat. Uses the bot token and chat of the Telegram notifications.
  *

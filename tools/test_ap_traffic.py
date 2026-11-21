@@ -27,12 +27,23 @@ PROGRAM = r'''
 #define AP_TRAFFIC_HOST_TEST 1
 #define HILINK_HOST_TEST 1
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "ap_traffic.h"
 #include "cell_hilink.h"
 @@AP@@
+typedef int esp_err_t,portMUX_TYPE;
+#define ESP_OK 0
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define EXT_RAM_BSS_ATTR
+static bool ap_locked;
+#define portENTER_CRITICAL(x) do {(void)(x); assert(!ap_locked); ap_locked=true;} while(0)
+#define portEXIT_CRITICAL(x) do {(void)(x); assert(ap_locked); ap_locked=false;} while(0)
+static int nvs_param_get_u8(const char *key,uint8_t *v){assert(key);*v=0;return 0;}
+static int nvs_param_set_u8(const char *key,uint8_t v){assert(key&&v<=1);return 0;}
+@@AP_RUNTIME@@
 @@HL@@
 int main(void)
 {
@@ -40,6 +51,17 @@ int main(void)
     uint8_t a[6] = {0x02, 1, 2, 3, 4, 5}, b[6] = {0x02, 1, 2, 3, 4, 6}, bc[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     uint8_t mc[6] = {0x01, 0x00, 0x5e, 0, 0, 1}, zero[6] = {0};
     uint64_t s = 0, r = 0;
+    uint8_t frame[14]={0};
+    memcpy(frame+6,a,6);
+    ap_traffic_init();ap_traffic_publish(true);assert(ap_traffic_on);
+    ap_traffic_frame(frame,sizeof frame,8,true);
+    assert(ap_traffic_get(a,&s,&r)&&s==8);
+    ap_traffic_publish(false);
+    /* Simulate a frame admitted by the outer hook before disabling. */
+    ap_traffic_frame(frame,sizeof frame,10,true);
+    ap_traffic_publish(true);assert(!ap_traffic_get(a,&s,&r));
+    ap_traffic_frame(frame,sizeof frame,12,true);
+    assert(ap_traffic_get(a,&s,&r)&&s==12);
     ap_traffic_add(&t, a, 100, true); ap_traffic_add(&t, a, 1500, false); ap_traffic_add(&t, a, 60, true);
     ap_traffic_add(&t, b, 10, false);
     assert(ap_traffic_find(&t, a, &s, &r) && s == 160 && r == 1500);
@@ -86,6 +108,8 @@ int main(void)
 
 source = PROGRAM.replace('@@AP@@', core('main/ap_traffic.c', '/* --- ap_traffic core (begin) --- */', '/* --- ap_traffic core (end) --- */')) \
     .replace('@@HL@@', core('main/cell_hilink.c', '/* --- hilink core (begin) --- */', '/* --- hilink core (end) --- */'))
+ap_runtime = (ROOT / 'main/ap_traffic.c').read_text(encoding='utf-8').split('atomic_bool ap_traffic_on;', 1)[1].rsplit('#endif', 1)[0]
+source = source.replace('@@AP_RUNTIME@@', 'atomic_bool ap_traffic_on;' + ap_runtime)
 with tempfile.TemporaryDirectory() as tmp:
     tmp = Path(tmp)
     (tmp / 't.c').write_text(source, encoding='utf-8')

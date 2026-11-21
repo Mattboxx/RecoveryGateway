@@ -31,12 +31,15 @@ void ap_traffic_add(ap_traffic_table_t *t, const uint8_t mac[6], uint32_t bytes,
 bool ap_traffic_find(const ap_traffic_table_t *t, const uint8_t mac[6], uint64_t *from_client, uint64_t *to_client);
 
 #if !defined(AP_TRAFFIC_HOST_TEST)
+#include <stdatomic.h>
 #include "esp_err.h"
-extern volatile bool ap_traffic_on;
+extern atomic_bool ap_traffic_on;
 void ap_traffic_init(void);
 /* TCP/IP thread: an Ethernet frame from (or to) an AP client. */
 void ap_traffic_frame(const uint8_t *frame, size_t len, uint32_t bytes, bool from_client);
 bool ap_traffic_get(const uint8_t mac[6], uint64_t *from_client, uint64_t *to_client);
 /* Saved setting, applied at once; turning it off forgets the counts. */
 esp_err_t ap_traffic_set(bool on);
+esp_err_t ap_traffic_stage(bool on);
+void ap_traffic_publish(bool on);
 #endif

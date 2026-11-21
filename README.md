@@ -74,7 +74,20 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/RecoveryGateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.0.30
+## What's new in Firmware 3.1.0
+
+- **Telegram and ntfy share recovery commands.** Use `help` to see the
+  commands and `recover NAME` for Wake-on-LAN followed by verification.
+  Replies explain rejected requests and return to the requesting channel.
+- **Remove the Wi-Fi uplink with confirmation** under Network → Internet.
+  The empty list stays empty after restart. Encrypted backup restores retain
+  static Wi-Fi addressing, and Wi-Fi scans recover from timeouts.
+- **More reliable daily operation.** DNS settings apply after a successful
+  save, timed Service Gateway rules close on clock loss, and administrative
+  requests stay responsive during diagnostic transfers.
+- **MicroLink** improves uplink selection and direct UDP recovery.
+
+### Also in 3.0.30
 
 - **Saving the Ethernet or mobile data (SIM) uplink shows the Restart
   button**, like the other settings that apply after a restart.

@@ -32,6 +32,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "task_reaper.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -424,7 +425,6 @@ typedef struct {
     void (*flush)(void);
 } cell_io_t;
 static const cell_io_t *s_io;
-static TaskHandle_t s_task;
 
 static int uart_io_write(const void *data, size_t len, uint32_t timeout_ms)
 {
@@ -559,12 +559,6 @@ static esp_err_t cell_post_attach(esp_netif_t *netif, void *args)
 }
 
 /* Mobile data of this boot, both directions, PPP and USB network stick. */
-static uint64_t cell_total_bytes(void)
-{
-    return netif_hooks_get_ppp_bytes_in() + netif_hooks_get_ppp_bytes_out()
-         + netif_hooks_get_usbnet_bytes_in() + netif_hooks_get_usbnet_bytes_out();
-}
-
 /* Event history (and notifications) when mobile data starts or stops
  * carrying the Internet traffic; a warning in failover mode, where it means
  * Wi-Fi/Ethernet are down and data may cost money. */
@@ -590,6 +584,23 @@ static void apply_choice(void)
     }
 }
 
+static void cell_address_status_locked(void)
+{
+    s_status.state = atomic_load(&s_has_ip) ? CELL_CONNECTED : CELL_DIALING;
+    s_status.error[0] = '\0';
+}
+
+static void cell_address_update(uint32_t ip)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    atomic_store(&s_has_ip, ip != 0);
+    s_status.ip = ip;
+    if (ip) s_status.connects++;
+    if (s_status.state == CELL_DIALING || s_status.state == CELL_CONNECTED)
+        cell_address_status_locked();
+    xSemaphoreGive(s_lock);
+}
+
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -599,13 +610,9 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
     if (base == IP_EVENT && (id == IP_EVENT_PPP_GOT_IP || id == IP_EVENT_PPP_LOST_IP)) {
         bool got = id == IP_EVENT_PPP_GOT_IP;
-        if (got && ((const ip_event_got_ip_t *)data)->esp_netif != s_netif) return;
-        atomic_store(&s_has_ip, got);
+        if (got && (!data || ((const ip_event_got_ip_t *)data)->esp_netif != s_netif)) return;
         if (!got) atomic_store(&s_link_dead, true);
-        xSemaphoreTake(s_lock, portMAX_DELAY);
-        s_status.ip = got ? ((const ip_event_got_ip_t *)data)->ip_info.ip.addr : 0;
-        if (got) s_status.connects++;
-        xSemaphoreGive(s_lock);
+        cell_address_update(got ? ((const ip_event_got_ip_t *)data)->ip_info.ip.addr : 0);
         uplink_services_refresh(!got);
     }
 }
@@ -659,11 +666,16 @@ static esp_err_t open_uart(void)
 static esp_err_t open_usb(const char **why)
 {
     *why = "no memory for the USB descriptor copy";
-    s_usb_cfg = heap_caps_malloc(CELL_USB_CFG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_usb_cfg) return ESP_ERR_NO_MEM;
+    uint8_t *cfg = heap_caps_malloc(CELL_USB_CFG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!cfg) return ESP_ERR_NO_MEM;
     esp_err_t err = usb_port_start(why);
-    if (err == ESP_OK) s_io = &USB_IO;
-    return err;   /* a partial install stays until restart; the uplink is stopped */
+    if (err == ESP_OK) {
+        s_usb_cfg = cfg;
+        s_io = &USB_IO;
+    } else {
+        heap_caps_free(cfg);
+    }
+    return err;
 }
 
 /* Ethernet-type netif for a USB network stick (DHCP from the stick). It
@@ -844,8 +856,19 @@ static void cell_task(void *arg)
     bool power_pulse = true, pin_sent = false;
     char response[192];
     uint8_t *buffer = heap_caps_malloc(512, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buffer) {set_state(CELL_STOPPED, "not enough memory for the modem buffer"); vTaskDelete(NULL); return;}
+    if (!buffer) {
+        set_state(CELL_STOPPED, "not enough memory for the modem buffer");
+        goto done;
+    }
     for (;;) {
+        if (s_running.transport == CELL_TRANSPORT_USB && !s_usb_cfg) {
+            const char *why;
+            if (open_usb(&why) != ESP_OK) {
+                set_state(CELL_BACKOFF, why);
+                goto retry;
+            }
+            failures = 0;
+        }
         if (power_pulse) {set_state(CELL_POWERING, NULL); modem_power_pulse(); power_pulse = false;}
         set_state(CELL_SYNC, NULL);
         if (s_running.transport == CELL_TRANSPORT_USB) {
@@ -860,12 +883,13 @@ static void cell_task(void *arg)
             if (attached == USBP_ACT_NETWORK) {
                 /* The stick dials by itself (its own APN/PIN settings); the
                  * gateway runs DHCP over USB and watches the data path. */
-                set_state(CELL_DIALING, "");
+                xSemaphoreTake(s_lock, portMAX_DELAY);
+                cell_address_status_locked();
+                xSemaphoreGive(s_lock);
                 TickType_t last_choice = xTaskGetTickCount(), last_signal = 0;
                 bool hilink = s_status.usb_vid == HILINK_VENDOR;
                 while (usb_port_net_alive()) {
                     vTaskDelay(pdMS_TO_TICKS(250));
-                    if (atomic_load(&s_has_ip) && s_status.state != CELL_CONNECTED) set_state(CELL_CONNECTED, "");
                     /* Huawei HiLink stick: signal and operator from its own
                      * web API once a minute (read-only, bounded). */
                     if (hilink && atomic_load(&s_has_ip) && (!last_signal || xTaskGetTickCount() - last_signal > pdMS_TO_TICKS(60000))) {
@@ -881,14 +905,14 @@ static void cell_task(void *arg)
                         }
                     }
                     if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {
-                        cell_quota_tick(cell_total_bytes());
+                        cell_quota_tick();
                         apply_choice();
                         report_carrying();
                         last_choice = xTaskGetTickCount();
                     }
                 }
-                cell_quota_tick(cell_total_bytes());
-                atomic_store(&s_has_ip, false);
+                cell_quota_tick();
+                cell_address_update(0);
                 usb_close();
                 apply_choice();
                 set_state(CELL_BACKOFF, "USB network device disconnected; waiting for it to come back");
@@ -948,7 +972,7 @@ static void cell_task(void *arg)
         if (s_running.apn[0] && at(command, NULL, NULL, 0, 5000) != 1) {set_state(CELL_BACKOFF, "APN rejected by the modem"); goto retry;}
         if (at("ATD*99#", "CONNECT", NULL, 0, 30000) != 1) {set_state(CELL_BACKOFF, "data call refused (APN, plan or coverage)"); goto retry;}
         atomic_store(&s_link_dead, false);
-        set_state(CELL_CONNECTED, "");
+        set_state(CELL_DIALING, "");
         esp_netif_action_start(s_netif, 0, 0, 0);
         TickType_t last_choice = xTaskGetTickCount();
         while (!atomic_load(&s_link_dead)) {
@@ -956,15 +980,15 @@ static void cell_task(void *arg)
             if (n > 0) esp_netif_receive(s_netif, buffer, (size_t)n, NULL);
             else if (n < 0) atomic_store(&s_link_dead, true);   /* USB modem gone */
             if (xTaskGetTickCount() - last_choice > pdMS_TO_TICKS(2000)) {
-                cell_quota_tick(cell_total_bytes());
+                cell_quota_tick();
                 apply_choice();
                 report_carrying();
                 last_choice = xTaskGetTickCount();
             }
         }
-        cell_quota_tick(cell_total_bytes());
+        cell_quota_tick();
         esp_netif_action_stop(s_netif, 0, 0, 0);
-        atomic_store(&s_has_ip, false);
+        cell_address_update(0);
         apply_choice();
         bool unplugged = s_running.transport == CELL_TRANSPORT_USB && !usb_port_net_alive();
         if (!unplugged) hang_up();
@@ -978,8 +1002,15 @@ retry:
             report_carrying();
         }
     }
-    free(buffer);
-    vTaskDelete(NULL);
+done:
+    if (s_running.transport == CELL_TRANSPORT_USB) usb_close();
+    heap_caps_free(s_usb_cfg);
+    s_usb_cfg = NULL;
+    heap_caps_free(buffer);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.task_running = false;
+    xSemaphoreGive(s_lock);
+    task_reaper_self_delete();
 }
 
 #endif /* CONFIG_LWIP_PPP_SUPPORT */
@@ -1009,28 +1040,30 @@ void cell_uplink_init(void)
 #else
     s_status.compiled = true;
     if (!s_running.enabled) return;   /* nothing touched: no UART, USB host, GPIO or netif */
-    const char *why = NULL;
-    esp_err_t err = s_running.transport == CELL_TRANSPORT_USB ? open_usb(&why) : open_uart();
-    /* UART: PPP now. USB: the first device decides PPP or a USB network netif. */
-    if (err == ESP_OK && s_running.transport == CELL_TRANSPORT_UART) {
-        err = create_netif();   /* fails closed without the PPP ACL hooks */
-        if (err == ESP_OK) s_netif_kind = CELL_NETIF_PPP;
-    }
-    if (err != ESP_OK) {
-        char text[sizeof s_status.error];
-        snprintf(text, sizeof text, "not started: %s", why && why[0] ? why : esp_err_to_name(err));
-        set_state(CELL_STOPPED, text);
-        return;
-    }
-    /* PSRAM stack: the task never writes flash (no NVS access). */
-    if (xTaskCreatePinnedToCoreWithCaps(cell_task, "cell_modem", 6144, NULL, 5, &s_task, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-        set_state(CELL_STOPPED, "not started: no memory for the modem task");
-        return;
+    /* USB startup is retried in the worker. UART sets up PPP before the
+     * worker starts and fails closed without the PPP ACL hooks. */
+    if (s_running.transport == CELL_TRANSPORT_UART) {
+        esp_err_t err = open_uart();
+        if (err == ESP_OK) err = create_netif();
+        if (err != ESP_OK) {
+            char text[sizeof s_status.error];
+            snprintf(text, sizeof text, "not started: %s", esp_err_to_name(err));
+            set_state(CELL_STOPPED, text);
+            return;
+        }
+        s_netif_kind = CELL_NETIF_PPP;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_status.task_running = true;
     xSemaphoreGive(s_lock);
+    /* PSRAM stack: the task never writes flash (no NVS access). */
+    if (xTaskCreatePinnedToCoreWithCaps(cell_task, "cell_modem", 6144, NULL, 5, NULL, tskNO_AFFINITY,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        set_state(CELL_STOPPED, "not started: no memory for the modem task");
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_status.task_running = false;
+        xSemaphoreGive(s_lock);
+    }
 #endif
 }
 
@@ -1042,9 +1075,8 @@ void cell_uplink_get_config(cell_config_t *out)
     xSemaphoreGive(s_lock);
 }
 
-esp_err_t cell_uplink_set_config(const cell_config_t *c, char *why, size_t n)
+esp_err_t cell_uplink_store_for_reboot(const cell_config_t *c, char *why, size_t n)
 {
-    ensure_lock();
     if (!cell_config_valid(c, why, n)) return ESP_ERR_INVALID_ARG;
     if (c->enabled) {
         /* Never share a pin with an enabled Ethernet module. */
@@ -1063,14 +1095,15 @@ esp_err_t cell_uplink_set_config(const cell_config_t *c, char *why, size_t n)
     }
     union {cell_record_t v2; cell_record_v1_t v1;} r;
     size_t size = record_encode(c, &r);
-    nvs_handle_t nvs;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
-    if (err == ESP_OK) {
-        err = nvs_set_blob(nvs, "cell_cfg", &r, size);
-        if (err == ESP_OK) err = nvs_commit(nvs);
-        nvs_close(nvs);
-    }
+    esp_err_t err = nvs_param_set_blob("cell_cfg", &r, size);
     memset(&r, 0, sizeof r);   /* it held the SIM PIN and APN password */
+    return err;
+}
+
+esp_err_t cell_uplink_set_config(const cell_config_t *c, char *why, size_t n)
+{
+    ensure_lock();
+    esp_err_t err = cell_uplink_store_for_reboot(c, why, n);
     if (err != ESP_OK) return err;   /* RAM keeps the previously saved value */
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_saved = *c;
@@ -1078,17 +1111,25 @@ esp_err_t cell_uplink_set_config(const cell_config_t *c, char *why, size_t n)
     return ESP_OK;
 }
 
+bool cell_uplink_restart_required(void)
+{
+    ensure_lock();
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool pending = memcmp(&s_saved, &s_running, sizeof s_saved) != 0;
+    xSemaphoreGive(s_lock);
+    return pending;
+}
+
 void cell_uplink_get_status(cell_status_t *out)
 {
     ensure_lock();
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *out = s_status;
+    out->has_ip = atomic_load(&s_has_ip);
     out->restart_required = memcmp(&s_saved, &s_running, sizeof s_saved) != 0;
     xSemaphoreGive(s_lock);
-    out->has_ip = atomic_load(&s_has_ip);
-    out->selected = s_netif && uplink_internet_netif() == s_netif;
-    out->bytes_in = netif_hooks_get_ppp_bytes_in() + netif_hooks_get_usbnet_bytes_in();
-    out->bytes_out = netif_hooks_get_ppp_bytes_out() + netif_hooks_get_usbnet_bytes_out();
+    out->selected = out->has_ip && s_netif && uplink_internet_netif() == s_netif;
+    netif_hooks_get_mobile_bytes(&out->bytes_in, &out->bytes_out);
 #if CONFIG_LWIP_PPP_SUPPORT
     uint32_t net_rx_dropped = 0;
     if (s_running.transport == CELL_TRANSPORT_USB && s_running.enabled) {
@@ -1349,7 +1390,7 @@ static esp_err_t post_cellular(httpd_req_t *req)
     if (err != ESP_OK) {
         httpd_resp_set_status(req, err == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error");
         if (reply) {cJSON_AddBoolToObject(reply, "ok", false); cJSON_AddStringToObject(reply, "error", err == ESP_ERR_INVALID_ARG ? why : esp_err_to_name(err));}
-    } else if (reply) {cJSON_AddBoolToObject(reply, "ok", true); cJSON_AddBoolToObject(reply, "restart_required", true);}
+    } else if (reply) {cJSON_AddBoolToObject(reply, "ok", true); cJSON_AddBoolToObject(reply, "restart_required", cell_uplink_restart_required());}
     return send_json(req, reply);
 }
 

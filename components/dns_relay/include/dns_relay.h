@@ -17,6 +17,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "esp_err.h"
 #include "esp_netif.h"
 
 #ifdef __cplusplus
@@ -32,10 +33,15 @@ void dns_relay_init(void);
 /* Enable / disable the relay at runtime (mirrored to NVS). When off,
  * the forwarder closes its bind socket; AP clients see no listener on
  * 53/udp and DHCP should hand out the direct upstream instead. */
-void dns_relay_set_enabled(bool on);
+#define DNS_RELAY_KEY_ENABLED  "dns_relay_en"
+#define DNS_RELAY_KEY_UPSTREAM "dns_relay_up"
+esp_err_t dns_relay_set_enabled(bool on);
+/* Publish settings that the caller has already committed to NVS. */
+void dns_relay_apply_enabled(bool on);
 bool dns_relay_is_enabled(void);
 
-/* True iff the forwarder task is bound and ready to serve queries.
+/* True when the bound listener can serve captive DNS or has a ready worker
+ * for forwarding UDP queries. Upstream availability is separate.
  * softap_set_dns_addr gates the "advertise AP IP as DNS server" path on
  * this so DHCP clients never get pointed at a resolver that isn't there
  * (e.g. during boot, after a bind failure, or while the relay is
@@ -50,10 +56,12 @@ typedef void (*dns_relay_state_cb_t)(bool healthy);
 void dns_relay_set_state_cb(dns_relay_state_cb_t cb);
 /* Install before init. Returns the current Internet-facing interface. */
 void dns_relay_set_uplink_provider(esp_netif_t *(*provider)(void));
+/* Invalidate in-flight lookups and cache entries on Internet uplink changes. */
+void dns_relay_note_uplink(esp_netif_t *netif, uint32_t ip_nbo);
 
 /* Override the upstream resolver (network byte order).
  * Pass 0 to fall back to the active uplink DNS at forward time. */
-void dns_relay_set_upstream(uint32_t ip_nbo);
+void dns_relay_apply_upstream(uint32_t ip_nbo);
 uint32_t dns_relay_get_upstream(void);
 
 /* Tell the relay which local IP to bind on. main.c calls this once

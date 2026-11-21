@@ -15,17 +15,20 @@
 #include "web_idle.h"
 
 #include <errno.h>
-#include <string.h>
+#include <stdatomic.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 #include "lwip/sockets.h"
 
 static const char *TAG = "web_idle";
 
-typedef struct { int fd; int64_t last_us; } web_idle_slot_t;
+typedef struct { int fd; bool async_owned; int64_t last_us; } web_idle_slot_t;
 static web_idle_slot_t s_slots[WEB_IDLE_SLOTS];
+static portMUX_TYPE s_slot_lock = portMUX_INITIALIZER_UNLOCKED;
 static esp_timer_handle_t s_timer;
-static httpd_handle_t s_server;
+static _Atomic(httpd_handle_t) s_server;
+static atomic_bool s_sweep_pending;
 static uint32_t s_closed;
 
 static web_idle_slot_t *slot_find(int fd)
@@ -35,18 +38,60 @@ static web_idle_slot_t *slot_find(int fd)
     return NULL;
 }
 
-/* Records activity on fd; the oldest entry makes room if the table is full. */
-void web_idle_touch(int fd, int64_t now_us)
+/* A server has fewer live sessions than tracking slots. Only evict
+ * entries without an async owner. The caller holds s_slot_lock. */
+static web_idle_slot_t *track_slot(int fd, int64_t now_us)
 {
     web_idle_slot_t *s = slot_find(fd);
     if (!s) s = slot_find(-1);
     if (!s) {
-        s = &s_slots[0];
-        for (int i = 1; i < WEB_IDLE_SLOTS; i++)
-            if (s_slots[i].last_us < s->last_us) s = &s_slots[i];
+        for (int i = 0; i < WEB_IDLE_SLOTS; i++) {
+            if (!s_slots[i].async_owned && (!s || s_slots[i].last_us < s->last_us))
+                s = &s_slots[i];
+        }
     }
-    s->fd = fd;
-    s->last_us = now_us;
+    if (s) {
+        if (s->fd != fd) *s = (web_idle_slot_t){ .fd = fd };
+        s->last_us = now_us;
+    }
+    return s;
+}
+
+void web_idle_touch(int fd, int64_t now_us)
+{
+    taskENTER_CRITICAL(&s_slot_lock);
+    track_slot(fd, now_us);
+    taskEXIT_CRITICAL(&s_slot_lock);
+}
+
+static void set_async_owner(int fd, bool owned)
+{
+    int64_t now_us = esp_timer_get_time();
+    taskENTER_CRITICAL(&s_slot_lock);
+    web_idle_slot_t *slot = track_slot(fd, now_us);
+    if (slot) slot->async_owned = owned;
+    taskEXIT_CRITICAL(&s_slot_lock);
+}
+
+esp_err_t web_idle_async_begin(httpd_req_t *req, httpd_req_t **copy)
+{
+    int fd = httpd_req_to_sockfd(req);
+    if (fd < 0) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = httpd_req_async_handler_begin(req, copy);
+    if (err == ESP_OK) set_async_owner(fd, true);
+    return err;
+}
+
+void web_idle_async_complete(httpd_req_t *req, esp_err_t result)
+{
+    int fd = httpd_req_to_sockfd(req);
+    if (fd >= 0) {
+        if (result != ESP_OK) (void)shutdown(fd, SHUT_RDWR);
+        /* Start a fresh idle window before the SDK returns the slot to the
+         * server. The sweep will never close the still-active response. */
+        set_async_owner(fd, false);
+    }
+    httpd_req_async_handler_complete(req);
 }
 
 /* Socket error codes as the server's default send/recv report them. */
@@ -129,29 +174,46 @@ uint32_t web_idle_refused(void)
     return __atomic_load_n(&s_refused, __ATOMIC_RELAXED);
 }
 
-/* Closes the sessions in fds[0..n) idle for WEB_IDLE_CLOSE_MS and forgets
- * entries for sockets that are gone. Returns the number of closures asked. */
-int web_idle_sweep_fds(httpd_handle_t hd, const int *fds, size_t n, int64_t now_us)
+static bool socket_idle(int fd)
+{
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(fd, &readable);
+    struct timeval immediate = {0};
+    return select(fd + 1, &readable, NULL, NULL, &immediate) == 0;
+}
+
+/* Only the server task runs this sweep. Its control callbacks run before the
+ * HTTP data handlers, so freshly arrived input must win over the idle timer.
+ * Shut down the receive side now and let HTTPD clean up on EOF. No delayed
+ * close can act on the same session record after the SDK reuses it. */
+static void sweep_idle_fds(const int *fds, size_t n, int64_t now_us)
 {
     int closed = 0;
+    taskENTER_CRITICAL(&s_slot_lock);
     for (int i = 0; i < WEB_IDLE_SLOTS; i++) {
         bool live = false;
         for (size_t j = 0; j < n; j++) live |= s_slots[i].fd == fds[j];
-        if (!live) s_slots[i].fd = -1;
+        if (!live && !s_slots[i].async_owned) s_slots[i].fd = -1;
     }
+    taskEXIT_CRITICAL(&s_slot_lock);
     for (size_t j = 0; j < n; j++) {
-        web_idle_slot_t *s = slot_find(fds[j]);
-        if (!s) {
-            web_idle_touch(fds[j], now_us);   /* unknown: start its idle clock now */
-        } else if (now_us - s->last_us >= (int64_t)WEB_IDLE_CLOSE_MS * 1000) {
-            if (httpd_sess_trigger_close(hd, fds[j]) == ESP_OK) {
-                s->fd = -1;
-                closed++;
-            }
+        int fd = fds[j];
+        taskENTER_CRITICAL(&s_slot_lock);
+        web_idle_slot_t *s = slot_find(fd);
+        bool expired = s && !s->async_owned &&
+                       now_us - s->last_us >= (int64_t)WEB_IDLE_CLOSE_MS * 1000;
+        if (!s) track_slot(fd, now_us);
+        taskEXIT_CRITICAL(&s_slot_lock);
+        if (expired && socket_idle(fd) && shutdown(fd, SHUT_RD) == 0) {
+            taskENTER_CRITICAL(&s_slot_lock);
+            s = slot_find(fd);
+            if (s) s->fd = -1;
+            taskEXIT_CRITICAL(&s_slot_lock);
+            closed++;
         }
     }
     s_closed += (uint32_t)closed;
-    return closed;
 }
 
 static void sweep_work(void *arg)
@@ -159,25 +221,32 @@ static void sweep_work(void *arg)
     httpd_handle_t hd = arg;
     size_t n = WEB_IDLE_SLOTS;
     int fds[WEB_IDLE_SLOTS];
-    if (httpd_get_client_list(hd, &n, fds) == ESP_OK)
-        web_idle_sweep_fds(hd, fds, n, esp_timer_get_time());
+    if (hd == atomic_load(&s_server) && httpd_get_client_list(hd, &n, fds) == ESP_OK)
+        sweep_idle_fds(fds, n, esp_timer_get_time());
+    atomic_store(&s_sweep_pending, false);
 }
 
 static void sweep_timer(void *arg)
 {
     (void)arg;
-    if (s_server) httpd_queue_work(s_server, sweep_work, s_server);
+    httpd_handle_t server = atomic_load(&s_server);
+    if (!server || atomic_exchange(&s_sweep_pending, true)) return;
+    /* Leave queue slots available for OTA and other control work. */
+    if (httpd_queue_work(server, sweep_work, server) != ESP_OK)
+        atomic_store(&s_sweep_pending, false);
 }
 
 void web_idle_reset(void)
 {
+    taskENTER_CRITICAL(&s_slot_lock);
     for (int i = 0; i < WEB_IDLE_SLOTS; i++) s_slots[i] = (web_idle_slot_t){ .fd = -1 };
+    taskEXIT_CRITICAL(&s_slot_lock);
 }
 
 void web_idle_start(httpd_handle_t hd)
 {
     web_idle_reset();
-    s_server = hd;
+    atomic_store(&s_server, hd);
     if (!s_timer) {
         const esp_timer_create_args_t args = { .callback = sweep_timer, .name = "web_idle" };
         if (esp_timer_create(&args, &s_timer) != ESP_OK) {
@@ -193,7 +262,7 @@ void web_idle_start(httpd_handle_t hd)
 void web_idle_stop(void)
 {
     if (s_timer) esp_timer_stop(s_timer);
-    s_server = NULL;
+    atomic_store(&s_server, NULL);
 }
 
 uint32_t web_idle_closed(void) { return s_closed; }

@@ -21,6 +21,7 @@
 /* Initialise from NVS and start the agent if enabled.
  * Call once from app_main, after nvs_flash_init and before web_ui_init. */
 void snmp_agent_init(void);
+void snmp_agent_retry(void);
 
 /* Apply a live config change.  NVS persistence is the caller's
  * responsibility (web_ui POST handler uses nvs_save_* wrappers). */

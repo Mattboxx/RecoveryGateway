@@ -41,7 +41,6 @@
 #include "esp_random.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "task_reaper.h"
 
 #define DNS_RELAY_PORT          53
 #define DNS_RELAY_BUF_SIZE      1024     /* RFC 1035 §2.3.4: 512 udp, EDNS0 lifts it; 1024 ceiling. */
@@ -70,28 +69,27 @@
 #define DNS_RELAY_TASK_PRIO     4
 #define DNS_WORKER_COUNT        2
 #define DNS_WORK_QUEUE_DEPTH    8
+#define DNS_WORKER_RETRY_US     (2LL * 1000000)
+#define DNS_LISTENER_RETRY_US   (5LL * 1000000)
 
 /* SPIRAM direct-mapped response cache. 256 entries * ~1.3 KB ~= 330 KB SPIRAM. */
 #define DNS_CACHE_ENTRIES       256
-#define DNS_CACHE_KEY_MAX       256      /* DNS question section ceiling (qname<=255 + qtype/qclass) */
-#define DNS_CACHE_TTL_MIN_S     10
+#define DNS_CACHE_KEY_MAX       256      /* normalized query bytes, excluding the transaction ID */
 #define DNS_CACHE_TTL_MAX_S     3600
-#define DNS_CACHE_TTL_NEG_S     15       /* empty / NXDOMAIN brief negative cache */
+#define DNS_CACHE_TTL_NEG_S     15       /* maximum negative-cache lifetime */
 
 #define DNS_RELAY_NVS_NS        "tsr"
-#define KEY_ENABLED             "dns_relay_en"
-#define KEY_UPSTREAM            "dns_relay_up"
 
 static const char *TAG = "dns_relay";
 
 static volatile bool     s_enabled       = false;
-static volatile uint32_t s_upstream_nbo  = 0;      /* 0 = use STA-learned */
-static volatile uint32_t s_bind_nbo      = 0;      /* AP IP; 0 = wait, don't bind yet */
-static volatile bool     s_socket_dirty  = false;  /* tell the listener to rebind */
-static volatile bool     s_healthy       = false;  /* bound and serving — softap_set_dns_addr gates on this */
-static volatile int      s_listen_sock   = -1;     /* listener-owned; workers reply through it */
+static atomic_uint       s_upstream_nbo;          /* 0 = use uplink-learned */
+static atomic_uint       s_bind_nbo;               /* AP IP; 0 = wait, don't bind yet */
+static atomic_bool       s_healthy;              /* serving captive DNS or able to forward */
+static atomic_int        s_listen_sock   = -1;     /* listener-owned; workers borrow under s_udp_io */
 
-static TaskHandle_t s_listener = NULL;
+static bool s_initialized;                       /* dns_relay_init is called by the boot task */
+static esp_timer_handle_t s_listener_retry;
 static volatile uint32_t s_captive_nbo = 0;        /* first-boot captive answer; 0 = relay */
 
 /* Optional second listener on the uplink (LAN) address, and an optional local
@@ -100,7 +98,9 @@ static volatile uint32_t s_captive_nbo = 0;        /* first-boot captive answer;
 static volatile bool     s_lan_on        = false;
 static volatile uint32_t s_lan_nbo       = 0;      /* uplink IP; 0 = not bound */
 static volatile bool     s_lan_dirty     = false;
-static volatile int      s_lan_sock      = -1;
+static atomic_int        s_lan_sock      = -1;
+static SemaphoreHandle_t s_udp_io;
+static unsigned s_udp_generation[2];
 static volatile dns_relay_local_cb_t s_local_cb = NULL;
 static volatile dns_relay_route_cb_t s_route_cb = NULL;
 
@@ -114,6 +114,12 @@ static void notify_state(bool healthy)
     if (cb) cb(healthy);
 }
 
+static void update_health(bool bound, bool captive, unsigned workers)
+{
+    bool healthy = bound && (captive || workers > 0);
+    if (atomic_exchange(&s_healthy, healthy) != healthy) notify_state(healthy);
+}
+
 /* ---- listener -> worker hand-off: a pointer queue; items live in SPIRAM ---- */
 typedef struct {
     struct sockaddr_in client;
@@ -121,11 +127,16 @@ typedef struct {
     bool               lan;            /* reply through the LAN listener */
     uint32_t           upstream;       /* effective resolver selected by the listener */
     uint32_t           cache_epoch;
+    unsigned           udp_generation;
     int                tcp;            /* accepted TCP connection, or -1 for UDP */
     int                qlen;
     uint8_t            q[DNS_RELAY_BUF_SIZE];
 } dns_work_t;
 static QueueHandle_t s_workq = NULL;
+/* One TCP slot covers queued and active work (including the last buffer use).
+ * The listener publishes this buffer before its first TCP enqueue. */
+_Static_assert(DNS_TCP_ACTIVE_MAX == 1, "the TCP response buffer is shared");
+static uint8_t *s_tcp_answer;
 
 /* ---- SPIRAM direct-mapped response cache ---- */
 typedef struct {
@@ -134,12 +145,35 @@ typedef struct {
     uint32_t epoch;
     uint16_t key_len;
     uint16_t resp_len;
-    uint8_t  key[DNS_CACHE_KEY_MAX];    /* question section (from offset 12): qname+qtype+qclass */
+    uint16_t lifetime_s;
+    uint8_t  key[DNS_CACHE_KEY_MAX];
     uint8_t  resp[DNS_RELAY_BUF_SIZE];  /* full upstream response */
 } dns_cache_entry_t;
 static dns_cache_entry_t *s_cache = NULL;       /* SPIRAM */
 static SemaphoreHandle_t  s_cache_mtx = NULL;
 static atomic_uint s_cache_epoch;
+
+/* Only the listener can publish or retire a socket. Serialize retirement
+ * with worker sends; detach before closing, and never send on a reused fd. */
+static void publish_udp_listener(bool lan, int fd, unsigned generation)
+{
+    xSemaphoreTake(s_udp_io, portMAX_DELAY);
+    int old = atomic_exchange(lan ? &s_lan_sock : &s_listen_sock, fd);
+    s_udp_generation[lan] = generation;
+    xSemaphoreGive(s_udp_io);
+    if (old >= 0) close(old);
+}
+
+static void udp_reply(const dns_work_t *w, const uint8_t *buf, int len)
+{
+    xSemaphoreTake(s_udp_io, portMAX_DELAY);
+    int fd = atomic_load(w->lan ? &s_lan_sock : &s_listen_sock);
+    if (fd >= 0 && w->udp_generation == s_udp_generation[w->lan] &&
+        w->cache_epoch == atomic_load(&s_cache_epoch)) {
+        sendto(fd, buf, len, MSG_DONTWAIT, (const struct sockaddr *)&w->client, w->client_len);
+    }
+    xSemaphoreGive(s_udp_io);
+}
 
 /* Diagnostics counters. Unlocked: a torn increment only skews a stat by one,
  * which is irrelevant — the cache *data* is what the mutex protects. */
@@ -156,9 +190,24 @@ void dns_relay_set_uplink_provider(esp_netif_t *(*provider)(void))
     s_uplink_provider = provider;
 }
 
+void dns_relay_note_uplink(esp_netif_t *netif, uint32_t ip_nbo)
+{
+    static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
+    static esp_netif_t *last_netif;
+    static uint32_t last_ip;
+    portENTER_CRITICAL(&lock);
+    if (last_netif != netif || last_ip != ip_nbo) {
+        last_netif = netif;
+        last_ip = ip_nbo;
+        atomic_fetch_add(&s_cache_epoch, 1);
+    }
+    portEXIT_CRITICAL(&lock);
+}
+
 static uint32_t pick_upstream(void)
 {
-    if (s_upstream_nbo) return s_upstream_nbo;
+    uint32_t configured = atomic_load(&s_upstream_nbo);
+    if (configured) return configured;
     esp_netif_t *sta = s_uplink_provider ? s_uplink_provider() : esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (sta) {
         esp_netif_dns_info_t info = {0};
@@ -234,6 +283,7 @@ static void tcp_accept(int ls, bool lan)
     if (w) {
         memset(w, 0, offsetof(dns_work_t, q));
         w->client = client; w->client_len = client_len; w->lan = lan; w->tcp = fd;
+        w->cache_epoch = atomic_load(&s_cache_epoch);
         if (xQueueSend(s_workq, &w, 0) == pdTRUE) return;
         heap_caps_free(w);
     }
@@ -258,7 +308,7 @@ static int dns_question_len(const uint8_t *p, int len)
     }
     if (i > len) return 0;
     int qlen = i - 12;
-    return (qlen >= 5 && qlen <= DNS_CACHE_KEY_MAX) ? qlen : 0;
+    return (qlen >= 5 && qlen <= 256) ? qlen : 0;
 }
 
 /* Index after the domain name at `i` (labels, maybe ending in a pointer), or
@@ -325,39 +375,69 @@ static bool dns_is_std_query(const uint8_t *p, int len)
     return ((p[4] << 8) | p[5]) == 1;          /* QDCOUNT == 1 */
 }
 
-/* Cache TTL for a response: min TTL across the answer RRs, clamped. Returns 0
- * if the response must not be cached (RCODE other than NOERROR/NXDOMAIN). An
- * empty answer section (incl. NXDOMAIN) gets a brief negative-cache TTL.
- * qlen is the question length from dns_question_len(). */
-static uint32_t dns_resp_ttl(const uint8_t *p, int len, int qlen)
+/* Key by the complete normalized request, including header and EDNS flags.
+ * EDNS options, extra records and unfamiliar versions pass through uncached. */
+static int dns_cache_key_len(const uint8_t *q, int len)
 {
-    if (len < 12 + qlen) return 0;
+    if (len - 2 > DNS_CACHE_KEY_MAX || !dns_is_std_query(q, len)) return 0;
+    if ((q[6] | q[7] | q[8] | q[9] | q[10]) || q[11] > 1) return 0;
+    int qlen = dns_question_len(q, len);
+    if (!qlen) return 0;
+    int end = 12 + qlen;
+    if (!q[11]) return end == len ? len - 2 : 0;
+    if (len - end != 11) return 0;
+    const uint8_t *opt = q + end;
+    if (opt[0] || opt[1] || opt[2] != 41 || opt[5] || opt[6] || opt[9] || opt[10]) return 0;
+    return len - 2;
+}
+
+static uint32_t dns_read_u32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+/* Walk the whole response because the cache replays all its sections. Age
+ * only RR lifetimes: EDNS OPT uses the TTL field for flags. Negative replies
+ * need a valid authority SOA and follow its smaller TTL or minimum. */
+static uint32_t dns_resp_ttl(const uint8_t *p, int len, int qlen, uint8_t *aged, uint32_t age)
+{
+    if (qlen <= 0 || len < 12 + qlen) return 0;
     uint8_t rcode = p[3] & 0x0F;
     if (rcode != 0 && rcode != 3) return 0;    /* only NOERROR / NXDOMAIN */
     if (p[2] & 0x02) return 0;                 /* TC: a partial answer, never cached */
-    uint16_t an = (p[6] << 8) | p[7];
-    if (an == 0) return DNS_CACHE_TTL_NEG_S;
-    int i = 12 + qlen;                          /* start of answer section */
-    uint32_t minttl = 0xFFFFFFFFu;
-    for (int a = 0; a < an; a++) {
-        if (i + 1 > len) return DNS_CACHE_TTL_NEG_S;
-        if ((p[i] & 0xC0) == 0xC0) {            /* compressed name -> 2 bytes */
-            i += 2;
-        } else {                                /* labels, maybe ending in a pointer */
-            while (i < len && p[i] && (p[i] & 0xC0) != 0xC0) i += 1 + p[i];
-            i += (i < len && (p[i] & 0xC0) == 0xC0) ? 2 : 1;
+    int an = p[6] << 8 | p[7], ns = p[8] << 8 | p[9], ar = p[10] << 8 | p[11];
+    bool negative = rcode == 3 || an == 0, has_soa = false;
+    int i = 12 + qlen;
+    uint32_t minttl = negative ? DNS_CACHE_TTL_NEG_S : DNS_CACHE_TTL_MAX_S;
+    for (int rr = 0; rr < an + ns + ar; rr++) {
+        i = dns_skip_name(p, len, i);
+        if (i < 0 || i + 10 > len) return 0;
+        int type = p[i] << 8 | p[i+1];
+        int rdata = i + 10, end = rdata + (p[i+8] << 8 | p[i+9]);
+        if (end > len) return 0;
+        uint32_t ttl = dns_read_u32(p + i + 4);
+        uint8_t *age_field = aged ? aged + i + 4 : NULL;
+        i = end;
+        if (type == 41) {
+            if (rr < an + ns || ttl >> 16 || end != rdata) return 0;
+            continue;
         }
-        if (i + 10 > len) return DNS_CACHE_TTL_NEG_S;
-        uint32_t ttl = ((uint32_t)p[i+4] << 24) | ((uint32_t)p[i+5] << 16) |
-                       ((uint32_t)p[i+6] << 8)  |  (uint32_t)p[i+7];
-        uint16_t rdlen = (p[i+8] << 8) | p[i+9];
+        if (ttl & 0x80000000u) ttl = 0;
+        if (negative && type == 6 && rr >= an && rr < an + ns) {
+            int soa = dns_skip_name(p, end, rdata);
+            if (soa < 0 || (soa = dns_skip_name(p, end, soa)) < 0 || end - soa != 20) return 0;
+            uint32_t minimum = dns_read_u32(p + end - 4);
+            if (minimum < ttl) ttl = minimum;
+            has_soa = true;
+        }
         if (ttl < minttl) minttl = ttl;
-        i += 10 + rdlen;
+        if (age_field) {
+            ttl = ttl > age ? ttl - age : 0;
+            age_field[0] = ttl >> 24; age_field[1] = ttl >> 16;
+            age_field[2] = ttl >> 8;  age_field[3] = ttl;
+        }
     }
-    if (minttl == 0xFFFFFFFFu) return DNS_CACHE_TTL_NEG_S;
-    if (minttl < DNS_CACHE_TTL_MIN_S) minttl = DNS_CACHE_TTL_MIN_S;
-    if (minttl > DNS_CACHE_TTL_MAX_S) minttl = DNS_CACHE_TTL_MAX_S;
-    return minttl;
+    return i == len && (!negative || has_soa) ? minttl : 0;
 }
 
 static uint32_t fnv1a(const uint8_t *d, int n)
@@ -372,12 +452,12 @@ static uint32_t fnv1a(const uint8_t *d, int n)
 #define DNS_CACHE_WAYS 2
 static uint32_t cache_set(const uint8_t *q, int key_len)
 {
-    return (fnv1a(q + 12, key_len) % (DNS_CACHE_ENTRIES / DNS_CACHE_WAYS)) * DNS_CACHE_WAYS;
+    return (fnv1a(q + 2, key_len) % (DNS_CACHE_ENTRIES / DNS_CACHE_WAYS)) * DNS_CACHE_WAYS;
 }
 
 static bool cache_same_key(const dns_cache_entry_t *e, const uint8_t *q, int key_len)
 {
-    return e->expiry_us != 0 && e->key_len == key_len && memcmp(e->key, q + 12, key_len) == 0;
+    return e->expiry_us != 0 && e->key_len == key_len && memcmp(e->key, q + 2, key_len) == 0;
 }
 
 /* Look the question up. On hit, copies the response to out (*out_len set) and
@@ -388,6 +468,7 @@ static bool cache_get(const uint8_t *q, int key_len, uint32_t upstream, uint32_t
     if (!s_cache || !s_cache_mtx) return false;
     uint32_t set = cache_set(q, key_len);
     bool hit = false;
+    uint32_t age = 0;
     xSemaphoreTake(s_cache_mtx, portMAX_DELAY);
     int64_t now = esp_timer_get_time();
     for (uint32_t w = 0; w < DNS_CACHE_WAYS && !hit; w++) {
@@ -395,11 +476,17 @@ static bool cache_get(const uint8_t *q, int key_len, uint32_t upstream, uint32_t
         if (cache_same_key(e, q, key_len) && e->upstream == upstream && e->epoch == epoch && now < e->expiry_us) {
             memcpy(out, e->resp, e->resp_len);
             *out_len = e->resp_len;
+            int64_t elapsed = now - (e->expiry_us - (int64_t)e->lifetime_s * 1000000);
+            if (elapsed > 0) age = (uint32_t)((elapsed + 999999) / 1000000);
             hit = true;
         }
     }
     xSemaphoreGive(s_cache_mtx);
-    if (hit) { out[0] = q[0]; out[1] = q[1]; }   /* match the client's transaction id */
+    if (hit) {
+        int qlen = dns_question_len(out, *out_len);
+        if (!dns_resp_ttl(out, *out_len, qlen, out, age)) return false;
+        out[0] = q[0]; out[1] = q[1];           /* match the client's transaction id */
+    }
     return hit;
 }
 
@@ -407,6 +494,7 @@ static void cache_put(const uint8_t *q, int key_len, uint32_t upstream, uint32_t
                       const uint8_t *resp, int resp_len, uint32_t ttl_s)
 {
     if (!s_cache || !s_cache_mtx) return;
+    if (!ttl_s || ttl_s > DNS_CACHE_TTL_MAX_S) return;
     if (key_len <= 0 || key_len > DNS_CACHE_KEY_MAX) return;
     if (resp_len <= 0 || resp_len > DNS_RELAY_BUF_SIZE) return;
     uint32_t set = cache_set(q, key_len);
@@ -421,11 +509,12 @@ static void cache_put(const uint8_t *q, int key_len, uint32_t upstream, uint32_t
         if (s_cache[set + w].expiry_us == 0 || now >= s_cache[set + w].expiry_us) e = &s_cache[set + w];
     if (!e) e = s_cache[set].expiry_us <= s_cache[set + 1].expiry_us ? &s_cache[set] : &s_cache[set + 1];
     bool was_other = e->expiry_us != 0 && now < e->expiry_us && !cache_same_key(e, q, key_len);
-    e->expiry_us = esp_timer_get_time() + (int64_t)ttl_s * 1000000;
+    e->expiry_us = now + (int64_t)ttl_s * 1000000;
+    e->lifetime_s = (uint16_t)ttl_s;
     e->upstream  = upstream;
     e->epoch     = epoch;
     e->key_len   = (uint16_t)key_len;
-    memcpy(e->key, q + 12, key_len);
+    memcpy(e->key, q + 2, key_len);
     e->resp_len  = (uint16_t)resp_len;
     memcpy(e->resp, resp, resp_len);
     xSemaphoreGive(s_cache_mtx);
@@ -560,7 +649,7 @@ static void tcp_serve(dns_work_t *w, uint8_t *answer)
     int64_t deadline = esp_timer_get_time() + (int64_t)DNS_TCP_CLIENT_MS * 1000;
     tcp_timeouts(fd, 500);
     int qlen = tcp_read_msg(fd, w->q, DNS_RELAY_BUF_SIZE, deadline);
-    if (qlen < 12) goto done;
+    if (qlen < 12 || w->cache_epoch != atomic_load(&s_cache_epoch)) goto done;
     st_queries++;
     st_tcp++;
     deadline = esp_timer_get_time() + (int64_t)(DNS_TCP_UPSTREAM_MS + 1000) * 1000;
@@ -568,14 +657,16 @@ static void tcp_serve(dns_work_t *w, uint8_t *answer)
     dns_relay_local_cb_t local = s_local_cb;
     int rl = local ? local(w->q, qlen, answer, DNS_RELAY_BUF_SIZE) : 0;
     if (rl > 0) {
-        st_hits++;
-        (void)tcp_write_msg(fd, answer, rl, deadline);
+        if (w->cache_epoch == atomic_load(&s_cache_epoch)) {
+            st_hits++;
+            (void)tcp_write_msg(fd, answer, rl, deadline);
+        }
         goto done;
     }
     dns_relay_route_cb_t route = s_route_cb;
     uint32_t upstream = route ? route(w->q, qlen) : 0;
     if (!upstream) upstream = pick_upstream();
-    if (!upstream) goto done;
+    if (!upstream || w->cache_epoch != atomic_load(&s_cache_epoch)) goto done;
     st_misses++;
     uint8_t client_id[2] = {w->q[0], w->q[1]};
     uint32_t up_id = esp_random();
@@ -585,6 +676,7 @@ static void tcp_serve(dns_work_t *w, uint8_t *answer)
      * TCP, like many home routers); TCP to the resolver only when even that
      * answer is truncated. */
     rl = udp_ask(upstream, w->q, qlen, answer, DNS_UDP_LARGE_ANSWER);
+    if (w->cache_epoch != atomic_load(&s_cache_epoch)) goto done;
     if (rl > 0) {
         answer[0] = client_id[0];
         answer[1] = client_id[1];
@@ -594,7 +686,8 @@ static void tcp_serve(dns_work_t *w, uint8_t *answer)
     if ((up = tcp_connect(upstream, DNS_TCP_UPSTREAM_MS)) < 0) goto done;
     if (!tcp_write_msg(up, w->q, qlen, deadline)) goto done;
     rl = tcp_read_msg(up, answer, DNS_TCP_MAX_ANSWER, deadline);
-    if (rl < 12 || !dns_reply_matches(answer, rl, w->q, qlen)) goto done;
+    if (w->cache_epoch != atomic_load(&s_cache_epoch) ||
+        rl < 12 || !dns_reply_matches(answer, rl, w->q, qlen)) goto done;
     answer[0] = client_id[0];
     answer[1] = client_id[1];
     (void)tcp_write_msg(fd, answer, rl, deadline);
@@ -608,21 +701,14 @@ done:
  * never cross responses. A send/recv hard error rebuilds just this socket. */
 static void worker_task(void *arg)
 {
-    (void)arg;
+    uint8_t *rbuf = arg;
     int up = -1;
-    /* One byte more than a cached answer (oversize detection); also the TCP
-     * answer buffer. */
-    uint8_t *rbuf = heap_caps_malloc(DNS_TCP_MAX_ANSWER, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    bool tcp_ok = rbuf != NULL;                       /* TCP answers need the PSRAM buffer */
-    if (!rbuf) rbuf = malloc(DNS_RELAY_BUF_SIZE + 1);   /* fall back to internal, UDP only */
-    if (!rbuf) { ESP_LOGE(TAG, "worker rbuf alloc failed"); task_reaper_self_delete(); }
 
     for (;;) {
         dns_work_t *w = NULL;
         if (xQueueReceive(s_workq, &w, portMAX_DELAY) != pdTRUE || !w) continue;
         if (w->tcp >= 0) {
-            if (tcp_ok) tcp_serve(w, rbuf);
-            else {close(w->tcp); atomic_fetch_sub(&s_tcp_active, 1);}
+            tcp_serve(w, s_tcp_answer);
             heap_caps_free(w);
             continue;
         }
@@ -655,8 +741,6 @@ static void worker_task(void *arg)
         uint32_t up_id = esp_random();
         w->q[0] = (uint8_t)(up_id >> 8);
         w->q[1] = (uint8_t)up_id;
-        /* Never invite an answer larger than the relay can take. */
-        (void)dns_edns_clamp(w->q, w->qlen, DNS_RELAY_BUF_SIZE);
         int sent = -1;
         for (int attempt = 0; attempt < DNS_RELAY_TX_RETRIES; attempt++) {
             sent = sendto(up, w->q, w->qlen, 0, (struct sockaddr *)&up_addr, sizeof(up_addr));
@@ -695,19 +779,46 @@ static void worker_task(void *arg)
         rbuf[0] = client_id[0];
         rbuf[1] = client_id[1];
 
-        int ls = w->lan ? s_lan_sock : s_listen_sock;   /* listener-owned sockets */
-        if (ls >= 0) {
-            sendto(ls, rbuf, rlen, 0, (struct sockaddr *)&w->client, w->client_len);
-        }
+        udp_reply(w, rbuf, rlen);
 
         /* Cache the answer if it's a cacheable standard query/response. */
-        int kl = dns_is_std_query(w->q, w->qlen) ? dns_question_len(w->q, w->qlen) : 0;
+        int kl = dns_cache_key_len(w->q, w->qlen);
         if (kl > 0) {
-            uint32_t ttl = dns_resp_ttl(rbuf, rlen, kl);
+            int qlen = dns_question_len(w->q, w->qlen);
+            uint32_t ttl = dns_resp_ttl(rbuf, rlen, qlen, NULL, 0);
             if (ttl) cache_put(w->q, kl, upstream, w->cache_epoch, rbuf, rlen, ttl);
         }
         heap_caps_free(w);
     }
+}
+
+/* Called only by the listener, which owns task admission and queue creation.
+ * A created worker already has its buffer. Failed starts can be retried
+ * without abandoning queued work or creating duplicate workers. */
+static void ensure_workers(unsigned *workers, int64_t *retry_us, int64_t now)
+{
+    if ((*workers == DNS_WORKER_COUNT && s_tcp_answer) || now < *retry_us) return;
+    *retry_us = now + DNS_WORKER_RETRY_US;
+    if (!s_workq) {
+        s_workq = xQueueCreate(DNS_WORK_QUEUE_DEPTH, sizeof(dns_work_t *));
+        if (!s_workq) { ESP_LOGW(TAG, "DNS work queue unavailable; will retry"); return; }
+    }
+    while (*workers < DNS_WORKER_COUNT) {
+        /* The extra byte detects an upstream answer larger than the limit. */
+        uint8_t *buffer = heap_caps_malloc(DNS_RELAY_BUF_SIZE + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!buffer) buffer = malloc(DNS_RELAY_BUF_SIZE + 1);
+        if (!buffer) { ESP_LOGW(TAG, "DNS worker buffer unavailable; will retry"); return; }
+        if (xTaskCreateWithCaps(worker_task, "dns_worker", DNS_WORKER_STACK, buffer,
+                                DNS_RELAY_TASK_PRIO, NULL, MALLOC_CAP_SPIRAM) != pdPASS) {
+            heap_caps_free(buffer);
+            ESP_LOGW(TAG, "DNS worker unavailable; will retry");
+            return;
+        }
+        ++*workers;
+    }
+    /* Keep one worker available for UDP while a TCP client is active. */
+    if (!s_tcp_answer)
+        s_tcp_answer = heap_caps_malloc(DNS_TCP_MAX_ANSWER, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 }
 
 /* ───────────────────── Listener ───────────────────── */
@@ -741,11 +852,15 @@ static int dns_captive_answer(const uint8_t *q, int qlen, uint32_t ip_nbo, uint8
 static void listener_task(void *arg)
 {
     (void)arg;
+    static StaticSemaphore_t udp_io_storage;
+    s_udp_io = xSemaphoreCreateMutexStatic(&udp_io_storage);
     int listen_sock = -1, lan_sock = -1;
+    uint32_t bound_nbo = 0;
     /* TCP listeners follow their UDP socket: reopened with each new one. */
     int tcp_ap = -1, tcp_lan = -1;
     unsigned ap_gen = 0, lan_gen = 0, tcp_ap_gen = 0, tcp_lan_gen = 0;
-    int64_t lan_retry_us = 0, tcp_retry_us = 0;
+    int64_t lan_retry_us = 0, tcp_retry_us = 0, worker_retry_us = 0;
+    unsigned workers = 0;
     uint8_t qbuf[DNS_RELAY_BUF_SIZE];
     uint8_t cbuf[DNS_RELAY_BUF_SIZE];      /* cache-hit response scratch */
 
@@ -757,62 +872,60 @@ static void listener_task(void *arg)
 
     int bind_backoff_ms = 2000;
     for (;;) {
-        bool want_listening = s_enabled && s_bind_nbo != 0;
-        if (want_listening && (listen_sock < 0 || s_socket_dirty)) {
-            if (listen_sock >= 0) { s_listen_sock = -1; close(listen_sock); listen_sock = -1; }
-            listen_sock = open_listen_sock(s_bind_nbo);
-            s_socket_dirty = false;
+        uint32_t bind_nbo = atomic_load(&s_bind_nbo);
+        bool want_listening = (s_enabled || s_captive_nbo) && bind_nbo != 0;
+        int wait_ms = 500;
+        if (want_listening && (listen_sock < 0 || bound_nbo != bind_nbo)) {
+            if (listen_sock >= 0) publish_udp_listener(false, -1, ap_gen);
+            listen_sock = open_listen_sock(bind_nbo);
             if (listen_sock < 0) {
-                s_healthy = false;
-                vTaskDelay(pdMS_TO_TICKS(bind_backoff_ms));
-                if (bind_backoff_ms < 30000) bind_backoff_ms *= 2;
-                continue;
-            }
-            bind_backoff_ms = 2000;
-            ap_gen++;
-            s_listen_sock = listen_sock;
-            bool was_healthy = s_healthy;
-            s_healthy = true;
-            if (!was_healthy) {
-                ESP_LOGI(TAG, "first healthy transition — notifying softap dns reapply");
-                notify_state(true);
+                wait_ms = bind_backoff_ms;
+                bind_backoff_ms = bind_backoff_ms < 15000 ? bind_backoff_ms * 2 : 30000;
+            } else {
+                bind_backoff_ms = 2000;
+                ap_gen++;
+                bound_nbo = bind_nbo;
+                publish_udp_listener(false, listen_sock, ap_gen);
             }
         } else if (!want_listening && listen_sock >= 0) {
             ESP_LOGI(TAG, "disabled — closing listen socket");
-            s_listen_sock = -1;
-            close(listen_sock);
+            publish_udp_listener(false, -1, ap_gen);
             listen_sock = -1;
-            bool was_healthy = s_healthy;
-            s_healthy = false;
-            if (was_healthy) notify_state(false);
         }
 
         if (listen_sock < 0) {
-            s_healthy = false;
-            if (lan_sock >= 0) {s_lan_sock = -1; close(lan_sock); lan_sock = -1;}
+            if (lan_sock >= 0) {publish_udp_listener(true, -1, lan_gen); lan_sock = -1;}
             if (tcp_ap >= 0) {close(tcp_ap); tcp_ap = -1;}
             if (tcp_lan >= 0) {close(tcp_lan); tcp_lan = -1;}
-            vTaskDelay(pdMS_TO_TICKS(500));
+            update_health(false, false, 0);
+            vTaskDelay(pdMS_TO_TICKS(wait_ms));
             continue;
         }
 
+        bool captive_mode = s_captive_nbo != 0;
+        int64_t now = esp_timer_get_time();
+        if (!captive_mode) ensure_workers(&workers, &worker_retry_us, now);
+        update_health(true, captive_mode, workers);
+
         /* LAN listener: only while switched on and the uplink has an address. */
-        bool want_lan = s_lan_on && s_lan_nbo != 0 && s_lan_nbo != s_bind_nbo && !s_captive_nbo;
-        if (lan_sock >= 0 && (!want_lan || s_lan_dirty)) {s_lan_sock = -1; close(lan_sock); lan_sock = -1;}
+        bool want_lan = s_lan_on && s_lan_nbo != 0 && s_lan_nbo != bind_nbo && !captive_mode && workers > 0;
+        if (lan_sock >= 0 && (!want_lan || s_lan_dirty)) {
+            publish_udp_listener(true, -1, lan_gen);
+            lan_sock = -1;
+        }
         if (want_lan && lan_sock < 0 && esp_timer_get_time() >= lan_retry_us) {
             s_lan_dirty = false;
             lan_sock = open_listen_sock(s_lan_nbo);
-            s_lan_sock = lan_sock;
-            lan_gen++;
-            if (lan_sock < 0) lan_retry_us = esp_timer_get_time() + 10LL * 1000000;
+            if (lan_sock >= 0) publish_udp_listener(true, lan_sock, ++lan_gen);
+            else lan_retry_us = esp_timer_get_time() + 10LL * 1000000;
         }
 
         /* TCP next to each UDP listener (not during first-boot setup). */
-        bool tcp_wanted = !s_captive_nbo;
+        bool tcp_wanted = !captive_mode && s_tcp_answer;
         if (tcp_ap >= 0 && (!tcp_wanted || tcp_ap_gen != ap_gen)) {close(tcp_ap); tcp_ap = -1;}
         if (tcp_lan >= 0 && (!tcp_wanted || tcp_lan_gen != lan_gen || lan_sock < 0)) {close(tcp_lan); tcp_lan = -1;}
         if (tcp_wanted && (tcp_ap < 0 || (lan_sock >= 0 && tcp_lan < 0)) && esp_timer_get_time() >= tcp_retry_us) {
-            if (tcp_ap < 0 && (tcp_ap = open_tcp_listen(s_bind_nbo)) >= 0) tcp_ap_gen = ap_gen;
+            if (tcp_ap < 0 && (tcp_ap = open_tcp_listen(bind_nbo)) >= 0) tcp_ap_gen = ap_gen;
             if (lan_sock >= 0 && tcp_lan < 0 && (tcp_lan = open_tcp_listen(s_lan_nbo)) >= 0) tcp_lan_gen = lan_gen;
             if (tcp_ap < 0 || (lan_sock >= 0 && tcp_lan < 0)) tcp_retry_us = esp_timer_get_time() + 10LL * 1000000;
         }
@@ -825,8 +938,10 @@ static void listener_task(void *arg)
             if (fds[i] >= 0) {FD_SET(fds[i], &ready); if (fds[i] > top) top = fds[i];}
         struct timeval wait = {.tv_sec = 0, .tv_usec = 500 * 1000};
         if (select(top + 1, &ready, NULL, NULL, &wait) <= 0) continue;   /* timeout -> re-check state */
-        if (tcp_ap >= 0 && FD_ISSET(tcp_ap, &ready)) tcp_accept(tcp_ap, false);
-        if (tcp_lan >= 0 && FD_ISSET(tcp_lan, &ready)) tcp_accept(tcp_lan, true);
+        if (!s_captive_nbo) {
+            if (tcp_ap >= 0 && FD_ISSET(tcp_ap, &ready)) tcp_accept(tcp_ap, false);
+            if (tcp_lan >= 0 && FD_ISSET(tcp_lan, &ready)) tcp_accept(tcp_lan, true);
+        }
         int sock = FD_ISSET(listen_sock, &ready) ? listen_sock : lan_sock >= 0 && FD_ISSET(lan_sock, &ready) ? lan_sock : -1;
         if (sock < 0) continue;
         bool from_lan = sock == lan_sock;
@@ -841,6 +956,7 @@ static void listener_task(void *arg)
 
         uint32_t captive = s_captive_nbo;
         if (captive) {
+            if (from_lan) continue;
             int rl = dns_captive_answer(qbuf, qlen, captive, cbuf, sizeof cbuf);
             if (rl > 0) sendto(sock, cbuf, rl, 0, (struct sockaddr *)&client, client_len);
             continue;
@@ -864,7 +980,9 @@ static void listener_task(void *arg)
         uint32_t upstream = route ? route(qbuf, qlen) : 0;
         if (!upstream) upstream = pick_upstream();
         if (!upstream) continue;
-        int kl = dns_is_std_query(qbuf, qlen) ? dns_question_len(qbuf, qlen) : 0;
+        /* Clamp before keying or queuing, so both paths see the wire request. */
+        (void)dns_edns_clamp(qbuf, qlen, DNS_RELAY_BUF_SIZE);
+        int kl = dns_cache_key_len(qbuf, qlen);
         if (kl > 0) {
             int rl = 0;
             if (cache_get(qbuf, kl, upstream, epoch, cbuf, &rl) &&
@@ -876,6 +994,7 @@ static void listener_task(void *arg)
         }
 
         /* Miss (or uncacheable): dispatch to a worker. */
+        if (!workers) continue;
         st_misses++;
         dns_work_t *w = heap_caps_malloc(sizeof(dns_work_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!w) continue;                   /* out of SPIRAM -> drop; client retries */
@@ -884,6 +1003,7 @@ static void listener_task(void *arg)
         w->lan        = from_lan;
         w->upstream   = upstream;
         w->cache_epoch = epoch;
+        w->udp_generation = from_lan ? lan_gen : ap_gen;
         w->tcp        = -1;
         w->qlen       = qlen;
         memcpy(w->q, qbuf, qlen);
@@ -893,21 +1013,52 @@ static void listener_task(void *arg)
     }
 }
 
+static bool start_listener(void)
+{
+    /* PSRAM stack, internal TCB. The task never performs flash writes. */
+    return xTaskCreateWithCaps(listener_task, "dns_relay", DNS_LISTENER_STACK, NULL,
+                              DNS_RELAY_TASK_PRIO, NULL, MALLOC_CAP_SPIRAM) == pdPASS;
+}
+
+static void retry_listener(void *arg)
+{
+    (void)arg;
+    if (!start_listener()) return;
+    esp_timer_stop(s_listener_retry);
+    esp_timer_delete(s_listener_retry);
+    s_listener_retry = NULL;
+}
+
+static bool schedule_listener_retry(void)
+{
+    const esp_timer_create_args_t args = {
+        .callback = retry_listener,
+        .name = "dns_restart",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&args, &s_listener_retry) != ESP_OK) return false;
+    if (esp_timer_start_periodic(s_listener_retry, DNS_LISTENER_RETRY_US) == ESP_OK) return true;
+    esp_timer_delete(s_listener_retry);
+    s_listener_retry = NULL;
+    return false;
+}
+
 /* ───────────────────── Public API ───────────────────── */
 
 void dns_relay_init(void)
 {
-    if (s_listener) return;
+    if (s_initialized) return;
+    s_initialized = true;
 
     nvs_handle_t h;
     if (nvs_open(DNS_RELAY_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
         uint8_t en = 1;
-        if (nvs_get_u8(h, KEY_ENABLED, &en) != ESP_OK) en = 1;
+        if (nvs_get_u8(h, DNS_RELAY_KEY_ENABLED, &en) != ESP_OK) en = 1;
         s_enabled = en != 0;
 
         char up_str[20] = {0};
         size_t len = sizeof(up_str);
-        if (nvs_get_str(h, KEY_UPSTREAM, up_str, &len) == ESP_OK && up_str[0]) {
+        if (nvs_get_str(h, DNS_RELAY_KEY_UPSTREAM, up_str, &len) == ESP_OK && up_str[0]) {
             ip4_addr_t a;
             if (ip4addr_aton(up_str, &a) && a.addr) s_upstream_nbo = a.addr;
         }
@@ -916,64 +1067,51 @@ void dns_relay_init(void)
         s_enabled = true;
     }
 
-    /* SPIRAM response cache + hand-off queue. If SPIRAM is exhausted the relay
+    /* SPIRAM response cache. If SPIRAM is exhausted the relay
      * still works, just cache-less (cache_get/put degrade to no-ops). */
     s_cache = heap_caps_calloc(DNS_CACHE_ENTRIES, sizeof(dns_cache_entry_t),
                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_cache) ESP_LOGW(TAG, "SPIRAM cache alloc failed — running cache-less");
-    s_cache_mtx = xSemaphoreCreateMutex();
-    s_workq     = xQueueCreate(DNS_WORK_QUEUE_DEPTH, sizeof(dns_work_t *));
-    if (!s_workq) { ESP_LOGE(TAG, "work queue alloc failed"); return; }
+    if (s_cache) s_cache_mtx = xSemaphoreCreateMutex();
+    if (s_cache && !s_cache_mtx) { heap_caps_free(s_cache); s_cache = NULL; }
 
-    /* Stacks in PSRAM (TCB stays internal): these tasks never touch SPI flash,
-     * and XIP_FROM_PSRAM keeps the cache live during flash ops, so PSRAM stacks
-     * are safe here. Frees ~13K internal DRAM for the WiFi DMA pools. */
-    xTaskCreateWithCaps(listener_task, "dns_relay", DNS_LISTENER_STACK, NULL,
-                        DNS_RELAY_TASK_PRIO, &s_listener, MALLOC_CAP_SPIRAM);
-    for (int i = 0; i < DNS_WORKER_COUNT; i++) {
-        xTaskCreateWithCaps(worker_task, "dns_worker", DNS_WORKER_STACK, NULL,
-                            DNS_RELAY_TASK_PRIO, NULL, MALLOC_CAP_SPIRAM);
+    if (!start_listener()) {
+        /* Free the optional cache before retrying under memory pressure.
+         * The timer starts the listener without reloading configuration. */
+        if (s_cache_mtx) { vSemaphoreDelete(s_cache_mtx); s_cache_mtx = NULL; }
+        if (s_cache) { heap_caps_free(s_cache); s_cache = NULL; }
+        if (schedule_listener_retry()) ESP_LOGW(TAG, "DNS listener unavailable; will retry without cache");
+        else ESP_LOGE(TAG, "DNS listener and retry timer unavailable");
     }
 }
 
-void dns_relay_set_enabled(bool on)
+esp_err_t dns_relay_set_enabled(bool on)
 {
-    if (s_enabled == on) return;
-    s_enabled = on;
-    s_socket_dirty = true;
-
     nvs_handle_t h;
-    if (nvs_open(DNS_RELAY_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, KEY_ENABLED, on ? 1 : 0);
-        nvs_commit(h);
+    esp_err_t err = nvs_open(DNS_RELAY_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_u8(h, DNS_RELAY_KEY_ENABLED, on ? 1 : 0);
+        if (err == ESP_OK) err = nvs_commit(h);
         nvs_close(h);
     }
+    if (err == ESP_OK) dns_relay_apply_enabled(on);
+    return err;
+}
+
+void dns_relay_apply_enabled(bool on)
+{
+    s_enabled = on;
     ESP_LOGI(TAG, "enabled=%d", (int)on);
 }
 
 bool dns_relay_is_enabled(void) { return s_enabled; }
-bool dns_relay_is_healthy(void) { return s_healthy; }
+bool dns_relay_is_healthy(void) { return atomic_load(&s_healthy); }
 
-void dns_relay_set_upstream(uint32_t ip_nbo)
+void dns_relay_apply_upstream(uint32_t ip_nbo)
 {
-    s_upstream_nbo = ip_nbo;
+    uint32_t previous = atomic_exchange(&s_upstream_nbo, ip_nbo);
+    if (previous != ip_nbo) atomic_fetch_add(&s_cache_epoch, 1);
 
-    nvs_handle_t h;
-    if (nvs_open(DNS_RELAY_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        if (ip_nbo == 0) {
-            nvs_erase_key(h, KEY_UPSTREAM);
-        } else {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%d.%d.%d.%d",
-                     (int)( ip_nbo        & 0xFF),
-                     (int)((ip_nbo >>  8) & 0xFF),
-                     (int)((ip_nbo >> 16) & 0xFF),
-                     (int)((ip_nbo >> 24) & 0xFF));
-            nvs_set_str(h, KEY_UPSTREAM, buf);
-        }
-        nvs_commit(h);
-        nvs_close(h);
-    }
     ESP_LOGI(TAG, "upstream override=0x%08x", (unsigned)ip_nbo);
 }
 
@@ -981,9 +1119,8 @@ uint32_t dns_relay_get_upstream(void) { return s_upstream_nbo; }
 
 void dns_relay_set_bind_addr(uint32_t ip_nbo)
 {
-    if (s_bind_nbo == ip_nbo) return;
-    s_bind_nbo = ip_nbo;
-    s_socket_dirty = true;
+    if (atomic_exchange(&s_bind_nbo, ip_nbo) == ip_nbo) return;
+    atomic_fetch_add(&s_cache_epoch, 1);
     ESP_LOGI(TAG, "bind addr changed to 0x%08x — rebinding", (unsigned)ip_nbo);
 }
 
@@ -1001,7 +1138,7 @@ void dns_relay_get_stats(dns_relay_stats_t *out)
     out->capacity    = DNS_CACHE_ENTRIES;
     out->cache_bytes = s_cache ? (uint32_t)(DNS_CACHE_ENTRIES * sizeof(dns_cache_entry_t)) : 0;
     out->enabled     = s_enabled ? 1 : 0;
-    out->healthy     = s_healthy ? 1 : 0;
+    out->healthy     = dns_relay_is_healthy() ? 1 : 0;
 
     uint32_t denom = st_hits + st_misses;
     out->hit_pct = denom ? (uint32_t)(((uint64_t)st_hits * 100) / denom) : 0;
@@ -1032,7 +1169,7 @@ void dns_relay_set_lan(bool on, uint32_t ip_nbo)
     atomic_fetch_add(&s_cache_epoch, 1);
 }
 
-bool dns_relay_lan_listening(void) { return s_lan_sock >= 0; }
+bool dns_relay_lan_listening(void) { return atomic_load(&s_lan_sock) >= 0; }
 
 void dns_relay_set_local_resolver(dns_relay_local_cb_t cb) { s_local_cb = cb; }
 void dns_relay_set_route(dns_relay_route_cb_t cb)

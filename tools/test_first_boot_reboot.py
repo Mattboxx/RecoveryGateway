@@ -37,6 +37,7 @@ functions = '\n'.join([
     c_func(fb_c, 'void first_boot_init(void)'),
     c_func(fb_c, 'bool first_boot_active(void)'),
     c_func(main_c, 'static void wifi_first_boot_storage(void)'),
+    c_func(main_c, 'static void wifi_sta_copy_credentials('),
     c_func(main_c, 'esp_netif_t *wifi_init_sta(void)'),
 ])
 
@@ -58,7 +59,8 @@ static const char *TAG = "first_boot", *TAG_STA = "WiFi Sta";
 #define EXAMPLE_ESP_WIFI_STA_PASSWD "otherappassword"
 typedef enum { WIFI_IF_STA, WIFI_IF_AP } wifi_interface_t;
 typedef enum { WIFI_STORAGE_FLASH, WIFI_STORAGE_RAM } wifi_storage_t;
-typedef struct { struct { uint8_t ssid[32]; uint8_t password[64]; } sta; } wifi_config_t;
+typedef struct { uint8_t ssid[32]; uint8_t password[64]; } wifi_sta_config_t;
+typedef struct { wifi_sta_config_t sta; } wifi_config_t;
 typedef struct { char ssid[33]; char passwd[65]; uint8_t valid; } wifi_network_t;
 typedef struct { int unused; } esp_netif_t;
 typedef struct { int unused; } fb_ctx_t;
@@ -67,7 +69,7 @@ typedef struct { int unused; } StaticSemaphore_t;
 typedef void *SemaphoreHandle_t;
 
 /* Our own NVS namespace. */
-static bool nvs_setup_done, nvs_has_setup_done, nvs_password, nvs_has_key;
+static bool nvs_setup_done, nvs_has_setup_done, nvs_password, nvs_has_key, nvs_wifi_table_exists;
 static wifi_network_t nvs_nets[1]; static int nvs_net_count;
 /* Wi-Fi driver: flash copy survives reboots, RAM copy is what it uses. */
 static wifi_config_t drv_flash, drv_ram; static wifi_storage_t drv_storage;
@@ -78,8 +80,9 @@ static esp_err_t nvs_param_set_u8(const char *k, uint8_t v) { assert(!strcmp(k, 
 static char *nvs_param_get_str(const char *k) { if (!strcmp(k, "ts_authkey") && nvs_has_key) { char *s = malloc(8); strcpy(s, "tskey"); return s; } return NULL; }
 static bool is_web_password_set(void) { return nvs_password; }
 static int wifi_networks_count(void) { return nvs_net_count; }
+static bool wifi_networks_has_saved_table(void) { return nvs_wifi_table_exists; }
 static bool wifi_networks_get(int i, wifi_network_t *n) { if (i >= nvs_net_count) return false; *n = nvs_nets[i]; return true; }
-static esp_err_t wifi_networks_set_all(const wifi_network_t *a, int n) { assert(n <= 1); nvs_net_count = n; if (n) nvs_nets[0] = a[0]; return ESP_OK; }
+static esp_err_t wifi_networks_set_all(const wifi_network_t *a, int n) { assert(n <= 1); nvs_wifi_table_exists = true; nvs_net_count = n; if (n) nvs_nets[0] = a[0]; return ESP_OK; }
 static esp_err_t esp_wifi_set_config(wifi_interface_t i, wifi_config_t *c) { assert(i == WIFI_IF_STA); drv_ram = *c; if (drv_storage == WIFI_STORAGE_FLASH) drv_flash = *c; return ESP_OK; }
 static esp_err_t esp_wifi_get_config(wifi_interface_t i, wifi_config_t *c) { assert(i == WIFI_IF_STA); *c = drv_ram; return ESP_OK; }
 static esp_err_t esp_wifi_set_storage(wifi_storage_t s) { drv_storage = s; return ESP_OK; }
@@ -96,7 +99,8 @@ static SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *s) { ret
 static fb_ctx_t s_ctx; static fb_crypto_t s_crypto;
 static void fb_init(fb_ctx_t *c, const fb_crypto_t *k) { (void)c; (void)k; }
 static bool s_active;
-static size_t strlcpy(char *d, const char *s, size_t n) { size_t l = strlen(s); if (n) { size_t c = l < n - 1 ? l : n - 1; memcpy(d, s, c); d[c] = 0; } return l; }
+static size_t fixture_strnlen(const char *s,size_t n) { size_t i=0;while(i<n&&s[i])i++;return i; }
+#define strnlen fixture_strnlen
 '''
 
 tests = r'''
@@ -113,11 +117,12 @@ static void boot(void) {
 /* What wifi_setup_test_start() does through wifi_apply_entry(). */
 static void wizard_wifi_test(const char *ssid, const char *pw) {
     wifi_config_t c; memset(&c, 0, sizeof c);
-    strcpy((char *)c.sta.ssid, ssid); strcpy((char *)c.sta.password, pw);
+    wifi_network_t entry={0};strcpy(entry.ssid,ssid);strcpy(entry.passwd,pw);
+    wifi_sta_copy_credentials(&c.sta,&entry,false);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &c));
 }
 static void factory(void) {
-    nvs_has_setup_done = nvs_setup_done = nvs_password = nvs_has_key = false; nvs_net_count = 0;
+    nvs_has_setup_done = nvs_setup_done = nvs_password = nvs_has_key = nvs_wifi_table_exists = false; nvs_net_count = 0;
     memset(&drv_flash, 0, sizeof drv_flash);
 }
 int main(void) {
@@ -149,12 +154,30 @@ int main(void) {
     boot();
     assert(!first_boot_active() && drv_storage == WIFI_STORAGE_FLASH && applied_network == 0);
 
+    /* Removing the last saved uplink survives boot with a stale SDK copy. */
+    wizard_wifi_test("OldNet", "old-password");
+    assert(wifi_networks_set_all(nvs_nets, 0) == ESP_OK);
+    boot();
+    assert(!first_boot_active() && nvs_wifi_table_exists && nvs_net_count == 0);
+    assert(applied_network < 0 && !drv_ram.sta.ssid[0] && !drv_flash.sta.ssid[0]);
+
     /* Installation upgraded from 1.x with a password and only a driver-cached
      * network: still migrated as before, and recorded as set up. */
     factory(); nvs_password = true; strcpy((char *)drv_flash.sta.ssid, "OldNet"); strcpy((char *)drv_flash.sta.password, "old-password");
     boot();
     assert(!first_boot_active() && nvs_has_setup_done && nvs_setup_done);
     assert(nvs_net_count == 1 && !strcmp(nvs_nets[0].ssid, "OldNet") && drv_storage == WIFI_STORAGE_FLASH);
+
+    /* Full-width driver fields need no terminator, but the saved values do. */
+    factory();nvs_password=true;
+    const char *full_ssid="123456789012345678901234567890AB";
+    const char *full_key="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    wizard_wifi_test(full_ssid,full_key);
+    assert(!memcmp(drv_flash.sta.ssid,full_ssid,32)&&!memcmp(drv_flash.sta.password,full_key,64));
+    boot();assert(nvs_net_count==1&&!strcmp(nvs_nets[0].ssid,full_ssid)&&!strcmp(nvs_nets[0].passwd,full_key));
+    wifi_sta_config_t enterprise={0};
+    wifi_sta_copy_credentials(&enterprise,&nvs_nets[0],true);
+    assert(!memcmp(enterprise.ssid,full_ssid,32)&&!enterprise.password[0]);
 
     /* The shipped Kconfig placeholder is never migrated, in either mode. */
     factory(); nvs_password = true; strcpy((char *)drv_flash.sta.ssid, EXAMPLE_ESP_WIFI_STA_SSID); strcpy((char *)drv_flash.sta.password, EXAMPLE_ESP_WIFI_STA_PASSWD);

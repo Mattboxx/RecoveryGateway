@@ -27,7 +27,7 @@
 #define SNAP_RESTORE_ATTEMPTS 3
 
 enum {SNAP_MANUAL = 1, SNAP_UPDATE, SNAP_UPLOAD, SNAP_BEFORE_RESTORE};
-typedef enum {SNAP_BOOT_NONE, SNAP_BOOT_RESTORED, SNAP_BOOT_INVALID, SNAP_BOOT_FAILED, SNAP_BOOT_GAVE_UP} snap_boot_t;
+typedef enum {SNAP_BOOT_NONE, SNAP_BOOT_RESTORED, SNAP_BOOT_INVALID, SNAP_BOOT_FAILED, SNAP_BOOT_GAVE_UP, SNAP_BOOT_FINALIZE_FAILED} snap_boot_t;
 
 typedef struct {
     uint32_t magic, version, seq, wall, size, data_crc;
@@ -48,7 +48,7 @@ snap_boot_t snap_boot_restore(const store_flash_t *storage, const store_flash_t 
 esp_err_t snap_delete(const store_flash_t *storage, unsigned slot);
 
 /* Firmware. */
-void settings_snapshot_boot(void);       /* app_main, before nvs_flash_init */
+esp_err_t settings_snapshot_boot(void);  /* app_main, before nvs_flash_init */
 void settings_snapshot_log_boot(void);   /* after history_init: report a restore */
 /* Takes a copy on an internal-RAM stack; any caller. Returns the slot or -1. */
 int settings_snapshot_take(uint8_t reason);

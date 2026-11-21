@@ -1,5 +1,6 @@
 """Exercise firmware startup, restart, monitor, ntfy and mDNS with host fakes."""
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,7 +13,9 @@ def source(name):
 
 
 def extract(src, signature):
-    start = src.index(signature + '\n{')
+    definition = re.search(re.escape(signature) + r'\s*\{', src)
+    assert definition, signature
+    start = definition.start()
     begin = src.index('{', start)
     depth = 1
     end = begin + 1
@@ -34,6 +37,7 @@ program = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "remote_commands.h"
 #define ESP_OK 0
 #define ESP_FAIL -1
 #define ESP_ERR_NO_MEM -2
@@ -90,6 +94,8 @@ typedef struct { uint8_t mac[6]; } wol_device_t;
 typedef struct { bool monitoring; int interval_s; } ops_settings_t;
 typedef struct {
     unsigned id; int index, state, origin, checks; uint64_t started, deadline, next;
+    uint32_t destination;
+    uint8_t wake_datagrams;
     bool cancel, probe_valid, host_seen, service_seen, wake, manual, packet_sent;
     wol_device_t device; ops_device_t profile;
 } job_t;
@@ -142,6 +148,8 @@ static int publish_message(const ntfy_integration_config_t *config, const char *
     assert(config->enabled); (void)title; (void)tags; attempts++;
     strlcpy(sent, text, sizeof sent); return send_result;
 }
+static bool notify_telegram_command_active(uint32_t destination) {(void)destination;return false;}
+static bool notify_telegram_queue_reply(uint32_t destination,const char *message) {(void)destination;(void)message;return false;}
 
 typedef uint32_t ip4_addr_t;
 struct netif { ip4_addr_t ip; bool up; };
@@ -172,11 +180,14 @@ static int mdns_resp_add_netif(struct netif *nif, const char *name) {
 '''
 program += '\n'.join([
     extract(core, 'static void confirm_ota_startup(esp_err_t admin_start)'),
+    extract(web, 'esp_err_t web_ui_reserve_restart(TaskHandle_t *task)'),
     extract(web, 'static esp_err_t reserve_restart(httpd_req_t *req, TaskHandle_t *task)'),
     extract(web, 'static esp_err_t system_ota_upload_handler(httpd_req_t *req)'),
+    ntfy[ntfy.index('#define NTFY_OPERATIONAL_CAPACITY'):ntfy.index('static time_t s_command_floor')],
+    ntfy[ntfy.index('static void operational_pop('):ntfy.index('/* TLS certificate verification')],
+    extract(ops, 'static bool job_allowed_locked(const job_t *candidate)'),
     extract(ops, 'static void apply_probe_locked(const job_t *local, int result, uint32_t latency)'),
     extract(ops, 'static void schedule_monitor(uint64_t now, const ops_settings_t *settings)'),
-    ntfy[ntfy.index('#define NTFY_OPERATIONAL_CAPACITY'):ntfy.index('/* TLS certificate verification')],
     extract(ntfy, 'static NTFY_NOINLINE void operational_tick(const ntfy_integration_config_t *c,\n'
                   '                                            uint64_t generation, bool online)'),
     extract(mdns, 'static void mdns_on_uplink(void *arg)'),
@@ -234,11 +245,15 @@ int main(void)
     schedule_monitor(182000, &store.settings);
     assert(job.id == 4 && job.index == 11);
 
-    clock_ms = 3000;
+    clock_ms = 2999;
     job = (job_t){.id=1,.deadline=3000,.state=J_PRECHECK};
     job_t local = job;
     apply_probe_locked(&local, 1, 1);
     assert(job.state == J_REACHABLE && job.host_seen);
+    clock_ms = 3000;
+    job = local;
+    apply_probe_locked(&local, 1, 1);
+    assert(job.state == J_UNKNOWN && !job.host_seen);
     job = (job_t){.id=1,.deadline=3000,.state=J_SERVICE,.host_seen=true};
     local = job;
     apply_probe_locked(&local, 0, 1);
@@ -279,6 +294,17 @@ int main(void)
     s_config_generation++;
     operational_tick(&s_config, 0, true);
     assert(attempts == 4);
+    operational_tick(&s_config, s_config_generation, true);
+    assert(attempts == 5 && !strcmp(sent, "new settings"));
+    remote_command_gate_reset(&s_command_gate, true);
+    uint32_t old_destination = remote_command_ticket(&s_command_gate);
+    assert(ntfy_integration_queue_reply(old_destination, "old command result"));
+    assert(ntfy_integration_queue_event("ordinary alert"));
+    remote_command_gate_reset(&s_command_gate, false);
+    remote_command_gate_reset(&s_command_gate, true);
+    assert(!ntfy_integration_queue_reply(old_destination, "late command result"));
+    operational_tick(&s_config, s_config_generation, true);
+    assert(attempts == 6 && !s_operational_count && !strcmp(sent, "ordinary alert"));
 
     mdns_on_uplink(NULL);
     mdns_on_uplink(NULL);
@@ -302,7 +328,7 @@ with tempfile.TemporaryDirectory(prefix='reliability-') as work:
     source_file = Path(work) / 'test.c'
     executable = Path(work) / ('test.exe' if os.name == 'nt' else 'test')
     source_file.write_text(program, encoding='utf-8')
-    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror']
+    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-I', str(ROOT / 'main')]
     if os.environ.get('RELIABILITY_SANITIZE') == '1':
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(source_file), '-o', str(executable)], check=True)

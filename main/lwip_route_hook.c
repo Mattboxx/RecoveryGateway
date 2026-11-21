@@ -21,6 +21,7 @@
  */
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
 #include "lwip/ip4_addr.h"
 #include "lwip/netif.h"
@@ -33,7 +34,6 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"   /* xTaskCreateWithCaps — PSRAM stack */
 #include "esp_heap_caps.h"            /* MALLOC_CAP_SPIRAM */
@@ -45,7 +45,6 @@
 #include "eth_uplink.h"
 #include "cell_uplink.h"
 #include "ping/ping_sock.h"
-#include "task_reaper.h"
 #include "perf_hooks.h"
 
 static const char *TAG = "exit_route";
@@ -224,31 +223,41 @@ static uint32_t s_dns_saved, s_dns_set;   /* network byte order; 0 = none */
 
 static void cell_dns_follow(struct netif *cell, struct netif *lan)
 {
-    const ip_addr_t *cur = dns_getserver(0);
-    uint32_t now = cur && IP_IS_V4(cur) ? ip4_addr_get_u32(ip_2_ip4(cur)) : 0;
-    uint32_t gw = cell && (cell->flags & NETIF_FLAG_ETHARP) ? ip4_addr_get_u32(netif_ip4_gw(cell)) : 0;
-    if (gw) {
-        if (now == gw) return;
-        bool lan_resolver;
-        if (!now) lan_resolver = true;
-        else if (lan && netif_is_up(lan) && netif_is_link_up(lan)) {
-            uint32_t mask = ip4_addr_get_u32(netif_ip4_netmask(lan));
-            lan_resolver = mask && (now & mask) == (ip4_addr_get_u32(netif_ip4_addr(lan)) & mask);
-        } else {
-            lan_resolver = ip_is_rfc1918(lwip_ntohl(now));
+    const ip_addr_t *current = dns_getserver(0);
+    if (current && !IP_IS_V4(current) && !ip_addr_isany(current)) {
+        s_dns_set = s_dns_saved = 0;
+        return;     /* leave an explicitly configured IPv6 resolver alone */
+    }
+    uint32_t address = current && IP_IS_V4(current) ? ip4_addr_get_u32(ip_2_ip4(current)) : 0;
+    uint32_t gateway = cell && (cell->flags & NETIF_FLAG_ETHARP) ? ip4_addr_get_u32(netif_ip4_gw(cell)) : 0;
+    bool owns_slot = s_dns_set && address == s_dns_set;
+
+    if (gateway) {
+        if (address == gateway) return;
+        if (!owns_slot) {
+            bool lan_resolver = !address || ip_is_rfc1918(lwip_ntohl(address));
+            if (address && lan && netif_is_up(lan) && netif_is_link_up(lan)) {
+                uint32_t mask = ip4_addr_get_u32(netif_ip4_netmask(lan));
+                lan_resolver = mask && (address & mask) == (ip4_addr_get_u32(netif_ip4_addr(lan)) & mask);
+            }
+            if (!lan_resolver) {
+                s_dns_set = s_dns_saved = 0;
+                return;
+            }
+            /* Remember the latest value provided by another interface, even
+             * when a DHCP renewal arrives while the modem is still active. */
+            s_dns_saved = address;
         }
-        if (!lan_resolver) return;
-        if (!s_dns_set) s_dns_saved = now;    /* keep the first LAN resolver seen */
-        s_dns_set = gw;
-        ip_addr_t server = IPADDR4_INIT(gw);
+        s_dns_set = gateway;
+        ip_addr_t server = IPADDR4_INIT(gateway);
         dns_setserver(0, &server);
         ESP_LOGW(TAG, "mobile uplink in use: DNS follows the modem's gateway");
         return;
     }
-    if (s_dns_set && now == s_dns_set && s_dns_saved) {
+    if (owns_slot) {
         ip_addr_t server = IPADDR4_INIT(s_dns_saved);
-        dns_setserver(0, &server);
-        ESP_LOGW(TAG, "LAN uplink in use again: its DNS restored");
+        dns_setserver(0, s_dns_saved ? &server : NULL);
+        ESP_LOGW(TAG, "mobile uplink DNS override removed");
     }
     s_dns_set = s_dns_saved = 0;
 }
@@ -378,7 +387,6 @@ static bool accepted_route_lookup(uint32_t dst_hbo, tailscale_accepted_route_t *
     return found;
 }
 
-static struct netif *s_original_default = NULL;
 static bool s_wg_udp_pinned = false;
 static esp_ping_handle_t s_keepalive_ping = NULL;
 static uint32_t s_keepalive_target = 0;
@@ -443,214 +451,197 @@ static void keepalive_start(uint32_t target_ip_hbo)
     }
 }
 
-static void set_default_callback(void *ctx)
-{
-    netif_set_default(ctx);
-}
-
-static void set_default_via_tcpip(struct netif *target)
-{
-    tcpip_callback_wait(set_default_callback, target);
-}
-
 typedef struct {
-    struct netif *wg;
-    struct netif *uplink;
-    bool wg_ready;
-    struct netif *default_netif;
-    struct netif *preferred;  /* NULL unless the optional Ethernet uplink is enabled */
-} supervisor_netifs_t;
-
-static void supervisor_netifs_cb(void *ctx)
-{
-    supervisor_netifs_t *state = ctx;
-    state->wg = find_wg_netif();
-    state->uplink = find_sta_netif();
-    state->preferred = eth_uplink_lwip_select(state->uplink);
-    if (state->preferred) state->uplink = state->preferred;
-    /* Optional cellular: primary, or failover while WiFi/Ethernet is down. */
-    struct netif *lan = state->uplink;
-    struct netif *cell = cell_uplink_lwip_select(state->uplink);
-    if (cell) state->uplink = state->preferred = cell;
-    cell_dns_follow(cell, lan);
-    state->wg_ready = state->wg && netif_is_up(state->wg);
-    state->default_netif = netif_default;
-}
-
-typedef struct {
+    atomic_bool pending;
+    int64_t queued_us;
+    uint32_t generation;
     tailscale_accepted_route_t routes[TAILSCALE_ACCEPTED_ROUTES_MAX];
     int count;
-} supervisor_routes_t;
+} supervisor_request_t;
 
-static void publish_routes_cb(void *ctx)
-{
-    const supervisor_routes_t *state = ctx;
-    publish_accepted_routes(state->routes, state->count);
-}
+static atomic_bool s_supervisor_running, s_supervisor_degraded;
+static atomic_uint s_supervisor_keepalive;
+static esp_timer_handle_t s_supervisor_retry;
+#define ROUTE_REQUEST_MAX_US 1500000LL
 
-/* The library queues its PCB update rather than waiting for execution.
- * Queue a completion behind it and keep the lifecycle lease until both have
- * run. tcpip_callback_wait is not a queue barrier with core locking enabled. */
-static void pin_complete_cb(void *ctx)
+/* Resolve all netifs in TCP/IP context. The queue carries route values and
+ * a generation, never a leased pointer. */
+static bool route_supervisor_apply(const supervisor_request_t *request)
 {
-    xSemaphoreGive((SemaphoreHandle_t)ctx);
-}
-
-static esp_err_t pin_wg_output_sync(microlink_t *ml, struct netif *uplink,
-                                    SemaphoreHandle_t done,
-                                    struct tcpip_callback_msg *completion)
-{
-    esp_err_t err = microlink_pin_wg_output_netif(ml, uplink);
-    if (err != ESP_OK) return err;
-    /* Reuse a preallocated completion message: retry mailbox pressure while
-     * retaining the lease, without needing another heap allocation. */
-    while (tcpip_callbackmsg_trycallback(completion) != ERR_OK) {
-        vTaskDelay(1);
+    struct netif *sta = find_sta_netif();
+    struct netif *eth = eth_uplink_lwip_select(sta);
+    struct netif *lan = eth ? eth : sta;
+    struct netif *cell = cell_uplink_lwip_select(lan);
+    struct netif *uplink = cell ? cell : lan;
+    cell_dns_follow(cell, lan);
+    uint32_t exit_ip = tailscale_exit_node_ip;
+    uint32_t keepalive = 0;
+    bool applied = true;
+    microlink_t *ml = tailscale_get_microlink();
+    if (exit_ip) {
+        /* LINK_UP follows the first WG session. Administrative UP is
+         * sufficient to bootstrap it once UDP is pinned to a live uplink. */
+        struct netif *wg = find_wg_netif();
+        applied = wg && netif_is_up(wg) && uplink &&
+                  microlink_pin_wg_output_netif_core(ml, uplink) == ESP_OK;
+        if (applied) {
+            s_wg_udp_pinned = true;
+            if (netif_default != wg) netif_set_default(wg);
+            keepalive = exit_ip;
+        } else if (!uplink && s_wg_udp_pinned && ml &&
+                   microlink_pin_wg_output_netif_core(ml, NULL) == ESP_OK) {
+            s_wg_udp_pinned = false;
+        }
+    } else {
+        if (uplink && netif_default != uplink) netif_set_default(uplink);
+        if (s_wg_udp_pinned) {
+            applied = !ml || microlink_pin_wg_output_netif_core(ml, NULL) == ESP_OK;
+            if (applied) s_wg_udp_pinned = false;
+        }
     }
-    xSemaphoreTake(done, portMAX_DELAY);
-    return ESP_OK;
+    atomic_store(&s_supervisor_keepalive, keepalive);
+    publish_accepted_routes(request->routes, tailscale_accept_routes ? request->count : 0);
+    return applied;
+}
+
+static void route_supervisor_cb(void *ctx)
+{
+    supervisor_request_t *request = ctx;
+    bool applied = false;
+    if (esp_timer_get_time() - request->queued_us <= ROUTE_REQUEST_MAX_US &&
+        tailscale_lifecycle_try_acquire()) {
+        if (request->generation == tailscale_lifecycle_generation())
+            applied = route_supervisor_apply(request);
+        tailscale_lifecycle_release();
+    }
+    atomic_store(&s_supervisor_degraded, !applied);
+    atomic_store(&request->pending, false);
+}
+
+static struct tcpip_callback_msg *route_supervisor_message(supervisor_request_t *request)
+{
+    for (unsigned delay_ms = 2000; ; delay_ms = delay_ms < 15000 ? delay_ms * 2 : 30000) {
+        struct tcpip_callback_msg *msg = tcpip_callbackmsg_new(route_supervisor_cb, request);
+        if (msg) return msg;
+        if (delay_ms == 2000) ESP_LOGW(TAG, "Supervisor mailbox message unavailable; will retry");
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+}
+
+static void route_supervisor_poll(supervisor_request_t *request, struct tcpip_callback_msg *msg)
+{
+    int64_t now = esp_timer_get_time();
+    if (atomic_load(&request->pending)) {
+        if (now - request->queued_us > ROUTE_REQUEST_MAX_US)
+            atomic_store(&s_supervisor_degraded, true);
+        return;
+    }
+    if (!tailscale_lifecycle_try_acquire()) return;
+
+    request->generation = tailscale_lifecycle_generation();
+    request->count = 0;
+    unsigned dropped_routes = 0;
+    if (tailscale_accept_routes) {
+        microlink_t *ml = tailscale_get_microlink();
+        int peer_n = ml ? microlink_get_peer_count(ml) : 0;
+        for (int i = 0; i < peer_n; i++) {
+            microlink_peer_info_t pi;
+            if (microlink_get_peer_info(ml, i, &pi) != ESP_OK) continue;
+            for (int r = 0; r < pi.subnet_route_count; r++) {
+                if (request->count >= TAILSCALE_ACCEPTED_ROUTES_MAX) { dropped_routes++; continue; }
+                request->routes[request->count++] = (tailscale_accepted_route_t){
+                    .network = pi.subnet_routes[r].network, .prefix_len = pi.subnet_routes[r].prefix_len,
+                };
+            }
+        }
+    }
+    tailscale_lifecycle_release();
+
+    static unsigned dropped_logged;
+    if (dropped_routes != dropped_logged) {
+        dropped_logged = dropped_routes;
+        if (dropped_routes)
+            ESP_LOGW(TAG, "Accepted routes: %u beyond the %d this gateway routes are ignored",
+                     dropped_routes, TAILSCALE_ACCEPTED_ROUTES_MAX);
+    }
+    request->queued_us = esp_timer_get_time();
+    atomic_store(&request->pending, true);
+    if (tcpip_callbackmsg_trycallback(msg) != ERR_OK) {
+        atomic_store(&request->pending, false);
+        atomic_store(&s_supervisor_degraded, true);
+    }
 }
 
 static void route_supervisor_task(void *arg)
 {
     (void)arg;
-    SemaphoreHandle_t pin_done = xSemaphoreCreateBinary();
-    struct tcpip_callback_msg *pin_completion = pin_done
-        ? tcpip_callbackmsg_new(pin_complete_cb, pin_done) : NULL;
-    if (!pin_completion) {
-        if (pin_done) vSemaphoreDelete(pin_done);
-        ESP_LOGE(TAG, "supervisor completion allocation failed");
-        task_reaper_self_delete();
-    }
-    ESP_LOGI(TAG, "supervisor task started (exit_node=%lu)",
-             (unsigned long)tailscale_exit_node_ip);
+    static supervisor_request_t request;
+    struct tcpip_callback_msg *msg = route_supervisor_message(&request);
+    atomic_store(&s_supervisor_running, true);
+    ESP_LOGI(TAG, "supervisor task started");
     while (1) {
-        if (!tailscale_lifecycle_try_acquire()) {
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            continue;
-        }
-        static uint32_t seen_generation = 0;
-        uint32_t generation = tailscale_lifecycle_generation();
-        if (generation != seen_generation) {
-            s_wg_udp_pinned = false;
-            seen_generation = generation;
-        }
-        /* This executes in TCP/IP context with core locking off, or under
-         * the core lock with it on. The lease keeps the WG pointer alive. */
-        supervisor_netifs_t netifs = {0};
-        if (tcpip_callback_wait(supervisor_netifs_cb, &netifs) != ERR_OK) {
-            tailscale_lifecycle_release();
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            continue;
-        }
-        struct netif *wg = netifs.wg;
-        struct netif *uplink = netifs.uplink;
-        /* wireguardif only flips its netif to LINK_UP after at least one
-         * peer has a valid session, which is exactly the chicken/egg case
-         * we are trying to bootstrap for the exit node. Treat the netif
-         * as usable as soon as it has its IP and is administratively up. */
-        bool wg_ready = netifs.wg_ready;
-
-        if (s_original_default == NULL && netifs.default_netif != NULL &&
-            (!wg || netifs.default_netif != wg)) {
-            s_original_default = netifs.default_netif;
-            ESP_LOGI(TAG, "Cached original default route: %c%c%d",
-                     netifs.default_netif->name[0], netifs.default_netif->name[1],
-                     netifs.default_netif->num);
-        }
-
-        struct netif *want = NULL;
-        if (tailscale_exit_node_ip != 0) {
-            if (wg_ready && uplink != NULL) {
-                microlink_t *ml = tailscale_get_microlink();
-                /* Retry every pass: the library does not propagate failure
-                 * to enqueue its pin callback, so cached success is unsafe. */
-                esp_err_t pr = ml ? pin_wg_output_sync(ml, uplink, pin_done, pin_completion) : ESP_ERR_INVALID_STATE;
-                if (pr == ESP_OK) {
-                    if (!s_wg_udp_pinned) {
-                        ESP_LOGI(TAG, "WG UDP pin requested on upstream %c%c%d",
-                                 uplink->name[0], uplink->name[1], uplink->num);
-                    }
-                    s_wg_udp_pinned = true;
-                }
-                want = wg;
-                /* Keep the WG session warm on the chosen exit node — without
-                 * this its tailscaled lazy-trims us after ~4 minutes idle. */
-                keepalive_start(tailscale_exit_node_ip);
-            }
-        } else {
-            want = netifs.preferred ? netifs.preferred : s_original_default;
-            if (s_wg_udp_pinned) {
-                microlink_t *ml = tailscale_get_microlink();
-                if (ml) pin_wg_output_sync(ml, NULL, pin_done, pin_completion);
-                s_wg_udp_pinned = false;
-                ESP_LOGI(TAG, "WG UDP unpinned (exit node off)");
-            }
-            keepalive_stop();
-        }
-
-        if (want != NULL && want != netifs.default_netif) {
-            ESP_LOGI(TAG, "Switching default route: %c%c%d -> %c%c%d (exit_node=%lu)",
-                     netifs.default_netif ? netifs.default_netif->name[0] : '?',
-                     netifs.default_netif ? netifs.default_netif->name[1] : '?',
-                     netifs.default_netif ? netifs.default_netif->num : 0,
-                     want->name[0], want->name[1], want->num,
-                     (unsigned long)tailscale_exit_node_ip);
-            set_default_via_tcpip(want);
-        }
-
-        /* Phase 1.9n: rebuild accept-routes table from microlink peer info.
-         * When tailscale_accept_routes=1 the route hook redirects any
-         * destination matching one of these CIDRs into the WG tunnel — the
-         * way `tailscale up --accept-routes` does on the official client. */
-        supervisor_routes_t new_routes = {0};
-        unsigned dropped_routes = 0;
-        if (tailscale_accept_routes) {
-            microlink_t *ml = tailscale_get_microlink();
-            int peer_n = ml ? microlink_get_peer_count(ml) : 0;
-            for (int i = 0; i < peer_n; i++) {
-                microlink_peer_info_t pi;
-                if (microlink_get_peer_info(ml, i, &pi) != ESP_OK) continue;
-                for (int r = 0; r < pi.subnet_route_count; r++) {
-                    if (new_routes.count >= TAILSCALE_ACCEPTED_ROUTES_MAX) { dropped_routes++; continue; }
-                    new_routes.routes[new_routes.count].network =
-                        pi.subnet_routes[r].network;
-                    new_routes.routes[new_routes.count].prefix_len =
-                        pi.subnet_routes[r].prefix_len;
-                    new_routes.count++;
-                }
-            }
-        }
-        static unsigned s_dropped_logged;
-        if (dropped_routes != s_dropped_logged) {
-            s_dropped_logged = dropped_routes;
-            if (dropped_routes)
-                ESP_LOGW(TAG, "Accepted routes: %u beyond the %d this gateway routes are ignored",
-                         dropped_routes, TAILSCALE_ACCEPTED_ROUTES_MAX);
-        }
-        /* Packet hooks also run in TCP/IP context: publish entries/count
-         * together without depending on CONFIG_LWIP_TCPIP_CORE_LOCKING. */
-        tcpip_callback_wait(publish_routes_cb, &new_routes);
-        tailscale_lifecycle_release();
-
+        route_supervisor_poll(&request, msg);
+        /* Keep the session warm without allocating sockets under a lease
+         * or in TCP/IP context. */
+        uint32_t keepalive = atomic_load(&s_supervisor_keepalive);
+        if (keepalive && !atomic_load(&s_supervisor_degraded)) keepalive_start(keepalive);
+        else keepalive_stop();
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 
-void lwip_route_hook_init(void)
+static bool start_route_supervisor(void)
 {
-    static bool started = false;
-    if (started) return;
-    started = true;
     /* Stack budget: ESP_LOGI uses a 256 B vsnprintf scratch, the peer
-     * iteration parks a ~150 B microlink_peer_info_t on the stack, and
-     * set_default_via_tcpip() crosses into the lwIP TCPIP context. The
+     * iteration parks a microlink_peer_info_t on the stack. The
      * original 3072 B drove a vApplicationStackOverflowHook PANIC on a
      * busier tailnet (~6 peers + accept-routes). 5120 B leaves >1 KB
      * headroom on the observed worst case. */
     /* Stack in PSRAM (TCB stays internal): supervisor task, never deleted,
      * no SPI-flash writes; XIP keeps the cache live during flash ops. ~5K. */
-    xTaskCreateWithCaps(route_supervisor_task, "exit_route", 5120, NULL, 5, NULL, MALLOC_CAP_SPIRAM);
+    return xTaskCreateWithCaps(route_supervisor_task, "exit_route", 5120, NULL, 5, NULL, MALLOC_CAP_SPIRAM) == pdPASS;
+}
+
+static void retry_route_supervisor(void *arg)
+{
+    (void)arg;
+    if (!start_route_supervisor()) return;
+    esp_timer_stop(s_supervisor_retry);
+    esp_timer_delete(s_supervisor_retry);
+    s_supervisor_retry = NULL;
+}
+
+void lwip_route_hook_init(void)
+{
+    static bool initialized; /* Called by app_main before Wi-Fi starts. */
+    if (initialized) return;
+    initialized = true;
+    if (start_route_supervisor()) return;
+
+    const esp_timer_create_args_t args = {
+        .callback = retry_route_supervisor,
+        .name = "route_restart",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&args, &s_supervisor_retry) == ESP_OK) {
+        if (esp_timer_start_periodic(s_supervisor_retry, 5ULL * 1000000) == ESP_OK) {
+            ESP_LOGW(TAG, "Supervisor task unavailable; will retry");
+            return;
+        }
+        esp_timer_delete(s_supervisor_retry);
+        s_supervisor_retry = NULL;
+    }
+    ESP_LOGE(TAG, "Supervisor task and retry timer unavailable");
+}
+
+bool lwip_route_hook_supervisor_running(void)
+{
+    return atomic_load(&s_supervisor_running);
+}
+
+bool lwip_route_hook_supervisor_degraded(void)
+{
+    return atomic_load(&s_supervisor_degraded);
 }
 
 /* Linker-wrapped: ESP-IDF defines ip4_route_src_hook as a strong symbol

@@ -22,6 +22,7 @@ fixture = r'''
 #include <assert.h>
 #define EXT_RAM_BSS_ATTR /* PSRAM placement attribute: none on the host */
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -54,8 +55,9 @@ static void *heap_caps_malloc(size_t n,int caps){(void)caps;return malloc(n);}
 #define NVS_NAMESPACE "tsr"
 #define NVS_READONLY 0
 #define NVS_READWRITE 1
-#define portMAX_DELAY 0
+#define portMAX_DELAY -1
 #define pdPASS 1
+#define pdTRUE 1
 #define pdMS_TO_TICKS(x) (x)
 #define configASSERT(x) assert(x)
 typedef pthread_mutex_t portMUX_TYPE;
@@ -73,14 +75,17 @@ static _Thread_local bool owns_transaction;
 static __attribute__((unused)) SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *s) {
     assert(!pthread_mutex_init(s,NULL)); return s;
 }
-static void xSemaphoreTake(SemaphoreHandle_t h,int wait) {
-    (void)wait; assert(h);
+static int xSemaphoreTake(SemaphoreHandle_t h,int wait) {
+    assert(h);
     if(h==transaction_lock && actor==2) {
         assert(!pthread_mutex_lock(&gate_lock)); second_observed=true;
         assert(!pthread_cond_broadcast(&gate_cv)); assert(!pthread_mutex_unlock(&gate_lock));
     }
-    assert(!pthread_mutex_lock(h));
+    if(!wait) {
+        if(pthread_mutex_trylock(h))return 0;
+    } else assert(wait==portMAX_DELAY && !pthread_mutex_lock(h));
     if(h==transaction_lock) { assert(!owns_transaction); owns_transaction=true; }
+    return pdTRUE;
 }
 static void xSemaphoreGive(SemaphoreHandle_t h) {
     if(h==transaction_lock) { assert(owns_transaction); owns_transaction=false; }
@@ -176,8 +181,8 @@ static bool ip_portmap_add(uint8_t p,uint32_t b,uint16_t l,uint32_t d,uint16_t d
     assert(p&&b&&l&&d&&dp&&!owns_transaction);++binding_count;return true;
 }
 static void ip_portmap_remove(uint8_t p,uint16_t l) { assert(p&&l&&binding_count&&!owns_transaction);--binding_count; }
-static err_t tcpip_callback_with_block(void (*cb)(void*),void *arg,int block) {
-    assert(cb && !arg && block==1 && !owns_transaction);return ERR_OK;
+static err_t tcpip_try_callback(void (*cb)(void*),void *arg) {
+    assert(cb && !arg && !owns_transaction);return ESP_FAIL;
 }
 '''
 
@@ -189,7 +194,7 @@ static void *run(void *data) {
     else if(job->operation==1)job->result=tailnet_forward_set_enabled((int)job->id-1,false);
     else if(job->operation==2)job->result=portmap_set_all(&job->ap,1);
     else if(job->operation==3)job->result=portmap_set_all(&job->ap,0);
-    else if(job->operation==4){portmap_install_cb(NULL);job->result=ESP_OK;}
+    else if(job->operation==4){portmap_install_now();job->result=ESP_OK;}
     else {assert(job->operation==5);job->result=web_ui_save_port(job->ap.ext_port,NULL);}
     if(actor==2) {
         assert(!pthread_mutex_lock(&gate_lock));second_done=true;
@@ -205,7 +210,8 @@ static void parallel(job_t *first,job_t *second) {
     assert(!pthread_mutex_unlock(&gate_lock));assert(!pthread_create(&two,NULL,run,second));
     assert(!pthread_mutex_lock(&gate_lock));
     /* Fixed code reaches the transaction lock; old code completes writer 2. */
-    while(!second_observed&&!second_done)assert(!pthread_cond_wait(&gate_cv,&gate_lock));
+    while(!second_done&&(second->operation==4||!second_observed))
+        assert(!pthread_cond_wait(&gate_cv,&gate_lock));
     release_first=true;assert(!pthread_cond_broadcast(&gate_cv));assert(!pthread_mutex_unlock(&gate_lock));
     assert(!pthread_join(one,NULL));assert(!pthread_join(two,NULL));
 }
@@ -225,13 +231,36 @@ int main(int argc,char **argv) {
         int updates=lease_rules_updates;
         char why[128];assert(tailnet_forward_set_all(first.rules,2,why,sizeof why)==ESP_OK);
         assert(lease_rules_updates==updates+1&&lease_rules_count==2); /* saved table reaches the lease ledger */
+        uint32_t first_revision, second_revision, revision;
+        assert(tailnet_forward_get_revisioned(0,NULL,NULL,&first_revision));
+        assert(tailnet_forward_get_revisioned(1,NULL,NULL,&second_revision));
+        assert(tailnet_forward_set_all(first.rules,1,why,sizeof why)==ESP_OK);
+        assert(!tailnet_forward_get_revisioned(1,NULL,NULL,&revision));
+        assert(tailnet_forward_set_all(first.rules,2,why,sizeof why)==ESP_OK);
+        assert(tailnet_forward_get_revisioned(0,NULL,NULL,&revision)&&revision==first_revision);
+        assert(tailnet_forward_get_revisioned(1,NULL,NULL,&revision)&&revision!=second_revision);
         first.operation=second.operation=1;parallel(&first,&second);
         assert(first.result==ESP_OK&&second.result==ESP_OK);
         for(int i=0;i<2;i++) { tailnet_forward_rule_t live;assert(tailnet_forward_get(i,&live,NULL)&&!live.enabled); }
+    } else if(!strcmp(argv[1],"counters")) {
+        char why[128];
+        assert(tailnet_forward_set_all(first.rules,2,why,sizeof why)==ESP_OK);
+        s_runtime[0].accepted_packets=12;s_runtime[0].last_accepted_s=23;
+        s_runtime[1].blocked_packets=35;s_runtime[1].last_blocked_s=67;
+        tailnet_forward_rule_t reordered[]={first.rules[1],first.rules[0]};
+        reordered[1].destination_port=443;
+        assert(tailnet_forward_set_all(reordered,2,why,sizeof why)==ESP_OK);
+        tailnet_forward_runtime_t rt;
+        assert(tailnet_forward_get(0,NULL,&rt)&&rt.blocked_packets==35&&rt.last_blocked_s==67&&!rt.installed);
+        assert(tailnet_forward_get(1,NULL,&rt)&&!rt.accepted_packets&&!rt.last_accepted_s);
+        assert(tailnet_forward_set_all(reordered+1,1,why,sizeof why)==ESP_OK);
+        assert(tailnet_forward_set_all(reordered,2,why,sizeof why)==ESP_OK);
+        assert(tailnet_forward_get(0,NULL,&rt)&&!rt.blocked_packets&&!rt.last_blocked_s);
     } else if(!strcmp(argv[1],"install")) {
         first.ap=(portmap_entry_t){.proto=6,.ext_port=2222,.int_port=22,.int_ip=0xc0000202};
-        assert(portmap_set_all(&first.ap,1)==ESP_OK);portmap_install_cb(NULL);assert(binding_count==1);
+        assert(portmap_set_all(&first.ap,1)==ESP_OK);portmap_install_now();assert(binding_count==1);
         first.operation=3;second.operation=4;parallel(&first,&second);
+        assert(portmap_refresh_pending());portmap_install_now();assert(!portmap_refresh_pending());
         assert(first.result==ESP_OK&&second.result==ESP_OK&&portmap_count()==0&&binding_count==0);
     } else if(!strcmp(argv[1],"web-after-ap")||!strcmp(argv[1],"ap-after-web")||!strcmp(argv[1],"web-after-tailnet")) {
         first.ap=second.ap=(portmap_entry_t){.proto=6,.ext_port=2222,.int_port=22,.int_ip=0xc0000202};
@@ -250,7 +279,7 @@ int main(int argc,char **argv) {
         assert(lease_rules_updates==updates); /* a refused save does not change the known rules */
         /* Legacy records remain saved but cannot install over the admin port. */
         s_table[0]=first.ap;s_table[0].valid=1;s_count=1;
-        portmap_install_cb(NULL);assert(!binding_count&&portmap_count()==1);
+        portmap_install_now();assert(!binding_count&&portmap_count()==1);
     } else {
         assert(!strcmp(argv[1],"conflict"));first.operation=2;
         first.ap=(portmap_entry_t){.proto=6,.ext_port=2222,.int_port=22,.int_ip=0xc0000202};
@@ -283,7 +312,7 @@ with tempfile.TemporaryDirectory(prefix='forwarding-transactions-') as directory
     binary=path/('test.exe' if os.name=='nt' else 'test')
     subprocess.run([os.environ.get('CC','gcc'),*flags,'-I',str(path),'-I',str(ROOT/'main'),str(path/'test.c'),'-o',str(binary)],check=True)
     failed=[]
-    for scenario in ('persist','toggle','conflict','install','web-after-ap','ap-after-web','web-after-tailnet','live-port'):
+    for scenario in ('persist','toggle','counters','conflict','install','web-after-ap','ap-after-web','web-after-tailnet','live-port'):
         try:
             subprocess.run([str(binary),scenario],check=True,timeout=15)
         except (subprocess.CalledProcessError,subprocess.TimeoutExpired):

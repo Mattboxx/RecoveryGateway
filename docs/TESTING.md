@@ -338,14 +338,20 @@ python tools/validate_all.py --sanitizers --browser
 python tools/validate_all.py --only ops_api
 ```
 
-Logs and `summary.json` go to ignored `build/validation-<timestamp>/`. The summary
-records requested build/browser/sanitizer scopes and always distinguishes
-hardware and release qualification. A targeted PASS is not the full campaign.
-Current inventory: 32 Python drivers, scanner/upstream unit suites and two C
-validators; browser checks are optional in the runner but mandatory in final
-qualification. Existing real-device procedures remain separate and require
-permission, verified backup/recovery and appropriate real clients. CI uses the
-same offline runner; no CI run was triggered by these local changes.
+Logs and `summary.json` go to ignored `build/validation-<timestamp>/`. The
+summary records build and browser scope, the sanitizer switches enabled
+per driver, and whether hardware or release qualification was performed.
+`--only` is a targeted rerun. The runner's explicit driver list is the
+source of truth for the current offline inventory.
+
+For a full Linux run, install Python with PyYAML and Cryptography, Node.js,
+GCC, CMake/Ninja and libcjson development files where needed. Set
+`IDF_PATH` to the project-pinned SDK so the runner finds the matching lwIP,
+TLS bundle and crypto dependencies. The separate Mbed TLS 3 compatibility
+fixture uses `TLS_TEST_MBEDTLS_DIR` to point to Mbed TLS 3 headers and
+sources. Use `--browser` where Playwright and its browser are available.
+Real-device tests are an additional gate and require permission, verified
+backup and recovery, and the applicable real clients.
 
 See [TAILNET-AUTHORIZATION.md](TAILNET-AUTHORIZATION.md) for source findings,
 actual-C policy/mock-crypto receive tests, resource bounds and a separate

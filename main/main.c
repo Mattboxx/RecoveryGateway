@@ -21,10 +21,10 @@
 #include "ap_policy.h"
 #include "esp_heap_caps.h"
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/event_groups.h"
 #include "esp_mac.h"
 #include "esp_wifi.h"
 #include "esp_eap_client.h"
@@ -131,25 +131,14 @@
 #define EXAMPLE_MAX_STA_CONN                CONFIG_ESP_MAX_STA_CONN_AP
 
 
-/* The event group allows multiple bits for each event, but we only care about two events:
- * - we are connected to the AP with an IP
- * - we failed to connect after the maximum amount of retries */
-#define WIFI_CONNECTED_BIT BIT0
-#define WIFI_FAIL_BIT      BIT1
-
 /*DHCP server option*/
 #define DHCPS_OFFER_DNS             0x02
 
 static const char *TAG_AP = "WiFi SoftAP";
 static const char *TAG_STA = "WiFi Sta";
 
-static int s_retry_num = 0;
-
-/* FreeRTOS event group to signal when we are connected/disconnected */
-static EventGroupHandle_t s_wifi_event_group;
-
-/* Cross-module state. ap_connect tracks whether the upstream STA link
- * is up; connect_count is the live count of AP clients rendered on the
+/* Cross-module state. ap_connect tracks whether the station has an
+ * address; connect_count is the live count of AP clients rendered on the
  * Status page and published to the operator-configured MQTT broker. */
 volatile int ap_connect   = 0;
 volatile int connect_count = 0;
@@ -182,11 +171,20 @@ static void dns_relay_state_cb(bool healthy)
 #define WIFI_RETRIES_PER_NETWORK 5
 static int s_net_current = 0;
 static int s_net_retries = 0;
+#define WIFI_DHCP_GRACE_US (20LL * 1000000)
+#define WIFI_DHCP_POLL_US  (5LL * 1000000)
+/* Lease tracking is owned by the default event loop. The profile is also
+ * readied before start and can be set by the first-boot wizard. */
+static atomic_bool s_sta_uses_dhcp = true;
+static esp_timer_handle_t s_wifi_lease_timer;
+static bool s_sta_associated;
+static bool s_rotate_after_dhcp_timeout;
+static int64_t s_wifi_lease_deadline;
 /* A manual web-UI scan may have to abort an in-progress association:
  * ESP-IDF rejects esp_wifi_scan_start() while the STA state machine is
  * connecting.  Suppress the DISCONNECTED handler's immediate reconnect
  * until the scan-done callback explicitly resumes normal operation. */
-static volatile bool s_manual_scan_active = false;
+static atomic_bool s_manual_scan_active;
 
 /* Access-point policy.  The legacy behaviour (default) keeps AP+STA up
  * permanently.  Recovery-only mode drops the AP after the uplink obtains an
@@ -196,6 +194,7 @@ static volatile bool     s_ap_auto_off = false;
 #define AP_FALLBACK_DELAY_MS 60000u
 
 ESP_EVENT_DEFINE_BASE(UPLINK_SERVICES_EVENT);
+enum { UPLINK_REFRESH_EVENT, WIFI_LEASE_CHECK_EVENT, AP_NAPT_RETRY_EVENT };
 bool wifi_rx_lean_for_usb;
 
 esp_netif_t *uplink_internet_netif(void)
@@ -219,6 +218,7 @@ void uplink_services_refresh(bool lost_link)
     lan_name_uplink_up();
     esp_netif_t *wan = uplink_internet_netif();
     bool wan_ready = uplink_address(wan, &info);
+    dns_relay_note_uplink(wan_ready ? wan : NULL, wan_ready ? info.ip.addr : 0);
     static bool was_ready;
     if (wan_ready != was_ready) {
         was_ready = wan_ready;
@@ -247,7 +247,7 @@ static void uplink_selection_event(void *arg, esp_event_base_t base, int32_t id,
 
 void uplink_services_schedule_refresh(void)
 {
-    (void)esp_event_post(UPLINK_SERVICES_EVENT, 0, NULL, 0, 0);
+    (void)esp_event_post(UPLINK_SERVICES_EVENT, UPLINK_REFRESH_EVENT, NULL, 0, 0);
 }
 
 static bool ap_policy_apply_runtime(bool on)
@@ -295,29 +295,67 @@ static bool ap_policy_apply_runtime(bool on)
 
 bool wifi_ap_policy_auto_off(void) { return s_ap_auto_off; }
 
-static void wifi_ap_start_napt(void *arg, esp_event_base_t base,
-                               int32_t event_id, void *data)
-{
-    (void)base;
-    (void)event_id;
-    (void)data;
-    if (first_boot_active() || ap_policy_is_shutdown()) return;
+/* AP events and retry attempts share the default event loop. The timer
+ * only sends a wakeup, so it cannot race teardown on another core. */
+static atomic_bool s_ap_napt_ready;
+static bool s_ap_napt_retrying;
+static esp_timer_handle_t s_ap_napt_timer;
 
-    /* The SDK's AP_START handler has already brought this netif up.
-     * Initialize the global port-map table before the AP policy can stop
-     * the radio. Removing the AP netif leaves the table available to LAN. */
-    esp_err_t err = esp_netif_napt_enable(arg);
+bool wifi_ap_napt_ready(void) { return atomic_load(&s_ap_napt_ready); }
+
+static void wifi_ap_napt_retry_tick(void *arg)
+{
+    (void)arg;
+    (void)esp_event_post(UPLINK_SERVICES_EVENT, AP_NAPT_RETRY_EVENT, NULL, 0, 0);
+}
+
+static void wifi_ap_napt_stop_retry(void)
+{
+    if (s_ap_napt_retrying) (void)esp_timer_stop(s_ap_napt_timer);
+    s_ap_napt_retrying = false;
+}
+
+static void wifi_ap_napt_attempt(esp_netif_t *ap)
+{
+    if (first_boot_active() || ap_policy_is_shutdown()) return;
+    esp_err_t err = esp_netif_is_netif_up(ap) ? esp_netif_napt_enable(ap) : ESP_ERR_INVALID_STATE;
     if (err != ESP_OK) {
-        ESP_LOGE(TAG_AP, "NAPT initialization failed: %s", esp_err_to_name(err));
+        if (s_ap_napt_retrying) return;
+        if (err != ESP_ERR_NOT_SUPPORTED && s_ap_napt_timer &&
+            esp_timer_start_periodic(s_ap_napt_timer, 5ULL * 1000000) == ESP_OK) {
+            s_ap_napt_retrying = true;
+            ESP_LOGW(TAG_AP, "NAPT initialization failed: %s; will retry", esp_err_to_name(err));
+        } else {
+            ESP_LOGE(TAG_AP, "NAPT initialization failed: %s", esp_err_to_name(err));
+        }
         return;
     }
+    wifi_ap_napt_stop_retry();
     portmap_install_all();
+    atomic_store(&s_ap_napt_ready, true);
     lan_name_uplink_up();
+}
+
+static void wifi_ap_start_napt(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)base; (void)id; (void)data;
+    wifi_ap_napt_stop_retry();
+    atomic_store(&s_ap_napt_ready, false);
+    /* Registered after the SDK AP handler has brought this netif up. */
+    wifi_ap_napt_attempt(arg);
+}
+
+static void wifi_ap_retry_napt(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)base; (void)id; (void)data;
+    if (s_ap_napt_retrying) wifi_ap_napt_attempt(arg);
 }
 
 static void wifi_ap_stopped(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg; (void)base; (void)id; (void)data;
+    wifi_ap_napt_stop_retry();
+    atomic_store(&s_ap_napt_ready, false);
     lan_name_uplink_up();
 }
 
@@ -436,6 +474,15 @@ static bool wifi_apply_eap(const wifi_network_t *n)
  * rotation advances. */
 static void wifi_apply_entry(const wifi_network_t *entry, int idx);
 
+static void wifi_sta_copy_credentials(wifi_sta_config_t *sta, const wifi_network_t *entry, bool enterprise)
+{
+    /* Driver fields may be completely full. The stored fields have an
+     * extra NUL byte; the empty tail of shorter fields is already zero. */
+    memcpy(sta->ssid, entry->ssid, strnlen(entry->ssid, sizeof sta->ssid));
+    if (!enterprise)
+        memcpy(sta->password, entry->passwd, strnlen(entry->passwd, sizeof sta->password));
+}
+
 static void wifi_apply_network(int idx)
 {
     wifi_network_t n;
@@ -459,17 +506,18 @@ static void wifi_apply_entry(const wifi_network_t *entry, int idx)
     };
     bool ent = wifi_apply_eap(&n);
     if (ent || n.eap_method == WIFI_EAP_DISABLED) {
-        strlcpy((char *)cfg.sta.ssid, n.ssid, sizeof cfg.sta.ssid);
-        if (!ent) strlcpy((char *)cfg.sta.password, n.passwd, sizeof cfg.sta.password);
+        wifi_sta_copy_credentials(&cfg.sta, &n, ent);
     }
     esp_wifi_set_config(WIFI_IF_STA, &cfg);
 
     /* Apply per-network static IP. All three fields must be non-empty
      * for static mode; otherwise we revert to DHCP for this network. */
+    bool uses_dhcp = !(n.static_ip[0] && n.subnet[0] && n.gateway[0]);
+    s_sta_uses_dhcp = uses_dhcp;
     esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (sta) {
         esp_netif_dhcpc_stop(sta);
-        if (n.static_ip[0] && n.subnet[0] && n.gateway[0]) {
+        if (!uses_dhcp) {
             esp_netif_ip_info_t ip_info = {0};
             ip4_addr_t a;
             if (ip4addr_aton(n.static_ip, &a)) ip_info.ip.addr      = a.addr;
@@ -557,7 +605,8 @@ bool wifi_setup_test_matches(const char *ssid, const char *password)
     if (!uplink_address(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &ip) ||
         ip.ip.addr != s_setup_test_ip || esp_wifi_sta_get_ap_info(&associated) != ESP_OK ||
         esp_wifi_get_config(WIFI_IF_STA, &config) != ESP_OK) return false;
-    bool matched = strncmp(ssid, (const char *)config.sta.ssid, sizeof config.sta.ssid) == 0 &&
+    bool matched = strlen(ssid) <= sizeof config.sta.ssid && strlen(password) <= sizeof config.sta.password &&
+                   strncmp(ssid, (const char *)config.sta.ssid, sizeof config.sta.ssid) == 0 &&
                    strncmp(ssid, (const char *)associated.ssid, sizeof config.sta.ssid) == 0 &&
                    strncmp(password, (const char *)config.sta.password, sizeof config.sta.password) == 0;
     memset(&config, 0, sizeof config);
@@ -573,6 +622,102 @@ static void setup_test_disconnected(int reason)
         return;
     }
     (void)esp_wifi_connect();
+}
+
+/* Run only after a disconnect event; apply the next profile before reconnect. */
+static void wifi_station_reconnect(bool rotate_now)
+{
+    int total = wifi_networks_count();
+    if (total > 1 && (rotate_now || ++s_net_retries >= WIFI_RETRIES_PER_NETWORK)) {
+        s_net_current = (s_net_current + 1) % total;
+        s_net_retries = 0;
+        ESP_LOGW(TAG_STA, "rotating to network[%d] of %d", s_net_current, total);
+        wifi_apply_network(s_net_current);
+    }
+    if (total > 0) esp_wifi_connect();
+}
+
+static bool wifi_lease_watch_allowed(void)
+{
+    return s_sta_associated && s_sta_uses_dhcp && !s_manual_scan_active &&
+           !first_boot_active() && !ap_policy_is_shutdown();
+}
+
+static void wifi_lease_timer_tick(void *arg)
+{
+    (void)arg;
+    /* If the event queue is full, the next periodic tick will try again. */
+    (void)esp_event_post(UPLINK_SERVICES_EVENT, WIFI_LEASE_CHECK_EVENT, NULL, 0, 0);
+}
+
+static void wifi_lease_watch_stop(void)
+{
+    if (s_wifi_lease_timer) (void)esp_timer_stop(s_wifi_lease_timer);
+    s_wifi_lease_deadline = 0;
+}
+
+static void wifi_lease_watch_start(void)
+{
+    if (!wifi_lease_watch_allowed()) return;
+    if (!s_wifi_lease_timer) {
+        const esp_timer_create_args_t args = {
+            .callback = wifi_lease_timer_tick,
+            .name = "wifi_lease",
+            .skip_unhandled_events = true,
+        };
+        if (esp_timer_create(&args, &s_wifi_lease_timer) != ESP_OK) {
+            ESP_LOGW(TAG_STA, "STA DHCP watchdog timer unavailable");
+            return;
+        }
+    }
+    wifi_lease_watch_stop();
+    s_wifi_lease_deadline = esp_timer_get_time() + WIFI_DHCP_GRACE_US;
+    if (esp_timer_start_periodic(s_wifi_lease_timer, WIFI_DHCP_POLL_US) != ESP_OK)
+        ESP_LOGW(TAG_STA, "STA DHCP watchdog timer did not start");
+}
+
+static void wifi_station_refresh(bool lost)
+{
+    eth_uplink_wifi_changed();
+    uplink_services_refresh(lost);
+    portmap_install_all();
+}
+
+static void wifi_lease_check_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)id; (void)data;
+    if (!wifi_lease_watch_allowed()) return;
+    esp_netif_ip_info_t info = {0};
+    if (uplink_address(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &info)) {
+        s_wifi_lease_deadline = 0;
+        if (!ap_connect && !s_rotate_after_dhcp_timeout) {
+            /* DHCP's GOT_IP post can fail if the SDK event queue is full. */
+            s_net_retries = 0;
+            ap_connect = 1;
+            wifi_station_refresh(false);
+        }
+        return;
+    }
+    if (ap_connect) {
+        ap_connect = 0;
+        history_event(HIST_EV_UPLINK, HIST_WARN, "Wi-Fi station lost its IPv4 address");
+        wifi_station_refresh(true);
+    }
+
+    int64_t now = esp_timer_get_time();
+    if (!s_wifi_lease_deadline) s_wifi_lease_deadline = now + WIFI_DHCP_GRACE_US;
+    if (now < s_wifi_lease_deadline || s_rotate_after_dhcp_timeout) return;
+
+    s_wifi_lease_deadline = now + WIFI_DHCP_GRACE_US;
+    wifi_ap_record_t associated;
+    if (esp_wifi_sta_get_ap_info(&associated) != ESP_OK || s_manual_scan_active) return;
+    ESP_LOGW(TAG_STA, "STA DHCP address timeout; reconnecting");
+    esp_err_t err = esp_wifi_disconnect();
+    if (err == ESP_OK) {
+        s_rotate_after_dhcp_timeout = true; /* apply only after DISCONNECTED */
+    } else {
+        ESP_LOGW(TAG_STA, "STA DHCP recovery disconnect failed: %s", esp_err_to_name(err));
+    }
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -609,6 +754,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
         boot_timeline_mark(BOOT_TL_WIFI_ASSOC);   /* first association of this boot only */
+        s_sta_associated = true;
+        wifi_lease_watch_start();
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_STOP) {
+        s_sta_associated = false;
+        s_rotate_after_dhcp_timeout = false;
+        wifi_lease_watch_stop();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *event = event_data;
         bool shutting_down = ap_policy_is_shutdown();
@@ -620,6 +771,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         if (ap_connect)
             history_event(HIST_EV_UPLINK, HIST_WARN, "Wi-Fi station disconnected (reason %u)", event ? (unsigned)event->reason : 0);
         ap_connect = 0;
+        s_sta_associated = false;
+        wifi_lease_watch_stop();
+        bool rotate_now = s_rotate_after_dhcp_timeout;
+        s_rotate_after_dhcp_timeout = false;
         if (shutting_down) return;
         if (first_boot_active()) {
             /* No saved uplink yet: only the wizard's trial association runs. */
@@ -629,9 +784,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         /* Recovery-only AP: give the saved WiFi a minute to come back before
          * re-opening the AP; it then stays up until the uplink has an address
          * again (GOT_IP below turns it off). Brief drops never flap the AP. */
-        eth_uplink_wifi_changed();
-        uplink_services_refresh(true);
-        portmap_install_all();
+        wifi_station_refresh(true);
         if (s_manual_scan_active) {
             ESP_LOGI(TAG_STA, "STA reconnect paused for manual scan");
             return;
@@ -640,19 +793,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
          * WIFI_RETRIES_PER_NETWORK association attempts, then roll
          * forward to the next configured slot. Single-network setups
          * see no behaviour change because count<=1 skips the rotation. */
-        int total = wifi_networks_count();
-        if (total > 1) {
-            s_net_retries++;
-            if (s_net_retries >= WIFI_RETRIES_PER_NETWORK) {
-                s_net_current = (s_net_current + 1) % total;
-                s_net_retries = 0;
-                ESP_LOGW(TAG_STA, "rotating to network[%d] of %d", s_net_current, total);
-                wifi_apply_network(s_net_current);
-            }
-        }
-        if (total > 0) esp_wifi_connect();
+        wifi_station_reconnect(rotate_now);
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_LOST_IP) {
+        wifi_lease_check_event(NULL, event_base, event_id, NULL);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
+        if (!event || !event->ip_info.ip.addr || s_rotate_after_dhcp_timeout ||
+            (!s_sta_associated && !first_boot_active())) return;
         boot_timeline_mark(BOOT_TL_IP);
         ESP_LOGI(TAG_STA, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
         if (first_boot_active() && s_setup_test == FB_WIFI_TESTING) {
@@ -661,8 +808,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             s_setup_test = FB_WIFI_OK;
         }
         history_event(HIST_EV_UPLINK, HIST_INFO, "Wi-Fi station address: " IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
-        s_net_retries = 0;   /* successful association — clear the rotation counter */
+        s_wifi_lease_deadline = 0;
+        s_net_retries = 0;   /* address acquired — clear the rotation counter */
         ap_connect = 1;
 
         /* Single radio: the softAP always sits on the STA's channel -- the
@@ -702,15 +849,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                          (unsigned)prim, (unsigned)ap_info.primary);
             }
         }
-        xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-
         /* Copy the upstream DNS into the AP-side DHCP options so AP
          * clients can resolve names through us. Runs every time we
          * (re-)acquire an STA IP — DNS may have changed on the new
          * uplink, and DHCP server restart is idempotent. */
-        eth_uplink_wifi_changed();
-        uplink_services_refresh(false);
-        portmap_install_all();
+        wifi_station_refresh(false);
     }
 }
 
@@ -914,13 +1057,13 @@ esp_netif_t *wifi_init_sta(void)
          * so we own it going forward. Otherwise fall through to the
          * Kconfig default. Never blindly overwrite a working config. */
         wifi_config_t cur;
-        if (!first_boot_active()
+        if (!first_boot_active() && !wifi_networks_has_saved_table()
             && esp_wifi_get_config(WIFI_IF_STA, &cur) == ESP_OK && cur.sta.ssid[0]
-            && !(strcmp((const char *)cur.sta.ssid, EXAMPLE_ESP_WIFI_STA_SSID) == 0
-                 && strcmp((const char *)cur.sta.password, EXAMPLE_ESP_WIFI_STA_PASSWD) == 0)) {
+            && !(strncmp((const char *)cur.sta.ssid, EXAMPLE_ESP_WIFI_STA_SSID, sizeof cur.sta.ssid) == 0
+                 && strncmp((const char *)cur.sta.password, EXAMPLE_ESP_WIFI_STA_PASSWD, sizeof cur.sta.password) == 0)) {
             wifi_network_t n = {0};
-            strlcpy(n.ssid,   (const char *)cur.sta.ssid,     sizeof n.ssid);
-            strlcpy(n.passwd, (const char *)cur.sta.password, sizeof n.passwd);
+            memcpy(n.ssid, cur.sta.ssid, sizeof cur.sta.ssid);
+            memcpy(n.passwd, cur.sta.password, sizeof cur.sta.password);
             n.valid = 1;
             wifi_networks_set_all(&n, 1);
             ESP_LOGI(TAG_STA, "wifi_init_sta: migrated esp_wifi cached SSID '%s' into slot 0",
@@ -1065,11 +1208,11 @@ void app_main(void)
 
     /* A settings restore requested from the web UI is applied here, before
      * NVS is opened (one 4-byte flash read when none is pending). */
-    settings_snapshot_boot();
+    esp_err_t ret = settings_snapshot_boot();
 
-    /* Preserve NVS when initialization or journal recovery fails. Starting
-     * services with partially recovered credentials or policy is unsafe. */
-    esp_err_t ret = nvs_flash_init();
+    /* Preserve NVS when restore, initialization or journal recovery fails.
+     * Starting services with partially recovered credentials or policy is unsafe. */
+    if (ret == ESP_OK) ret = nvs_flash_init();
     if (ret == ESP_OK) ret = nvs_param_txn_recover();
     if (ret != ESP_OK) {
         startup_settings_failed(ret);
@@ -1098,8 +1241,8 @@ void app_main(void)
      * wifi_init_softap publishes the AP IP — set_bind_addr triggers the
      * (re-)bind. Loads enable + upstream-override from NVS itself. */
     dns_relay_set_uplink_provider(uplink_internet_netif);
-    dns_relay_init();
     dns_relay_set_state_cb(dns_relay_state_cb);
+    dns_relay_init();
     tailnet_names_init();   /* off by default: the relay is unchanged */
 
     /* If a core dump was saved on the previous boot, extract a one-line
@@ -1167,6 +1310,7 @@ void app_main(void)
     ddns_init();              /* dynamic DNS: off by default, no timer */
 #endif
     history_init();
+    notify_channels_retry_setup();
     settings_snapshot_log_boot();
 
     /* Tailscale (microlink) settings — separate NVS keys (ts_*); loader
@@ -1230,9 +1374,6 @@ void app_main(void)
                           (unsigned)rc.port);
     }
 
-    /* Initialize event group */
-    s_wifi_event_group = xEventGroupCreate();
-
     /* Register Event handler */
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                     ESP_EVENT_ANY_ID,
@@ -1241,6 +1382,11 @@ void app_main(void)
                     NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
                     IP_EVENT_STA_GOT_IP,
+                    &wifi_event_handler,
+                    NULL,
+                    NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                    IP_EVENT_STA_LOST_IP,
                     &wifi_event_handler,
                     NULL,
                     NULL));
@@ -1289,8 +1435,22 @@ void app_main(void)
     ESP_LOGI(TAG_STA, "ESP_WIFI_MODE_STA");
     esp_netif_t *esp_netif_sta = wifi_init_sta();
     ESP_ERROR_CHECK(ap_policy_init(ap_policy_apply_runtime));
-    ESP_ERROR_CHECK(esp_event_handler_register(UPLINK_SERVICES_EVENT, 0, uplink_selection_event, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(UPLINK_SERVICES_EVENT, UPLINK_REFRESH_EVENT, uplink_selection_event, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(UPLINK_SERVICES_EVENT, WIFI_LEASE_CHECK_EVENT, wifi_lease_check_event, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STOP, wifi_ap_stopped, NULL));
+    const esp_timer_create_args_t ap_napt_timer = {
+        .callback = wifi_ap_napt_retry_tick,
+        .name = "ap_napt_retry",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&ap_napt_timer, &s_ap_napt_timer) != ESP_OK) {
+        ESP_LOGW(TAG_AP, "NAPT retry timer unavailable");
+    } else if (esp_event_handler_register(UPLINK_SERVICES_EVENT, AP_NAPT_RETRY_EVENT,
+                                          wifi_ap_retry_napt, esp_netif_ap) != ESP_OK) {
+        esp_timer_delete(s_ap_napt_timer);
+        s_ap_napt_timer = NULL;
+        ESP_LOGW(TAG_AP, "NAPT retry handler unavailable");
+    }
 
     /* Register after creating the default AP netif so the SDK handler runs first. */
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_START,

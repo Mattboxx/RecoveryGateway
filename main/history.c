@@ -117,7 +117,7 @@ const char *history_level_name(unsigned level) {return level == HIST_ERROR ? "er
 bool history_point_age(uint32_t now_wall, uint32_t now_up, uint16_t now_boot,
                        uint32_t wall, uint32_t up, uint16_t boot, uint32_t *age)
 {
-    if (boot == now_boot && up <= now_up) {*age = now_up - up; return true;}   /* exact within a boot */
+    if (now_boot && boot == now_boot && up <= now_up) {*age = now_up - up; return true;}   /* exact within a boot */
     if (now_wall && wall && wall <= now_wall) {*age = now_wall - wall; return true;}
     return false;
 }
@@ -181,7 +181,7 @@ static history_sample_t *s_live;            /* PSRAM, LIVE_SAMPLES */
 static unsigned s_live_head, s_live_count;
 EXT_RAM_BSS_ATTR static store_ring_t s_events, s_metrics;
 static bool s_persist, s_rings_open;
-static uint16_t s_boot;
+static _Atomic uint16_t s_boot;
 
 static uint32_t uptime_s(void) {return (uint32_t)(esp_timer_get_time() / 1000000);}
 static uint32_t wall_now(void) {time_t t = time(NULL); return t > 1700000000 ? (uint32_t)t : 0;}
@@ -198,7 +198,7 @@ void history_event(history_kind_t kind, history_level_t level, const char *fmt, 
     if (xQueueSend(s_queue, &e, 0) != pdTRUE) atomic_fetch_add(&s_dropped, 1);
 }
 
-static void write_event(const queued_t *e)
+static esp_err_t write_event(const queued_t *e)
 {
     uint8_t payload[3 + HIST_TEXT_MAX];
     size_t len = strnlen(e->text, HIST_TEXT_MAX);
@@ -208,6 +208,21 @@ static void write_event(const queued_t *e)
     esp_err_t err = store_ring_append(&s_events, e->kind, e->wall, e->uptime, payload, (uint16_t)(3 + len));
     storage_store_unlock();
     if (err) ESP_LOGW(TAG, "event not stored: %s", esp_err_to_name(err));
+    return err;
+}
+
+static void write_drop_summary(history_rate_t *rate, uint32_t now, bool can_store)
+{
+    if (!can_store || (!s_limited && !atomic_load(&s_dropped)) ||
+        !history_rate_allow(rate, now)) return;
+    unsigned dropped = atomic_exchange(&s_dropped, 0);
+    queued_t note = {.kind = HIST_EV_STORAGE, .level = HIST_WARN, .wall = wall_now(), .uptime = now};
+    snprintf(note.text, sizeof note.text, "%llu events not recorded (too many at once)",
+             (unsigned long long)dropped + s_limited);
+    if (write_event(&note) == ESP_OK)
+        s_limited = 0;
+    else
+        atomic_fetch_add(&s_dropped, dropped);
 }
 
 /* --- metrics --- */
@@ -222,8 +237,10 @@ static void take_sample(history_sample_t *s)
     s->int_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     s->int_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     s->psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    uint64_t rx = netif_hooks_get_sta_bytes_in() + netif_hooks_get_eth_bytes_in() + netif_hooks_get_ppp_bytes_in();
-    uint64_t tx = netif_hooks_get_sta_bytes_out() + netif_hooks_get_eth_bytes_out() + netif_hooks_get_ppp_bytes_out();
+    uint64_t rx, tx;
+    netif_hooks_get_mobile_bytes(&rx, &tx);
+    rx += netif_hooks_get_sta_bytes_in() + netif_hooks_get_eth_bytes_in();
+    tx += netif_hooks_get_sta_bytes_out() + netif_hooks_get_eth_bytes_out();
     if (s_have_traffic && rx >= s_last_rx && tx >= s_last_tx) {
         uint64_t drx = rx - s_last_rx, dtx = tx - s_last_tx;
         s->rx = drx > UINT32_MAX ? UINT32_MAX : (uint32_t)drx;
@@ -383,13 +400,7 @@ static void history_task(void *arg)
             write_event(&e);
         }
         if (sink && poll) poll();
-        unsigned dropped = atomic_exchange(&s_dropped, 0);
-        if (cfg.events && (dropped || s_limited) && history_rate_allow(&rate, now)) {
-            queued_t note = {.kind = HIST_EV_STORAGE, .level = HIST_WARN, .wall = wall_now(), .uptime = now};
-            snprintf(note.text, sizeof note.text, "%u events not recorded (too many at once)", dropped + s_limited);
-            if (s_persist) write_event(&note);
-            s_limited = 0;
-        }
+        write_drop_summary(&rate, now, cfg.events && s_persist);
         if ((cfg.events || sink) && now >= next_poll) {
             next_poll = now + POLL_PERIOD;
             struct microlink_s *ml = tailscale_get_microlink();
@@ -446,47 +457,74 @@ static void open_rings(void)
     if (!ok) ESP_LOGW(TAG, "history storage not usable");
 }
 
-static bool find_boot(const store_record_t *r, void *arg)
+static bool find_event_boot(const store_record_t *r, void *arg)
 {
-    if (r->type != HIST_EV_BOOT || r->len < 3) return true;
+    if (r->type >= HIST_EV_KIND_END || r->len < 3) return true;
     *(uint16_t *)arg = get16(r->payload + 1);
     return false;
 }
 
-/* Starts the task when a feature is on; it stops itself when both are off. */
-static esp_err_t apply_config(void)
+static bool find_metrics_boot(const store_record_t *r, void *arg)
 {
-    if (s_cfg.events || s_cfg.metrics) open_rings();   /* notifications alone never read the flash */
-    bool accept = (s_cfg.events && s_persist) || s_sink;
+    if (r->type != MX_TYPE || r->len != HIST_SAMPLE_BYTES) return true;
+    *(uint16_t *)arg = get16(r->payload);
+    return false;
+}
+
+/* Reserve resources for proposed settings. The task reads committed flags
+ * under s_lock, so it cannot use the new settings before the caller publishes. */
+static esp_err_t prepare_config(bool events, bool metrics)
+{
+    if (events || metrics) open_rings();   /* notifications alone never read the flash */
+    bool accept = (events && s_persist) || s_sink;
     if (accept && !s_queue) {
         queued_t *area = heap_caps_malloc(QUEUE_LEN * sizeof(queued_t), MALLOC_CAP_SPIRAM);
         static StaticQueue_t queue_storage;
         if (area) s_queue = xQueueCreateStatic(QUEUE_LEN, sizeof(queued_t), (uint8_t *)area, &queue_storage);
     }
-    if (s_cfg.metrics && !s_live) {
+    if (metrics && !s_live) {
         s_live = heap_caps_calloc(LIVE_SAMPLES, sizeof *s_live, MALLOC_CAP_SPIRAM);
         s_live_head = s_live_count = 0;
         memset(&s_merge, 0, sizeof s_merge);
         s_have_traffic = false;
     }
-    atomic_store_explicit(&s_events_on, accept && s_queue, memory_order_release);
-    if ((s_cfg.events || s_cfg.metrics || s_sink) && !s_task &&
+    if ((events || metrics || s_sink) && !s_task &&
         xTaskCreate(history_task, "history", 3584, NULL, 2, &s_task) != pdPASS) {
         s_task = NULL;
         return ESP_ERR_NO_MEM;
     }
-    return (s_cfg.metrics && !s_live) || (accept && !s_queue) ? ESP_ERR_NO_MEM : ESP_OK;
+    return (metrics && !s_live) || (accept && !s_queue) ? ESP_ERR_NO_MEM : ESP_OK;
 }
 
-/* Boot number: the last boot record + 1 (events on and stored only). */
+static void publish_acceptance(void)
+{
+    bool accept = (s_cfg.events && s_persist) || s_sink;
+    atomic_store_explicit(&s_events_on, accept && s_queue, memory_order_release);
+}
+
+static esp_err_t apply_config(void)
+{
+    esp_err_t err = prepare_config(s_cfg.events, s_cfg.metrics);
+    publish_acceptance();
+    return err;
+}
+
+/* Both rings carry boot numbers; metrics can be stored alone. Zero on
+ * older records means unknown. Allocate before the first sample/event. */
 static void number_boot(void)
 {
-    if (s_boot || !s_persist) return;
-    uint16_t last = 0;
-    storage_store_lock();
-    store_ring_walk(&s_events, find_boot, &last);
-    storage_store_unlock();
-    s_boot = (uint16_t)(last + 1);
+    if (s_boot) return;
+    uint16_t events = 0, metrics = 0;
+    if (s_persist) {
+        storage_store_lock();
+        store_ring_walk(&s_events, find_event_boot, &events);
+        store_ring_walk(&s_metrics, find_metrics_boot, &metrics);
+        storage_store_unlock();
+    }
+    uint16_t distance = (uint16_t)(metrics - events);
+    uint16_t last = !events || (metrics && distance < 0x8000) ? metrics : events;
+    uint16_t next = (uint16_t)(last + 1);
+    s_boot = next ? next : 1;
 }
 
 static const char *const HISTORY_LEGACY[] = {"hist_ev", "hist_mx", "hist_snap"};
@@ -501,8 +539,10 @@ void history_init(void)
     s_inited = true;
     bool any = s_cfg.events || s_cfg.metrics || s_sink;
     if (any) {
-        if (s_cfg.events || s_cfg.metrics) open_rings();   /* off: no flash read, no task, no buffer */
-        if (s_cfg.events) number_boot();
+        if (s_cfg.events || s_cfg.metrics) {
+            open_rings();   /* off: no flash read, no task, no buffer */
+            number_boot();
+        }
     }
     esp_err_t err = any ? apply_config() : ESP_OK;
     bool accepting = atomic_load(&s_events_on);
@@ -537,20 +577,36 @@ void history_get_config(bool *events, bool *metrics, bool *snapshots)
     *events = s_cfg.events; *metrics = s_cfg.metrics; *snapshots = s_cfg.snapshots;
 }
 
-esp_err_t history_set_config(bool events, bool metrics, bool snapshots)
+esp_err_t history_stage_config(bool events, bool metrics, bool snapshots)
 {
     if (!s_lock) return ESP_ERR_INVALID_STATE;
-    /* Persist before publishing the new state: one byte, all or nothing. */
-    esp_err_t err = nvs_flags_save(&history_flags, (uint8_t)(events | metrics << 1 | snapshots << 2));
-    if (err) return err;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool events_were = s_cfg.events;
-    s_cfg.events = events; s_cfg.metrics = metrics; s_cfg.snapshots = snapshots;
-    open_rings();
-    if (events) number_boot();
-    err = apply_config();
+    esp_err_t err = prepare_config(events, metrics);
+    if (err == ESP_OK)
+        err = nvs_flags_save(&history_flags, (uint8_t)(events | metrics << 1 | snapshots << 2));
+    if (err != ESP_OK) history_finish_staged(events, metrics, snapshots, false);
+    return err;
+}
+
+void history_finish_staged(bool events, bool metrics, bool snapshots, bool committed)
+{
+    bool enabled_events = committed && events && !s_cfg.events;
+    if (committed) {
+        s_cfg = (hist_config_t){.events = events, .metrics = metrics, .snapshots = snapshots};
+        if (events || metrics) number_boot();
+        publish_acceptance();
+    } else if (!s_task && !s_cfg.metrics && s_live) {
+        free(s_live);
+        s_live = NULL;
+    }
     xSemaphoreGive(s_lock);
-    if (events && !events_were) history_event(HIST_EV_SETTINGS, HIST_INFO, "Event history switched on");
+    if (enabled_events) history_event(HIST_EV_SETTINGS, HIST_INFO, "Event history switched on");
+}
+
+esp_err_t history_set_config(bool events, bool metrics, bool snapshots)
+{
+    esp_err_t err = history_stage_config(events, metrics, snapshots);
+    if (err == ESP_OK) history_finish_staged(events, metrics, snapshots, true);
     return err;
 }
 
@@ -559,7 +615,7 @@ void history_set_sink(history_sink_t sink)
     history_set_sink_poller(sink, NULL);
 }
 
-void history_set_sink_poller(history_sink_t sink, history_sink_poll_t poll)
+esp_err_t history_set_sink_poller(history_sink_t sink, history_sink_poll_t poll)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -567,8 +623,11 @@ void history_set_sink_poller(history_sink_t sink, history_sink_poll_t poll)
     s_sink_poll = sink ? poll : NULL;
     /* Before history_init only the sink is noted; init applies it. */
     esp_err_t err = s_inited ? apply_config() : ESP_OK;
+    esp_err_t status = !sink || (s_task && s_queue) ? ESP_OK :
+                       s_inited ? ESP_ERR_NO_MEM : ESP_ERR_INVALID_STATE;
     xSemaphoreGive(s_lock);
     if (err) ESP_LOGW(TAG, "notification events not fully started: %s", esp_err_to_name(err));
+    return status;
 }
 
 /* --- jobs on an internal-RAM stack --- */

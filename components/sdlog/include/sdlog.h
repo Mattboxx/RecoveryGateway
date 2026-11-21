@@ -142,7 +142,8 @@ void sdlog_get_status(sdlog_status_t *out);
 int sdlog_list_files(sdlog_file_info_t *out, int max_entries);
 
 /**
- * Stream the named log file out via cb (called with successive chunks).
+ * Stream the original length of a log via cb without holding the FAT mutex
+ * during callbacks. One download may run at a time. Read errors fail the stream.
  * name must be a bare basename living in the log directory — any '/',
  * '\\' or ".." is rejected. Returns ESP_OK on success.
  */

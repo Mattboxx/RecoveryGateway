@@ -4,9 +4,10 @@
 /* Throughput test (Diagnostics), only on request.
  *
  * Gateway download: the gateway fetches a URL (HTTP or verified HTTPS) for
- * up to THR_MAX_S seconds or THR_MAX_BYTES and discards the data, measuring
- * its own uplink or tailnet throughput (a file on a NAS over the tailnet,
- * or a public speed-test URL). Browser download: the browser fetches up to
+ * up to THR_MAX_S seconds of payload or THR_MAX_BYTES and discards it.
+ * Connection setup and the bounded header read are separate from payload
+ * timing. It measures uplink or tailnet throughput (for example a NAS file
+ * over the tailnet or a public speed-test URL). Browser download: the browser fetches up to
  * THR_BLOB_MAX zero bytes from the gateway, measuring the link to it.
  *
  * Nothing runs between tests: the download worker (PSRAM stack) exists only

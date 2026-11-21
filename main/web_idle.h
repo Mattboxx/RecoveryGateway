@@ -13,6 +13,10 @@
 
 /* httpd open_fn: tracks the session and wraps its send/recv to record activity. */
 esp_err_t web_idle_open(httpd_handle_t hd, int fd);
+/* Claim/release an HTTP request without making its active socket eligible
+ * for the idle sweep. Failed responses close before releasing ownership. */
+esp_err_t web_idle_async_begin(httpd_req_t *req, httpd_req_t **copy);
+void web_idle_async_complete(httpd_req_t *req, esp_err_t result);
 /* Starts/stops the once-a-second sweep for the running server. */
 void web_idle_start(httpd_handle_t hd);
 void web_idle_stop(void);
@@ -27,4 +31,3 @@ uint32_t web_idle_refused(void);
 /* Exposed for the host test. */
 void web_idle_reset(void);
 void web_idle_touch(int fd, int64_t now_us);
-int web_idle_sweep_fds(httpd_handle_t hd, const int *fds, size_t n, int64_t now_us);

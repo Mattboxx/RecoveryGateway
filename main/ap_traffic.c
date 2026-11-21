@@ -48,7 +48,7 @@ bool ap_traffic_find(const ap_traffic_table_t *t, const uint8_t mac[6], uint64_t
 #include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 
-volatile bool ap_traffic_on;
+atomic_bool ap_traffic_on;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 EXT_RAM_BSS_ATTR static ap_traffic_table_t s_table;   /* PSRAM: nothing internal while off */
 
@@ -63,31 +63,37 @@ void ap_traffic_frame(const uint8_t *frame, size_t len, uint32_t bytes, bool fro
     if (!frame || len < 14) return;
     /* From a client: its address is the source; to a client: the destination. */
     portENTER_CRITICAL(&s_mux);
-    ap_traffic_add(&s_table, from_client ? frame + 6 : frame, bytes, from_client);
+    if (atomic_load_explicit(&ap_traffic_on, memory_order_relaxed))
+        ap_traffic_add(&s_table, from_client ? frame + 6 : frame, bytes, from_client);
     portEXIT_CRITICAL(&s_mux);
 }
 
 bool ap_traffic_get(const uint8_t mac[6], uint64_t *from_client, uint64_t *to_client)
 {
-    if (!ap_traffic_on) return false;
     portENTER_CRITICAL(&s_mux);
-    bool found = ap_traffic_find(&s_table, mac, from_client, to_client);
+    bool found = atomic_load_explicit(&ap_traffic_on, memory_order_relaxed) &&
+                 ap_traffic_find(&s_table, mac, from_client, to_client);
     portEXIT_CRITICAL(&s_mux);
     return found;
 }
 
+esp_err_t ap_traffic_stage(bool on)
+{
+    return nvs_param_set_u8("ap_traffic", on ? 1 : 0);
+}
+
+void ap_traffic_publish(bool on)
+{
+    portENTER_CRITICAL(&s_mux);
+    atomic_store_explicit(&ap_traffic_on, on, memory_order_relaxed);
+    if (!on) memset(&s_table, 0, sizeof s_table);
+    portEXIT_CRITICAL(&s_mux);
+}
+
 esp_err_t ap_traffic_set(bool on)
 {
-    esp_err_t err = nvs_param_set_u8("ap_traffic", on ? 1 : 0);
-    if (err != ESP_OK) return err;
-    if (!on) {
-        ap_traffic_on = false;
-        portENTER_CRITICAL(&s_mux);
-        memset(&s_table, 0, sizeof s_table);
-        portEXIT_CRITICAL(&s_mux);
-    } else {
-        ap_traffic_on = true;
-    }
-    return ESP_OK;
+    esp_err_t err = ap_traffic_stage(on);
+    if (err == ESP_OK) ap_traffic_publish(on);
+    return err;
 }
 #endif

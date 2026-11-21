@@ -297,6 +297,7 @@ static int httpd_req_recv(httpd_req_t *r,char *out,int n){memcpy(out,r->body+r->
 ''' + types + 'bool cell_config_valid(const cell_config_t *c, char *why, size_t why_size);\n' + core + r'''
 static cell_config_t stored;static cell_status_t status;static int saves;static esp_err_t save_result;
 static void cell_uplink_get_config(cell_config_t *out){*out=stored;}
+static bool cell_uplink_restart_required(void){return true;}
 static void cell_uplink_get_status(cell_status_t *out){*out=status;}
 static esp_err_t cell_uplink_set_config(const cell_config_t *c,char *why,size_t n){if(!cell_config_valid(c,why,n))return ESP_ERR_INVALID_ARG;saves++;if(save_result)return save_result;stored=*c;return ESP_OK;}
 #define CELL_QUOTA_HOST_TEST 1
@@ -462,6 +463,7 @@ static void ap_policy_request(bool on) { ap_policy_request_after(on, 0); }
 static void boot_timeline_mark(int mark) { assert(mark == BOOT_TL_IP); }
 static int tailscale_request_connect(void) { ++starts; return 0; }
 static void tailnet_names_uplink(uint32_t ip) { name_ip = ip; }
+static void dns_relay_note_uplink(esp_netif_t *netif,uint32_t ip) {assert(!netif ? !ip : netif->ip==ip);}
 static void lan_name_uplink_up(void) {}
 static void refresh_ap_dns(void) {}
 static void history_event(int kind, int level, const char *text) {
@@ -503,5 +505,51 @@ int main(void) {
     assert(cell_uplink_preferred_netif(&wifi) == &wifi);
     quota_paused = false;
     puts("PASS: Ethernet and PPP cold boot, primary/failover, LAN DNS binding, AP recovery and exit route preservation, mobile data paused at the limit");
+}
+''')
+
+build_and_run('cellular-address-events', COMMON + types + r'''
+typedef int esp_event_base_t;
+enum {NETIF_PPP_STATUS=1,IP_EVENT};
+enum {NETIF_PPP_ERRORNONE=0,NETIF_PP_PHASE_OFFSET=100};
+enum {IP_EVENT_PPP_GOT_IP=20,IP_EVENT_PPP_LOST_IP};
+typedef struct {int *esp_netif;struct {struct {uint32_t addr;} ip;} ip_info;} ip_event_got_ip_t;
+static int cell_netif, other_netif, mutex, *s_lock=&mutex, *s_netif=&cell_netif;
+static atomic_bool s_has_ip, s_link_dead;
+static cell_status_t s_status;
+static int refreshes;
+static bool last_loss;
+#define portMAX_DELAY 0
+static void xSemaphoreTake(int *lock,int wait){assert(lock==s_lock && !*lock && !wait);*lock=1;}
+static void xSemaphoreGive(int *lock){assert(lock==s_lock && *lock);*lock=0;}
+static void uplink_services_refresh(bool loss){
+    assert(!mutex);
+    assert(atomic_load(&s_has_ip)==(s_status.ip!=0));
+    refreshes++;last_loss=loss;
+}
+''' + ''.join(function(source, s) for s in ('static void cell_address_status_locked(',
+    'static void cell_address_update(', 'static void on_event(')) + r'''
+int main(void){
+    ip_event_got_ip_t got={.esp_netif=&other_netif,.ip_info.ip.addr=0xc0000201};
+    s_status.state=CELL_DIALING;
+    on_event(NULL,IP_EVENT,IP_EVENT_PPP_GOT_IP,&got);
+    on_event(NULL,IP_EVENT,IP_EVENT_PPP_GOT_IP,NULL);
+    assert(!s_status.ip && !refreshes && s_status.state==CELL_DIALING);
+    got.esp_netif=s_netif;
+    on_event(NULL,IP_EVENT,IP_EVENT_PPP_GOT_IP,&got);
+    assert(s_has_ip && s_status.ip==got.ip_info.ip.addr && s_status.state==CELL_CONNECTED);
+    assert(s_status.connects==1 && refreshes==1 && !last_loss);
+    on_event(NULL,IP_EVENT,IP_EVENT_PPP_LOST_IP,NULL);
+    assert(!s_has_ip && !s_status.ip && s_status.state==CELL_DIALING);
+    assert(s_status.connects==1 && refreshes==2 && last_loss && s_link_dead);
+    got.ip_info.ip.addr=0xc0000202;
+    on_event(NULL,IP_EVENT,IP_EVENT_PPP_GOT_IP,&got);
+    assert(s_has_ip && s_status.ip==got.ip_info.ip.addr && s_status.state==CELL_CONNECTED);
+    assert(s_status.connects==2 && refreshes==3 && !last_loss);
+    cell_address_update(0);
+    s_status.state=CELL_STOPPED;
+    on_event(NULL,IP_EVENT,IP_EVENT_PPP_LOST_IP,NULL);
+    assert(!s_has_ip && !s_status.ip && s_status.state==CELL_STOPPED);
+    puts("PASS: cellular address loss and renewal update readiness and the connection state together");
 }
 ''')

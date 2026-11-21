@@ -82,7 +82,7 @@ bool ddns_config_valid(const ddns_config_t *c, char *why, size_t cap)
 bool ddns_due(const ddns_state_t *st, uint8_t provider, uint32_t ip, uint32_t now)
 {
     if (provider == DDNS_OFF || now < st->next_try_s) return false;
-    if (!st->ever) return true;
+    if (!st->ever || st->backoff_s) return true;
     if (ip && ip != st->last_ip) return true;                      /* the address changed */
     /* Daily refresh; every 30 minutes while the address cannot be seen. */
     return now - st->last_ok_s >= (ip ? DDNS_REFRESH_S : DDNS_BLIND_S);
@@ -159,6 +159,7 @@ bool ddns_parse_trace(const char *text, uint32_t *ip)
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "nvs.h"
+#include <stdatomic.h>
 #include <stdlib.h>
 
 static const char *TAG = "ddns";
@@ -171,6 +172,9 @@ static SemaphoreHandle_t s_lock;
 static StaticSemaphore_t s_lock_storage;
 static esp_timer_handle_t s_timer;
 static bool s_running, s_force;
+static uint32_t s_generation, s_job_generation, s_admission_retry_at;
+static atomic_bool s_scheduler_retry_pending;
+static uint32_t s_scheduler_retry_at;
 EXT_RAM_BSS_ATTR static char s_last[96];
 static uint32_t s_seen_ip;
 
@@ -212,7 +216,8 @@ static uint32_t public_ip(void)
 }
 
 /* One HTTPS request; `body` NULL = GET. Reads up to cap-1 bytes of the answer. */
-static int request(const char *url, esp_http_client_method_t method, const char *token, const char *body, char *answer, size_t cap)
+static int request(const char *url, esp_http_client_method_t method, const char *token, const char *body,
+                   char *answer, size_t cap, bool complete_json)
 {
     esp_http_client_config_t hc = {.url = url, .method = method, .timeout_ms = 15000,
                                    .crt_bundle_attach = ml_tls_bundle_attach, .disable_auto_redirect = true};
@@ -233,38 +238,62 @@ static int request(const char *url, esp_http_client_method_t method, const char 
         int got = 0, n;
         while (got < (int)cap - 1 && (n = esp_http_client_read(client, answer + got, (int)cap - 1 - got)) > 0) got += n;
         answer[got > 0 ? got : 0] = 0;
+        if (complete_json && status == 200 &&
+            (!esp_http_client_is_complete_data_received(client) || memchr(answer, 0, got)))
+            status = -1;
     }
     esp_http_client_cleanup(client);
     return status;
 }
 
-static bool cloudflare(const ddns_config_t *c, uint32_t *ip_io, char *why, size_t cap)
+static bool request_current(uint32_t generation)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool current = generation == s_generation && s_cfg.provider != DDNS_OFF;
+    xSemaphoreGive(s_lock);
+    return current;
+}
+
+static bool cloudflare_success(const cJSON *root)
+{
+    return cJSON_IsObject(root) && cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "success"));
+}
+
+static bool cloudflare(const ddns_config_t *c, uint32_t generation, uint32_t *ip_io, char *why, size_t cap)
 {
     char url[256], addr[16], *answer = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
     if (!answer) return fail(why, cap, "out of memory");
     if (!*ip_io) {
         /* Tailscale has not seen the public address: ask Cloudflare itself. */
-        int st = request("https://www.cloudflare.com/cdn-cgi/trace", HTTP_METHOD_GET, NULL, NULL, answer, 1024);
+        int st = request("https://www.cloudflare.com/cdn-cgi/trace", HTTP_METHOD_GET, NULL, NULL, answer, 1024, false);
         if (st != 200 || !ddns_parse_trace(answer, ip_io)) {free(answer); return fail(why, cap, "public address unknown (no Tailscale address, Cloudflare trace failed)");}
     }
     uint32_t ip = *ip_io;
     ip_text(ip, addr);
     snprintf(url, sizeof url, "https://api.cloudflare.com/client/v4/zones/%s/dns_records?type=A&name=%s", c->zone, c->name);
-    int status = request(url, HTTP_METHOD_GET, c->token, NULL, answer, 4096);
+    int status = request(url, HTTP_METHOD_GET, c->token, NULL, answer, 4096, true);
     bool ok = false;
-    cJSON *root = status == 200 ? cJSON_Parse(answer) : NULL;
-    const cJSON *result = cJSON_GetObjectItemCaseSensitive(root, "result"), *first = cJSON_GetArrayItem(result, 0);
+    cJSON *root = status == 200 ? json_guard_parse(answer) : NULL;
+    const cJSON *result = cJSON_GetObjectItemCaseSensitive(root, "result");
+    const cJSON *first = cJSON_IsArray(result) ? cJSON_GetArrayItem(result, 0) : NULL;
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(first, "id"), *content = cJSON_GetObjectItemCaseSensitive(first, "content");
     if (status < 0) fail(why, cap, "cannot reach api.cloudflare.com");
     else if (status != 200) snprintf(why, cap, "Cloudflare answered %d (check the token permission and zone id)", status);
-    else if (!cJSON_IsString(id) || strlen(id->valuestring) != 32) fail(why, cap, "no A record with this name: create it once in Cloudflare");
+    else if (!cloudflare_success(root)) fail(why, cap, "Cloudflare did not return a successful record lookup");
+    else if (!cJSON_IsString(id) || strlen(id->valuestring) != 32 ||
+             strspn(id->valuestring, "0123456789abcdef") != 32)
+        fail(why, cap, "no A record with this name: create it once in Cloudflare");
     else if (cJSON_IsString(content) && !strcmp(content->valuestring, addr)) ok = true;     /* already right */
-    else {
+    else if (request_current(generation)) {
         snprintf(url, sizeof url, "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s", c->zone, id->valuestring);
+        cJSON_Delete(root);
+        root = NULL;
         char body[48];
         snprintf(body, sizeof body, "{\"content\":\"%s\"}", addr);
-        status = request(url, HTTP_METHOD_PATCH, c->token, body, answer, 4096);
-        ok = status == 200 && strstr(answer, "\"success\":true");
+        status = request(url, HTTP_METHOD_PATCH, c->token, body, answer, 4096, true);
+        cJSON *reply = status == 200 ? json_guard_parse(answer) : NULL;
+        ok = cloudflare_success(reply);
+        cJSON_Delete(reply);
         if (!ok) snprintf(why, cap, "Cloudflare refused the change (%d)", status);
     }
     cJSON_Delete(root);
@@ -276,7 +305,7 @@ static bool simple_get(const ddns_config_t *c, uint32_t ip, char *why, size_t ca
 {
     char url[320], answer[256];
     if (!ddns_build_url(c, ip, url, sizeof url)) return fail(why, cap, ip ? "the update URL is too long" : "waiting for the public address (Tailscale)");
-    int status = request(url, HTTP_METHOD_GET, NULL, NULL, answer, sizeof answer);
+    int status = request(url, HTTP_METHOD_GET, NULL, NULL, answer, sizeof answer, false);
     memset(url, 0, sizeof url);                              /* carries the token */
     if (status < 0) return fail(why, cap, c->provider == DDNS_DUCKDNS ? "cannot reach www.duckdns.org" : "cannot reach the update server");
     if (c->provider == DDNS_DUCKDNS) {
@@ -292,24 +321,39 @@ static void worker(void *arg)
 {
     (void)arg;
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    uint32_t generation = s_job_generation;
+    if (generation != s_generation || s_cfg.provider == DDNS_OFF) {
+        s_running = false;
+        xSemaphoreGive(s_lock);
+        task_reaper_self_delete();
+        return;
+    }
     ddns_config_t *c = heap_caps_malloc(sizeof *c, MALLOC_CAP_SPIRAM);
     if (c) *c = s_cfg;
     xSemaphoreGive(s_lock);
     uint32_t ip = public_ip();
     char why[96] = "";
-    bool ok = c && (c->provider == DDNS_CLOUDFLARE ? cloudflare(c, &ip, why, sizeof why) : simple_get(c, ip, why, sizeof why));
+    if (!c) snprintf(why, sizeof why, "out of memory");
+    bool ok = c && request_current(generation) &&
+              (c->provider == DDNS_CLOUDFLARE ? cloudflare(c, generation, &ip, why, sizeof why) :
+                                              simple_get(c, ip, why, sizeof why));
     if (c) {memset(c, 0, sizeof *c); free(c);}
     char addr[16];
     ip_text(ip, addr);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool was_failing = s_state.backoff_s != 0;
-    ddns_result(&s_state, ok, ip, now_s());
-    if (ok) snprintf(s_last, sizeof s_last, "Updated%s%s", addr[0] ? " to " : "", addr);
-    else snprintf(s_last, sizeof s_last, "Not updated: %s", why);
+    if (generation == s_generation && s_cfg.provider != DDNS_OFF) {
+        bool was_failing = s_state.backoff_s != 0;
+        ddns_result(&s_state, ok, ip, now_s());
+        if (ok) {
+            snprintf(s_last, sizeof s_last, "Updated%s%s", addr[0] ? " to " : "", addr);
+            history_event(HIST_EV_UPLINK, HIST_INFO, "Dynamic DNS updated%s%s", addr[0] ? " to " : "", addr);
+        } else {
+            snprintf(s_last, sizeof s_last, "Not updated: %.82s", why);
+            if (!was_failing) history_event(HIST_EV_UPLINK, HIST_WARN, "Dynamic DNS not updated: %s", why);
+        }
+    }
     s_running = false;
     xSemaphoreGive(s_lock);
-    if (ok) history_event(HIST_EV_UPLINK, HIST_INFO, "Dynamic DNS updated%s%s", addr[0] ? " to " : "", addr);
-    else if (!was_failing) history_event(HIST_EV_UPLINK, HIST_WARN, "Dynamic DNS not updated: %s", why);   /* once per failure run */
     task_reaper_self_delete();
 }
 
@@ -317,28 +361,66 @@ static void tick(void *arg)
 {
     (void)arg;
     uint32_t ip = public_ip();
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) return;
     s_seen_ip = ip;
-    bool due = !s_running && (s_force || ddns_due(&s_state, s_cfg.provider, ip, now_s()));
+    uint32_t now = now_s();
+    bool due = s_cfg.provider != DDNS_OFF && !s_running && now >= s_admission_retry_at &&
+               (s_force || ddns_due(&s_state, s_cfg.provider, ip, now));
     if (due) {
-        s_force = false;
         /* A short-lived worker; nothing stays allocated between updates. */
+        s_job_generation = s_generation;
         s_running = xTaskCreateWithCaps(worker, "ddns", 8192, NULL, 2, NULL, MALLOC_CAP_SPIRAM) == pdPASS;
+        if (s_running) {
+            s_force = false;
+            s_admission_retry_at = 0;
+        } else {
+            s_admission_retry_at = now + 60;
+            snprintf(s_last, sizeof s_last, "Update queued: worker unavailable; retrying");
+        }
     }
     xSemaphoreGive(s_lock);
 }
 
-static void apply_locked(void)
+static void scheduler_update_locked(void)
 {
     if (s_cfg.provider != DDNS_OFF && !s_timer) {
-        const esp_timer_create_args_t args = {.callback = tick, .name = "ddns"};
-        if (esp_timer_create(&args, &s_timer) == ESP_OK) esp_timer_start_periodic(s_timer, 60ULL * 1000000);
-        else s_timer = NULL;
+        const esp_timer_create_args_t args = {.callback = tick, .name = "ddns", .skip_unhandled_events = true};
+        esp_timer_handle_t timer = NULL;
+        if (esp_timer_create(&args, &timer) == ESP_OK) {
+            if (esp_timer_start_periodic(timer, 60ULL * 1000000) == ESP_OK) s_timer = timer;
+            else esp_timer_delete(timer);
+        }
+        if (!s_timer) s_scheduler_retry_at = now_s() + 60;
     } else if (s_cfg.provider == DDNS_OFF && s_timer) {
         esp_timer_stop(s_timer);
         esp_timer_delete(s_timer);
         s_timer = NULL;
     }
+    atomic_store(&s_scheduler_retry_pending, s_cfg.provider != DDNS_OFF && !s_timer);
+}
+
+void ddns_retry_scheduler(void)
+{
+    if (!atomic_load(&s_scheduler_retry_pending) || xSemaphoreTake(s_lock, 0) != pdTRUE) return;
+    if (s_cfg.provider != DDNS_OFF && !s_timer && now_s() >= s_scheduler_retry_at) {
+        scheduler_update_locked();
+    }
+    xSemaphoreGive(s_lock);
+}
+
+static bool apply_config_locked(const ddns_config_t *next, bool force)
+{
+    bool changed = memcmp(&s_cfg, next, sizeof *next) != 0;
+    s_cfg = *next;
+    if (changed) {
+        s_generation++;
+        s_admission_retry_at = 0;
+        memset(&s_state, 0, sizeof s_state);
+        snprintf(s_last, sizeof s_last, "Not updated yet");
+    }
+    s_force = s_cfg.provider != DDNS_OFF && (s_force || force || changed);
+    scheduler_update_locked();
+    return s_force;
 }
 
 void ddns_init(void)
@@ -346,11 +428,26 @@ void ddns_init(void)
     if (!s_lock) s_lock = xSemaphoreCreateMutexStatic(&s_lock_storage);
     snprintf(s_last, sizeof s_last, "Not updated yet");
     load(&s_cfg);
-    if (s_cfg.provider != DDNS_OFF) {xSemaphoreTake(s_lock, portMAX_DELAY); apply_locked(); xSemaphoreGive(s_lock);}
+    if (s_cfg.provider != DDNS_OFF) {xSemaphoreTake(s_lock, portMAX_DELAY); scheduler_update_locked(); xSemaphoreGive(s_lock);}
 }
 
-uint8_t ddns_provider(void) {return s_cfg.provider;}
-bool ddns_last_update_ok(void) {return s_state.ever && !s_state.backoff_s;}
+uint8_t ddns_provider(void)
+{
+    if (!s_lock) return DDNS_OFF;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    uint8_t provider = s_cfg.provider;
+    xSemaphoreGive(s_lock);
+    return provider;
+}
+
+bool ddns_last_update_ok(void)
+{
+    if (!s_lock) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ok = s_cfg.provider != DDNS_OFF && s_timer && s_state.ever && !s_state.backoff_s;
+    xSemaphoreGive(s_lock);
+    return ok;
+}
 
 static const char *provider_name(uint8_t p) {return p == DDNS_DUCKDNS ? "duckdns" : p == DDNS_CLOUDFLARE ? "cloudflare" : p == DDNS_CUSTOM ? "custom" : "off";}
 
@@ -364,7 +461,8 @@ static esp_err_t get_ddns(httpd_req_t *req)
     cJSON_AddStringToObject(root, "zone", s_cfg.zone);
     cJSON_AddBoolToObject(root, "has_token", s_cfg.token[0] != 0);
     cJSON_AddBoolToObject(root, "has_url", s_cfg.url[0] != 0);   /* the URL may carry a secret: never returned */
-    cJSON_AddStringToObject(root, "status", s_last);
+    cJSON_AddStringToObject(root, "status", s_cfg.provider != DDNS_OFF && !s_timer ?
+                            "Automatic checks waiting for resources" : s_last);
     char addr[16];
     ip_text(s_seen_ip ? s_seen_ip : public_ip(), addr);
     cJSON_AddStringToObject(root, "public_ip", addr);
@@ -372,6 +470,8 @@ static esp_err_t get_ddns(httpd_req_t *req)
     cJSON_AddStringToObject(root, "updated_ip", addr);
     cJSON_AddNumberToObject(root, "updated_ago_s", s_state.ever ? now_s() - s_state.last_ok_s : -1);
     cJSON_AddBoolToObject(root, "running", s_running);
+    cJSON_AddBoolToObject(root, "pending", s_force || s_admission_retry_at != 0);
+    cJSON_AddBoolToObject(root, "scheduler_ready", s_timer != NULL);
     xSemaphoreGive(s_lock);
     char *text = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -426,16 +526,13 @@ static esp_err_t post_ddns(httpd_req_t *req)
     for (int i = 2; root && i < 4; i++) {cJSON *v = cJSON_GetObjectItemCaseSensitive(root, keys[i]); if (cJSON_IsString(v)) memset(v->valuestring, 0, strlen(v->valuestring));}
     cJSON_Delete(root);
     if (ok && !ddns_config_valid(next, why, sizeof why)) ok = false;
-    esp_err_t err = ok ? save(next) : ESP_OK;
-    if (ok && !err) {
+    esp_err_t err = ESP_OK;
+    if (ok) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        bool changed = memcmp(&s_cfg, next, sizeof *next) != 0;
-        s_cfg = *next;
-        if (changed) {memset(&s_state, 0, sizeof s_state); snprintf(s_last, sizeof s_last, "Not updated yet");}
-        s_force = s_force || force || changed;
-        apply_locked();
+        if (memcmp(&s_cfg, next, sizeof *next) != 0) err = save(next);
+        bool immediate = !err && apply_config_locked(next, force);
         xSemaphoreGive(s_lock);
-        if (s_cfg.provider != DDNS_OFF && (force || changed)) tick(NULL);
+        if (immediate) tick(NULL);
     }
     memset(next, 0, sizeof *next); free(next); free(body);
     httpd_resp_set_type(req, "application/json");
@@ -451,7 +548,11 @@ static esp_err_t post_ddns(httpd_req_t *req)
         return e;
     }
     ESP_LOGI(TAG, "provider %s", provider_name(chosen));
-    return httpd_resp_sendstr(req, "{\"ok\":true}");
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool scheduler_ready = s_timer != NULL;
+    xSemaphoreGive(s_lock);
+    return httpd_resp_sendstr(req, scheduler_ready ? "{\"ok\":true,\"scheduler_ready\":true}" :
+                                                   "{\"ok\":true,\"scheduler_ready\":false}");
 }
 
 esp_err_t ddns_register_http(httpd_handle_t server)

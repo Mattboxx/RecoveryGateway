@@ -196,9 +196,13 @@ static int cmd_dns_relay(int argc, char **argv)
         return 1;
     }
     const char *m = (s_dr.mode->count > 0) ? s_dr.mode->sval[0] : "status";
-    if (!strcmp(m, "on"))       dns_relay_set_enabled(true);
-    else if (!strcmp(m, "off")) dns_relay_set_enabled(false);
-    else if (strcmp(m, "status") != 0) {
+    if (!strcmp(m, "on") || !strcmp(m, "off")) {
+        esp_err_t err = dns_relay_set_enabled(!strcmp(m, "on"));
+        if (err != ESP_OK) {
+            printf("dns_relay: save failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+    } else if (strcmp(m, "status") != 0) {
         printf("usage: dns_relay <on|off|status>\n"); return 1;
     }
     printf("dns_relay: enabled=%s healthy=%s\n",

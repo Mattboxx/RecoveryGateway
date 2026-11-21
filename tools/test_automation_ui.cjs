@@ -38,6 +38,7 @@ async function fixture(browser, options = {}) {
     if (url.pathname === '/api/auth/status') {
       body = { password_set: true, auth_enabled: !state.lockOff, auth_required: !state.lockOff,
         authenticated: state.authenticated, session_timeout_s: 0 };
+      if(state.restartState&&state.authenticated)body.restart_required=state.restartState.pending;
     } else if (url.pathname === '/api/operations') {
       if(route.request().method()==='POST') {
         state.savedOperation=route.request().postDataJSON();body={ok:true};
@@ -130,6 +131,7 @@ async function fixture(browser, options = {}) {
       else body = { settings: state.tailscaleSettings || {}, runtime: state.tailscaleRuntime || {}, peers: [] };
     } else if (url.pathname === '/api/status') {
       body = state.statusBody || {};
+      if(state.restartState)body={...body,restart_required:state.restartState.pending,uptime_s:state.restartState.uptime};
     } else if (url.pathname === '/api/network' && state.networkBody) {
       body = state.networkBody;
     } else if (url.pathname === '/api/system/migration') {
@@ -137,7 +139,11 @@ async function fixture(browser, options = {}) {
         state.migrationBody = {...state.migrationBody, busy: true, state: 'downloading', progress: 40, target: 'v3.0.0'}; status = 202; body = {ok: true}; }
       else body = state.migrationBody || {layout: '3.x', needed: false};
     } else if (url.pathname === '/api/cellular') {
-      if (route.request().method() === 'POST') { state.savedCellular = route.request().postDataJSON(); body = {ok: true, restart_required: !state.savedCellular.data_limit}; }
+      if (route.request().method() === 'POST') {
+        state.savedCellular = route.request().postDataJSON();
+        if(state.cellPostDelay)await new Promise(resolve=>setTimeout(resolve,state.cellPostDelay));
+        body = {ok:true,restart_required:!state.savedCellular.data_limit};
+      }
       else body = state.cellularBody || {};
     } else if (url.pathname === '/api/tailnet-forward/import') {
       const input=route.request().postDataJSON();
@@ -161,9 +167,10 @@ async function fixture(browser, options = {}) {
     } else if (url.pathname === '/api/log/precrash') {
       body = state.precrashBody || {have: false, size: 0, boot_ms: 0, text: ''};
     } else if (url.pathname === '/api/log/raw') {
-      const since = Number(url.searchParams.get('since') || 0);
+      const boot = url.searchParams.get('boot');
+      const since = boot && boot !== state.logBootId ? 0 : Number(url.searchParams.get('since') || 0);
       const data = state.logData || '';
-      body = {seq: data.length, lost: false, size: data.length, cap: 16384, boot_ms: state.logBootMs || 0,
+      body = {seq: data.length, lost: false, size: data.length, cap: 16384, boot_ms: state.logBootMs || 0, boot_id: state.logBootId,
         data: data.substring(Math.min(since, data.length))};
     } else if (url.pathname === '/api/tailscale/ca') {
       const pem = route.request().postDataJSON().pem;
@@ -389,6 +396,22 @@ async function main() {
     // Cellular uplink card: secrets are write-only (placeholder only), an empty
     // field keeps them, enabling requires the data notice, status is readable.
     {
+      const restartState={pending:true,uptime:40};
+      const first=await fixture(browser,{page:'status',restartState});
+      const second=await fixture(browser,{page:'system',restartState});
+      const pending=f=>f.page.locator('#pendingRebootBanner');
+      await pending(first).waitFor({state:'visible'});await pending(second).waitFor({state:'visible'});
+      restartState.pending=false; // Saved uplink was set back to its live configuration.
+      await first.page.evaluate(()=>fetchStatus());await second.page.reload();
+      await pending(first).waitFor({state:'hidden'});await pending(second).waitFor({state:'hidden'});
+      restartState.pending=true;
+      await first.page.evaluate(()=>fetchStatus());await pending(first).waitFor({state:'visible'});
+      restartState.pending=false;restartState.uptime=700; // Restart during a long offline gap.
+      await first.page.evaluate(()=>fetchStatus());await pending(first).waitFor({state:'hidden'});
+      assert.deepEqual(first.errors,[]);assert.deepEqual(second.errors,[]);
+      await first.context.close();await second.context.close();count++;
+    }
+    {
       const cellConfig = {enabled: false, mode: 'failover', roaming: false, data_ack: false, uart: 1, baud: 115200, tx: 17, rx: 18, rts: -1, cts: -1,
         pwrkey: -1, pwrkey_active_high: false, apn: 'internet.example', user: '', has_password: true, has_pin: true};
       f = await fixture(browser, { page: 'network', cellularBody: {config: cellConfig, status: {enabled_at_boot: true, task_running: true, state: 'connected',
@@ -471,13 +494,16 @@ async function main() {
       await f.page.locator('#cell-limit-mb').fill('1000');
       await f.page.locator('#cell-limit-day').fill('10');
       await f.page.locator('label:has(#cell-limit-pause)').click();
+      f.state.cellPostDelay=350;
       await f.page.locator('#cell-limit-save').click();
+      await f.page.locator('#cell-apn').fill('unsaved.example');
       for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
       assert.deepEqual(f.state.savedCellular, {data_limit: {limit_mb: 1000, warn_percent: 80, reset_day: 10, pause: true}});
       await f.page.waitForTimeout(200);
       assert.equal(await f.page.locator('#pendingRebootBanner').isVisible(), false);   /* the limit applies at once */
       await f.page.waitForFunction(() => document.getElementById('cell-limit-status').textContent.includes('1000 MB / 1000 MB'));
       assert.match(await f.page.locator('#cell-limit-status').textContent(), /^Used this month: 1000 MB \/ 1000 MB \(100%\) · since 2026-11-10 · limit reached: mobile data paused until the next month$/);
+      assert.equal(await f.page.locator('#cell-apn').inputValue(),'unsaved.example');
       assert.equal(await f.page.locator('#cell-limit-reset').isVisible(), true);
       f.state.savedCellular = null;
       f.page.once('dialog', d => d.accept());
@@ -485,6 +511,13 @@ async function main() {
       for (let i = 0; i < 50 && !f.state.savedCellular; i++) await f.page.waitForTimeout(100);
       assert.equal(f.state.savedCellular.data_limit.reset_usage, true);
       assert.equal('enabled' in f.state.savedCellular, false);
+      await f.page.waitForTimeout(450);
+      assert.equal(await f.page.locator('#cell-apn').inputValue(),'unsaved.example');
+      await f.page.locator('#cell-limit-day').fill('13');
+      await f.page.locator('#cell-save').click();
+      await f.page.waitForTimeout(550);
+      assert.equal(f.state.savedCellular.apn,'unsaved.example');
+      assert.equal(await f.page.locator('#cell-limit-day').inputValue(),'13');
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
     // Administration scope: shown from /api/system, saved alone; a refusal
@@ -823,6 +856,14 @@ async function main() {
     await f.page.locator('#sys-updates-reload').click();
     await f.page.waitForFunction(() => document.getElementById('sys-updates-status').textContent.includes('SHA-256 mismatch'));
     assert.equal(await f.page.locator('#sys-updates-install').isDisabled(), false);
+    Object.assign(f.state.updatesBody, {restart_pending: true, update_available: false, status: 'Installed; use Restart to apply'});
+    await f.page.locator('#sys-updates-reload').click();
+    await f.page.waitForFunction(() => document.getElementById('sys-updates-status').textContent.includes('Restart to apply'));
+    assert.equal(await f.page.locator('#sys-ota-badge').textContent(), 'Restart required');
+    for (const control of ['check', 'install', 'enabled', 'save']) {
+      assert.equal(await f.page.locator('#sys-updates-' + control).isDisabled(), true);
+    }
+    assert.equal(await f.page.locator('#pendingRebootBanner').isVisible(), true);
     assert.deepEqual(f.errors, []); await f.context.close(); count++;
 
     // Resource admission guard: when it pauses optional work the operations
@@ -989,7 +1030,7 @@ async function main() {
     // Live log: lines show date and time once the device clock is known,
     // also lines that arrived before it (browser time zone).
     {
-      f = await fixture(browser, {page: 'tools', logData: 'W (61000) test: before the clock\n'});
+      f = await fixture(browser, {page:'tools',logBootId:'0000000000000001',logData:'W (61000) test: before the clock\n'});
       await f.page.waitForFunction(() => document.getElementById('tool-log-body').textContent.includes('before the clock'));
       const pre = () => f.page.evaluate(() => document.getElementById('tool-log-body').textContent);
       assert.match(await pre(), /^W \(61000\) test: before the clock/m);
@@ -999,6 +1040,12 @@ async function main() {
       const text = await pre();
       assert.match(text, /^W 2026-11-18 10:01:01 \(61000\) test: before the clock$/m);
       assert.match(text, /^E 2026-11-18 10:02:02 \(122500\) test: after$/m);
+      f.state.logData+='old partial';
+      await f.page.waitForFunction(n=>Number(document.getElementById('tool-log-body').dataset.seq)===n,f.state.logData.length);
+      f.state.logBootId='0000000000000002';f.state.logBootMs=0;f.state.logData='I (11) new: boot\n';
+      await f.page.waitForFunction(()=>document.getElementById('tool-log-body').textContent.includes('Device restarted'));
+      assert.match(await pre(), /^Device restarted\nI \(11\) new: boot$/m);
+      assert.doesNotMatch(await pre(), /old partial/);
       assert.deepEqual(f.errors, []); await f.context.close(); count++;
     }
     // Login server certificate: status from the saved one; a paste without a

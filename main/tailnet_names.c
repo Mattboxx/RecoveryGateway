@@ -337,9 +337,14 @@ esp_err_t tailnet_names_set(bool enabled, bool lan)
 {
     esp_err_t err = nvs_flags_save(&tailnet_names_flags, (uint8_t)(enabled | lan << 1));   /* all or nothing */
     if (err) return err;
+    tailnet_names_publish(enabled, lan);
+    return ESP_OK;
+}
+
+void tailnet_names_publish(bool enabled, bool lan)
+{
     s_enabled = enabled; s_lan = lan;
     apply();
-    return ESP_OK;
 }
 
 esp_err_t tailnet_names_set_ext(bool dns_config, bool self_resolve)

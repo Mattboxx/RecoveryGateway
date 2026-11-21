@@ -113,9 +113,10 @@ typedef void (*usbp_link_cb_t)(bool up, void *ctx);
 /* Internal RAM measured around the USB host start and the last session. */
 typedef struct {uint32_t free_at_start, host_bytes, session_bytes, free_now, min_free; bool lean;} usbp_memory_t;
 
-/* Installs the USB host stack, its event task and the gateway's own USB host
- * client (PSRAM stacks), only if USBP_INTERNAL_FLOOR stays free. Once per
- * boot; the port stays a host until restart. `why` explains a refusal. */
+/* Single caller: the cellular task. Starts the host, event pumps and client,
+ * respecting the internal RAM floor. On partial startup a retry resumes the
+ * installed host with its root port unpowered. The PHY stays in host mode
+ * until restart. `why` explains a refusal. */
 esp_err_t usb_port_start(const char **why);
 void usb_port_memory(usbp_memory_t *out);
 /* Snapshot of the attached device and its configuration descriptor. */

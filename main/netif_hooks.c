@@ -8,6 +8,8 @@
 
 #include <stddef.h>
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_netif.h"
 #include "esp_netif_net_stack.h"
 #include "lwip/netif.h"
@@ -54,8 +56,8 @@ static struct netif        *s_sta, *s_ap, *s_eth;
 static netif_ext_callback_t s_physical_callback;
 static netif_output_fn      original_ppp_output      = NULL;
 static struct netif        *s_ppp                    = NULL;
-static volatile uint64_t    s_ppp_bytes_in           = 0;
-static volatile uint64_t    s_ppp_bytes_out          = 0;
+static uint64_t             s_ppp_bytes_in;
+static uint64_t             s_ppp_bytes_out;
 static volatile uint64_t    s_eth_bytes_in           = 0;
 static volatile uint64_t    s_eth_bytes_out          = 0;
 /* Optional USB network stick of the cellular uplink (Ethernet framing). */
@@ -63,8 +65,27 @@ static netif_input_fn       original_usbnet_input      = NULL;
 static netif_linkoutput_fn  original_usbnet_linkoutput = NULL;
 static struct netif        *s_usbnet                   = NULL;
 static volatile bool        s_physical_ready           = false;   /* add callback registered */
-static volatile uint64_t    s_usbnet_bytes_in          = 0;
-static volatile uint64_t    s_usbnet_bytes_out         = 0;
+static uint64_t             s_usbnet_bytes_in;
+static uint64_t             s_usbnet_bytes_out;
+
+/* Quota enforcement uses these counters across cores. Keep the critical
+ * section to the accounting itself, outside driver calls and ACL checks. */
+static portMUX_TYPE s_mobile_bytes_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static void mobile_bytes_add(uint64_t *counter, uint16_t bytes)
+{
+    taskENTER_CRITICAL(&s_mobile_bytes_lock);
+    *counter += bytes;
+    taskEXIT_CRITICAL(&s_mobile_bytes_lock);
+}
+
+void netif_hooks_get_mobile_bytes(uint64_t *rx, uint64_t *tx)
+{
+    taskENTER_CRITICAL(&s_mobile_bytes_lock);
+    *rx = s_ppp_bytes_in + s_usbnet_bytes_in;
+    *tx = s_ppp_bytes_out + s_usbnet_bytes_out;
+    taskEXIT_CRITICAL(&s_mobile_bytes_lock);
+}
 
 /* Wire-byte counters. Updated on the LWIP TCPIP task, read from the
  * HTTP server task. Display-only — torn reads at the 32-bit boundary
@@ -377,16 +398,18 @@ bool netif_hooks_eth_ready(void) { return s_eth != NULL; }
 
 static err_t usbnet_input_hook(struct pbuf *p, struct netif *netif)
 {
-    if (p) s_usbnet_bytes_in += p->tot_len;
+    if (p) mobile_bytes_add(&s_usbnet_bytes_in, p->tot_len);
     if (acl_drops(acl_check_and_tap(ACL_TO_ESP, p, false))) { pbuf_free(p); return ERR_OK; }
     return original_usbnet_input ? original_usbnet_input(p, netif) : ERR_VAL;
 }
 
 static err_t usbnet_linkoutput_hook(struct netif *netif, struct pbuf *p)
 {
-    if (p) s_usbnet_bytes_out += p->tot_len;
     if (acl_drops(acl_check_and_tap(ACL_FROM_ESP, p, false))) { return ERR_OK; }
-    return original_usbnet_linkoutput ? original_usbnet_linkoutput(netif, p) : ERR_VAL;
+    uint16_t bytes = p ? p->tot_len : 0;
+    err_t err = original_usbnet_linkoutput ? original_usbnet_linkoutput(netif, p) : ERR_VAL;
+    if (err == ERR_OK && bytes) mobile_bytes_add(&s_usbnet_bytes_out, bytes);
+    return err;
 }
 
 bool netif_hooks_register_usbnet(struct netif *nif)
@@ -397,17 +420,17 @@ bool netif_hooks_register_usbnet(struct netif *nif)
     return true;
 }
 
-uint64_t netif_hooks_get_usbnet_bytes_in(void) { return s_usbnet_bytes_in; }
-uint64_t netif_hooks_get_usbnet_bytes_out(void) { return s_usbnet_bytes_out; }
 uint64_t netif_hooks_get_eth_bytes_in(void) { return s_eth_bytes_in; }
 uint64_t netif_hooks_get_eth_bytes_out(void) { return s_eth_bytes_out; }
 
 /* PPP: raw IPv4, so the explicit IP parser, never the Ethernet guess. */
 static err_t ppp_output_hook(struct netif *netif, struct pbuf *p, const ip4_addr_t *ipaddr)
 {
-    if (p) s_ppp_bytes_out += p->tot_len;
     if (acl_drops(acl_check_ip_packet(ACL_FROM_ESP, p))) { return ERR_OK; }
-    return original_ppp_output ? original_ppp_output(netif, p, ipaddr) : ERR_VAL;
+    uint16_t bytes = p ? p->tot_len : 0;
+    err_t err = original_ppp_output ? original_ppp_output(netif, p, ipaddr) : ERR_VAL;
+    if (err == ERR_OK && bytes) mobile_bytes_add(&s_ppp_bytes_out, bytes);
+    return err;
 }
 
 bool netif_hooks_install_ppp(struct netif *nif)
@@ -424,12 +447,10 @@ bool netif_hooks_install_ppp(struct netif *nif)
 bool netif_hooks_ppp_input_allowed(struct pbuf *p, struct netif *input)
 {
     if (!s_ppp || input != s_ppp || !p) return true;
-    s_ppp_bytes_in += p->tot_len;
+    mobile_bytes_add(&s_ppp_bytes_in, p->tot_len);
     return !acl_drops(acl_check_ip_packet(ACL_TO_ESP, p));
 }
 
-uint64_t netif_hooks_get_ppp_bytes_in (void) { return s_ppp_bytes_in;  }
-uint64_t netif_hooks_get_ppp_bytes_out(void) { return s_ppp_bytes_out; }
 
 static err_t ap_input_hook(struct pbuf *p, struct netif *netif)
 {
@@ -438,7 +459,8 @@ static err_t ap_input_hook(struct pbuf *p, struct netif *netif)
      * the uplink LAN tested by the wizard. Headers are in the first pbuf. */
     if (p && !first_boot_ap_frame_allowed((const uint8_t *)p->payload, p->len)) { pbuf_free(p); return ERR_OK; }
     if (acl_drops(acl_check_and_tap(ACL_TO_AP, p, true))) { pbuf_free(p); return ERR_OK; }
-    if (ap_traffic_on && p) ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, true);
+    if (p && atomic_load_explicit(&ap_traffic_on, memory_order_relaxed))
+        ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, true);
     /* PMTU: tell the client to back off when it sends a DF packet
      * bigger than the tunnel can carry. Runs BEFORE we forward so the
      * client gets the signal even when we'd otherwise drop the frame. */
@@ -453,7 +475,8 @@ static err_t ap_linkoutput_hook(struct netif *netif, struct pbuf *p)
 {
     if (p) s_ap_bytes_out += p->tot_len;
     if (acl_drops(acl_check_and_tap(ACL_FROM_AP, p, true))) { return ERR_OK; }
-    if (ap_traffic_on && p) ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, false);
+    if (p && atomic_load_explicit(&ap_traffic_on, memory_order_relaxed))
+        ap_traffic_frame((const uint8_t *)p->payload, p->len, p->tot_len, false);
     /* And clamp again on outbound — SYN-ACK from upstream toward the
      * client also needs its MSS bounded. */
     clamp_tcp_mss(p, ap_mss_clamp);

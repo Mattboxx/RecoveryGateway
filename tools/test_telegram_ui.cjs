@@ -44,7 +44,12 @@ const notify = {
       mac: document.getElementById('nt-tg-cmd-mac').checked, poll: document.getElementById('nt-tg-cmd-poll').value,
       status: document.getElementById('nt-tg-status').textContent }));
     assert.deepEqual([v.cmd, v.down, v.info, v.details, v.mac, v.poll], ['basic', false, true, false, false, '20']);
-    assert.match(v.status, /commands on: 4 run, 1 refused, 2 from other chats ignored/);
+    assert.match(v.status, /commands on: 4 run, 1 errors, 2 from other chats ignored/);
+    const guide = page.locator('.cmd-section').filter({ has: page.locator('#nt-tg-cmd') }).locator('.cmd-reference');
+    await guide.locator('summary').click();
+    assert.match(await guide.innerText(), /\/help.*shortcuts/);
+    assert.match(await guide.innerText(), /\/devices.*last known results/);
+    assert.match(await guide.innerText(), /Manual results return to this chat/);
 
     /* invalid interval: not saved */
     await page.fill('#nt-tg-cmd-poll', '3');

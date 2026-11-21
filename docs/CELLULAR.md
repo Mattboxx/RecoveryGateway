@@ -158,9 +158,10 @@ network stick.
 - **Stop using mobile data when the limit is reached**: the modem stays
   connected but carries no traffic until the next month; Wi-Fi or Ethernet,
   when present, keep working. Off by default.
-- The count is approximate: it is saved after at least 1 MB and 10 minutes of
-  use, or at a warning, so up to that much can be missed after a power cut.
-  Carriers may also count protocol overhead differently. **Reset the counter**
+- Usage is saved at warnings and period changes. A regular checkpoint needs
+  at least 1 MiB of new data and 10 minutes since the last successful write.
+  A power cut can lose the usage since that checkpoint, which can exceed
+  1 MiB. Carrier counters may include different overhead. **Reset the counter**
   starts the month over.
 
 ## Security and costs

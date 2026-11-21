@@ -290,3 +290,234 @@ with tempfile.TemporaryDirectory(prefix='usb-port-') as folder:
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(path / 'test.c'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=60)
+
+source = (ROOT / 'main/usb_port.c').read_text(encoding='utf-8')
+header = (ROOT / 'main/usb_port.h').read_text(encoding='utf-8')
+cell = (ROOT / 'main/cell_uplink.c').read_text(encoding='utf-8')
+
+
+def function(text, signature):
+    start = text.index(signature)
+    return text[start:text.index('\n}', start) + 2] + '\n'
+
+
+STARTUP = r"""
+#define USBP_HOST_TEST 1
+#include "usb_port.c"
+#include <assert.h>
+#include <setjmp.h>
+#define CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK 0
+#define USBP_CFG_MAX 1024
+#define CELL_USB_CFG_MAX 1024
+#define USBP_HOST_ESTIMATE (6 * 1024)
+#define USBP_CLIENT_ESTIMATE 1024
+#define MALLOC_CAP_SPIRAM 1
+#define MALLOC_CAP_8BIT 2
+#define ESP_OK 0
+#define ESP_FAIL -1
+#define ESP_ERR_NO_MEM 0x101
+#define ESP_INTR_FLAG_LOWMED 0x20
+#define portMAX_DELAY 999
+#define tskNO_AFFINITY -1
+#define pdPASS 1
+#define eSetValueWithOverwrite 1
+#define ESP_LOGI(...) ((void)0)
+typedef int esp_err_t;
+typedef int *TaskHandle_t;
+typedef int *SemaphoreHandle_t;
+typedef void *usb_host_client_handle_t;
+@@USB_TYPES@@
+typedef struct { bool skip_phy_setup, root_port_unpowered; unsigned intr_flags; } usb_host_config_t;
+enum {USB_HOST_CLIENT_EVENT_NEW_DEV, USB_HOST_CLIENT_EVENT_DEV_GONE, USB_HOST_CLIENT_EVENT_DEV_REMOVED};
+typedef struct {
+    int event;
+    struct { uint8_t address; } new_dev, dev_removed;
+    struct { void *dev_hdl; } dev_gone;
+} usb_host_client_event_msg_t;
+typedef struct {
+    bool is_synchronous;
+    int max_num_event_msg;
+    struct { bool notify_dev_removed; } flags;
+    struct { void (*client_event_callback)(const usb_host_client_event_msg_t *, void *); void *callback_arg; } async;
+} usb_host_client_config_t;
+static SemaphoreHandle_t s_lock, s_changed, s_done;
+static usb_host_client_handle_t s_client;
+static TaskHandle_t s_lib_pump, s_client_pump;
+enum {USBP_PUMP_START=1, USBP_PUMP_CANCEL};
+static atomic_bool s_started;
+static usbp_device_t s_dev;
+static usbp_memory_t s_mem;
+static int s_mem_mux;
+static uint8_t *s_cfg, *s_usb_cfg;
+static size_t s_cfg_len;
+static struct { void *dev; atomic_bool gone, link; } s_net;
+static int USB_IO;
+static const int *s_io;
+static jmp_buf reaped;
+static uint32_t command;
+static int handles[7], progress, fail_at, sem_live, heap_live, tasks_live, notifications, library_installs, registrations, powers, changed_events;
+static bool host_installed, client_registered, powered, fail_registration, fail_power;
+static size_t ram=64 * 1024;
+static bool fails(void) { return ++progress==fail_at; }
+static void *heap_caps_malloc(size_t size, unsigned caps) {
+    assert(size==USBP_CFG_MAX && caps==(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (fails()) return NULL;
+    heap_live++;
+    return malloc(size);
+}
+static void heap_caps_free(void *ptr) { if (ptr) {heap_live--; free(ptr);} }
+static size_t internal_free(void) { return ram; }
+static size_t heap_caps_get_minimum_free_size(unsigned caps) { assert(caps==0); return 44000; }
+#define MALLOC_CAP_INTERNAL 0
+static SemaphoreHandle_t create_sem(void) {
+    if (fails()) return NULL;
+    sem_live++;
+    return &handles[progress-1];
+}
+static SemaphoreHandle_t xSemaphoreCreateMutex(void) { return create_sem(); }
+static SemaphoreHandle_t xSemaphoreCreateBinary(void) { return create_sem(); }
+static void vSemaphoreDelete(SemaphoreHandle_t handle) { assert(handle && sem_live > 0); sem_live--; }
+static void xSemaphoreTake(SemaphoreHandle_t handle, int wait) { assert(handle==s_lock && wait==portMAX_DELAY); }
+static void xSemaphoreGive(SemaphoreHandle_t handle) { assert(handle==s_lock || handle==s_changed); if (handle==s_changed) changed_events++; }
+static void vTaskDelay(int ticks) { assert(ticks==10); }
+#define pdMS_TO_TICKS(ms) (ms)
+static void portENTER_CRITICAL(int *mux) { assert(mux==&s_mem_mux && !*mux); *mux=1; }
+static void portEXIT_CRITICAL(int *mux) { assert(*mux==1); *mux=0; }
+static void xTaskNotifyWait(int clear_enter, int clear_exit, uint32_t *received, int wait) {
+    assert(!clear_enter && !clear_exit && wait==portMAX_DELAY);
+    *received=command;
+}
+static void task_reaper_self_delete(void) { longjmp(reaped,1); }
+static void lib_task(void *arg) { (void)arg; abort(); }
+static void client_task(void *arg) { (void)arg; abort(); }
+static int xTaskCreatePinnedToCoreWithCaps(void (*entry)(void *), const char *name, int bytes, void *arg,
+                                           int prio, TaskHandle_t *task, int core, unsigned caps) {
+    assert(!arg && prio==7 && core==tskNO_AFFINITY && caps==(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    assert((entry==lib_task && bytes==3072 && !strcmp(name,"usb_lib")) ||
+           (entry==client_task && bytes==4096 && !strcmp(name,"usb_port")));
+    assert(!host_installed && !powered && !atomic_load(&s_started));
+    if (fails()) return 0;
+    *task = entry==lib_task ? &handles[4] : &handles[5];
+    tasks_live++;
+    return pdPASS;
+}
+static void xTaskNotify(TaskHandle_t task, uint32_t action, int flag) {
+    assert((task==s_lib_pump || task==s_client_pump) && flag==eSetValueWithOverwrite);
+    if (action==USBP_PUMP_CANCEL) {
+        assert(!host_installed && !powered && !atomic_load(&s_started));
+        tasks_live--;
+    } else {
+        assert(action==USBP_PUMP_START && client_registered && powered && !atomic_load(&s_started));
+        notifications++;
+    }
+}
+static esp_err_t usb_host_install(const usb_host_config_t *host) {
+    assert(!host->skip_phy_setup && host->root_port_unpowered && host->intr_flags==ESP_INTR_FLAG_LOWMED);
+    assert(s_lib_pump && s_client_pump && s_cfg && !host_installed && !client_registered && !powered);
+    if (fails()) return ESP_FAIL;
+    host_installed=true;
+    library_installs++;
+    ram-=3500;
+    return ESP_OK;
+}
+static esp_err_t usb_host_client_register(const usb_host_client_config_t *client, usb_host_client_handle_t *registered) {
+    assert(host_installed && !client_registered && !powered && !atomic_load(&s_started));
+    assert(!client->is_synchronous && client->max_num_event_msg==5 && client->flags.notify_dev_removed && client->async.client_event_callback);
+    registrations++;
+    if (fail_registration) return ESP_ERR_NO_MEM;
+    *registered=&handles[6];
+    client_registered=true;
+    ram-=400;
+    return ESP_OK;
+}
+static esp_err_t usb_host_lib_set_root_port_power(bool on) {
+    assert(on && host_installed && client_registered && !powered && !atomic_load(&s_started));
+    powers++;
+    if (fail_power) return ESP_FAIL;
+    powered=true;
+    return ESP_OK;
+}
+static void read_device(uint8_t address) {
+    assert(address==3);
+    s_dev=(usbp_device_t){.present=true, .address=address, .seq=s_dev.seq+1};
+    s_cfg[0]=42;
+    s_cfg_len=1;
+}
+@@USB_RUNTIME@@
+@@CELL_START@@
+int main(void) {
+    const char *why;
+    usbp_device_t dev;
+    size_t len=1;
+    assert(!usb_port_device(&dev,NULL,0,&len) && !dev.present && !len);
+    usb_port_wait(0,10);
+    ram=USBP_INTERNAL_FLOOR;
+    assert(usb_port_start(&why)==ESP_ERR_NO_MEM && !progress && *why);
+    ram=64*1024;
+    for (fail_at=1; fail_at<=7; fail_at++) {
+        progress=0;
+        assert(usb_port_start(&why)!=ESP_OK && *why && !atomic_load(&s_started));
+        assert(!s_lib_pump && !s_client_pump && !s_client && !s_cfg && !s_lock && !s_changed && !s_done);
+        assert(!heap_live && !sem_live && !tasks_live && !host_installed && !notifications);
+    }
+    if (!setjmp(reaped)) { command=USBP_PUMP_CANCEL; wait_for_pump_start(); abort(); }
+    command=USBP_PUMP_START;
+    wait_for_pump_start();
+    fail_at=0;
+    progress=0;
+    fail_registration=true;
+    assert(open_usb(&why)==ESP_ERR_NO_MEM && *why && !s_usb_cfg && !s_io);
+    assert(host_installed && tasks_live==2 && library_installs==1 && registrations==1);
+    assert(sem_live==3 && heap_live==1 && !powered && !s_client);
+    assert(!usb_port_device(&dev,NULL,0,&len) && !atomic_load(&s_started) && !notifications);
+    TaskHandle_t lib=s_lib_pump, client=s_client_pump;
+    size_t recovered_ram=ram;
+    ram=USBP_INTERNAL_FLOOR;
+    assert(open_usb(&why)==ESP_ERR_NO_MEM && registrations==1 && !s_usb_cfg && heap_live==1);
+    ram=recovered_ram;
+    fail_registration=false;
+    fail_power=true;
+    assert(open_usb(&why)==ESP_FAIL && *why && client_registered && !s_usb_cfg && heap_live==1);
+    assert(powers==1 && !powered && !atomic_load(&s_started));
+    fail_power=false;
+    assert(open_usb(&why)==ESP_OK && !*why && s_usb_cfg && s_io==&USB_IO && heap_live==2);
+    assert(powers==2 && powered && atomic_load(&s_started) && notifications==2);
+    assert(s_lib_pump==lib && s_client_pump==client && library_installs==1 && registrations==2);
+    assert(usb_port_start(&why)==ESP_OK && !*why && powers==2 && notifications==2);
+    usbp_memory_t mem;
+    usb_port_memory(&mem);
+    assert(mem.host_bytes==3900 && mem.free_now==ram && mem.min_free==44000);
+
+    usb_host_client_event_msg_t attached={.event=USB_HOST_CLIENT_EVENT_NEW_DEV, .new_dev={3}};
+    client_event(&attached,NULL);
+    uint8_t cfg[1]={0};
+    assert(usb_port_device(&dev,cfg,sizeof cfg,&len) && dev.address==3 && cfg[0]==42 && len==1);
+    usb_host_client_event_msg_t removed={.event=USB_HOST_CLIENT_EVENT_DEV_REMOVED, .dev_removed={2}};
+    client_event(&removed,NULL);
+    assert(usb_port_device(&dev,NULL,0,NULL) && !changed_events);
+    removed.dev_removed.address=3;
+    client_event(&removed,NULL);
+    client_event(&removed,NULL);
+    assert(!usb_port_device(&dev,NULL,0,NULL) && dev.seq==2 && changed_events==1);
+    s_net.dev=&handles[0];
+    atomic_store(&s_net.link,true);
+    usb_host_client_event_msg_t gone={.event=USB_HOST_CLIENT_EVENT_DEV_GONE, .dev_gone={s_net.dev}};
+    client_event(&gone,NULL);
+    assert(atomic_load(&s_net.gone) && !atomic_load(&s_net.link));
+    heap_caps_free(s_usb_cfg);
+    heap_caps_free(s_cfg);
+    puts("PASS: USB startup fault recovery, held event pumps, descriptor cleanup and detach");
+}
+"""
+runtime = ''.join(function(source, signature) for signature in (
+    'static void device_removed(', 'static void client_event(', 'static void wait_for_pump_start(',
+    'static void record_host_cost(', 'static esp_err_t install_host(', 'esp_err_t usb_port_start(',
+    'void usb_port_memory(', 'bool usb_port_device(', 'void usb_port_wait('))
+types = header.split('#include "esp_netif.h"\n\n', 1)[1].split('} usbp_memory_t;', 1)[0] + '} usbp_memory_t;'
+with tempfile.TemporaryDirectory(prefix='usb-startup-') as folder:
+    path = Path(folder)
+    (path / 'startup.c').write_text(STARTUP.replace('@@USB_TYPES@@', types).replace('@@USB_RUNTIME@@', runtime).replace(
+        '@@CELL_START@@', function(cell, 'static esp_err_t open_usb(')), encoding='utf-8')
+    binary = path / ('test.exe' if os.name == 'nt' else 'test')
+    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(path / 'startup.c'), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, timeout=60)

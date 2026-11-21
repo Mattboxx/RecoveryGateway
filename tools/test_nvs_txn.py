@@ -21,6 +21,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+setup_source = (ROOT / 'main/first_boot.c').read_text(encoding='utf-8')
+setup_finish = setup_source[setup_source.index('    TaskHandle_t reboot = NULL;'):
+                            setup_source.index('\nstatic esp_err_t apply_handler')]
 
 HEADERS = {
     'esp_err.h': r'''#pragma once
@@ -87,14 +90,18 @@ esp_err_t nvs_set_blob(nvs_handle_t h, const char *k, const void *v, size_t n);
 #include <stdint.h>
 #define pdTRUE 1
 #define pdMS_TO_TICKS(x) (x)
+#define portMAX_DELAY 0
+typedef int portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED 0
+#define portENTER_CRITICAL(mux) ((void)(mux))
+#define portEXIT_CRITICAL(mux) ((void)(mux))
 ''',
     'freertos/semphr.h': r'''#pragma once
 typedef int StaticSemaphore_t;
 typedef int *SemaphoreHandle_t;
-extern int fake_lock_held;
 static inline SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *s) { return s; }
-static inline int xSemaphoreTake(SemaphoreHandle_t s, int t) { (void)s; (void)t; if (fake_lock_held) return 0; fake_lock_held = 1; return 1; }
-static inline int xSemaphoreGive(SemaphoreHandle_t s) { (void)s; fake_lock_held = 0; return 1; }
+static inline int xSemaphoreTake(SemaphoreHandle_t s, int t) { (void)t; if (*s) return 0; *s = 1; return 1; }
+static inline int xSemaphoreGive(SemaphoreHandle_t s) { *s = 0; return 1; }
 ''',
     'freertos/task.h': r'''#pragma once
 typedef void *TaskHandle_t;
@@ -108,12 +115,14 @@ PROGRAM = r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 #include "nvs.h"
 #include "nvs_params.h"
+#include "nvs_flags.h"
 #include "wifi_networks.h"
 #include "freertos/task.h"
 
-int fake_lock_held;
 static int task_a, task_b;
 TaskHandle_t fake_task = &task_a;
 const char *esp_err_to_name(esp_err_t e) { (void)e; return "err"; }
@@ -282,8 +291,7 @@ static void unit_tests(void) {
     assert(nvs_param_txn_begin() == ESP_OK && nvs_param_txn_end(true) == ESP_OK && !strcmp(state(), "old"));
     /* Nothing pending: recover is a no-op. */
     assert(nvs_param_txn_recover() == ESP_OK && !strcmp(state(), "old"));
-    /* Actual wifi_networks.c: a failed save keeps the running list; a save
-     * undone by its transaction is reloaded from NVS. */
+    /* Actual Wi-Fi table: readers see the old table even between writes. */
     memset(st, 0, sizeof st);
     wifi_network_t wa[2] = {0}, wb[3] = {0}, got;
     strcpy(wa[0].ssid, "home"); strcpy(wa[0].passwd, "pw-old");
@@ -291,14 +299,105 @@ static void unit_tests(void) {
     strcpy(wb[0].ssid, "new1"); strcpy(wb[2].ssid, "new2");        /* wb[1] empty: dropped */
     fail_key = "wifi_nets"; assert(wifi_networks_set_all(wb, 3) != ESP_OK); fail_key = NULL;
     assert(wifi_networks_count() == 1 && wifi_networks_get(0, &got) && !strcmp(got.ssid, "home"));
-    assert(nvs_param_txn_begin() == ESP_OK && wifi_networks_set_all(wb, 3) == ESP_OK);
-    assert(wifi_networks_count() == 2 && wifi_networks_get(1, &got) && !strcmp(got.ssid, "new2"));
+    assert(nvs_param_txn_begin() == ESP_OK && wifi_networks_stage(wb, 3) == ESP_OK);
+    assert(wifi_networks_count() == 1 && wifi_networks_get(0, &got) && !strcmp(got.ssid, "home"));
     fail_key = "later"; assert(nvs_param_set_u8("later", 1) != ESP_OK); fail_key = NULL;
     assert(nvs_param_txn_end(true) != ESP_OK && !find("txn_undo"));
-    wifi_networks_init();
+    wifi_networks_finish_staged(false);
     assert(wifi_networks_count() == 1 && wifi_networks_get(0, &got) && !strcmp(got.ssid, "home")
            && !strcmp(got.passwd, "pw-old") && !wifi_networks_get(1, &got));
+    assert(nvs_param_txn_begin() == ESP_OK && wifi_networks_stage(wb, 3) == ESP_OK);
+    assert(nvs_param_txn_end(true) == ESP_OK && wifi_networks_count() == 1);
+    wifi_networks_finish_staged(true);
+    assert(wifi_networks_count() == 2 && wifi_networks_get(1, &got) && !strcmp(got.ssid, "new2"));
+    assert(nvs_param_txn_begin() == ESP_OK && wifi_networks_store_for_reboot(wa, 1) == ESP_OK);
+    assert(nvs_param_txn_end(true) == ESP_OK && wifi_networks_count() == 2);
+    assert(wifi_networks_set_all(wa, 0) == ESP_OK);
+    assert(wifi_networks_has_saved_table() && wifi_networks_count() == 0);
+    size_t saved_wifi_size = 0;
+    assert(nvs_param_get_blob("wifi_nets", NULL, &saved_wifi_size) == ESP_OK);
+    assert(saved_wifi_size == WIFI_NETWORKS_MAX * sizeof(wifi_network_t));
+    assert(nvs_param_set_u8("dns_relay_en", 1) == ESP_OK);
+    assert(nvs_param_set_str("dns_relay_up", "192.0.2.1") == ESP_OK);
+    assert(nvs_param_txn_begin() == ESP_OK && nvs_param_set_u8("dns_relay_en", 0) == ESP_OK);
+    fail_key = "dns_relay_up";
+    assert(nvs_param_set_str("dns_relay_up", "") != ESP_OK);
+    fail_key = NULL;
+    assert(nvs_param_txn_end(true) != ESP_OK);
+    uint8_t relay = 0;
+    assert(nvs_param_get_u8("dns_relay_en", &relay) == ESP_OK && relay == 1);
+    char *upstream = nvs_param_get_str("dns_relay_up");
+    assert(upstream && !strcmp(upstream, "192.0.2.1"));
+    free(upstream);
     puts("unit ok");
+}
+
+/* First-boot writes after input validation. Use the actual Wi-Fi and flags
+ * stores. The validated Ethernet/SIM encoders and password hashing are
+ * represented by fixed NVS payloads through their real settings interfaces. */
+typedef struct { const char *valuestring; } cJSON;
+typedef unsigned httpd_req_t, eth_config_t, cell_config_t;
+static const char *const hist_keys[]={"hist_ev","hist_mx","hist_snap"}, *const names_keys[]={"tn_names","tn_names_lan"};
+static const nvs_flags_t history_flags={"hist_cfg",hist_keys,3}, tailnet_names_flags={"tn_names_cfg",names_keys,2};
+static const char *TAG="setup";
+static bool fail_restart, s_finished;
+static unsigned restart_signal;
+static unsigned s_lock_storage;
+static TaskHandle_t s_lock=&s_lock_storage;
+static unsigned s_ctx;
+#define LAN_NAME_MAX 32
+#define xSemaphoreTake(s,t) ((void)(s),(void)(t))
+#define xSemaphoreGive(s) ((void)(s))
+#define cJSON_ArrayForEach(element,array) for ((element)=(array);(element);(element)=NULL)
+static const cJSON *cJSON_GetObjectItem(const cJSON *o,const char *k){(void)o;(void)k;return NULL;}
+static bool cJSON_IsString(const cJSON *o){return o && o->valuestring;}
+#define strlcat fixture_strlcat
+static size_t strlcat(char *d,const char *s,size_t n){size_t l=strlen(d);return l+strlcpy(d+l,s,n-l);}
+static bool bool_of(const cJSON *o,const char *k,bool d){(void)o;(void)k;return d;}
+static const char *str_of(const cJSON *o,const char *k){(void)o;assert(!strcmp(k,"device_name"));return "setup-fixture";}
+static void fb_wipe(unsigned *c){*c=0;}
+static void dns_relay_set_captive(int i){assert(!i);}
+static void lan_name_get(char *out,size_t cap){strlcpy(out,"fixture-gateway",cap);}
+static esp_err_t send_error(httpd_req_t *r,const char *s,const char *k,const char *v){
+    (void)r;(void)s;assert(k&&v);return ESP_FAIL;}
+static void httpd_resp_set_type(httpd_req_t *r,const char *s){(void)r;assert(!strcmp(s,"application/json"));}
+static void httpd_resp_set_hdr(httpd_req_t *r,const char *k,const char *s){(void)r;assert(k&&s);}
+static esp_err_t httpd_resp_sendstr(httpd_req_t *r,const char *s){
+    (void)r;assert(strstr(s,"\"ok\":true") && strstr(s,"\"restart_in_s\":1"));return ESP_OK;}
+static esp_err_t web_ui_reserve_restart(TaskHandle_t *task){*task=&restart_signal;return fail_restart?ESP_FAIL:ESP_OK;}
+static void web_ui_finish_restart(TaskHandle_t task,bool commit){assert(task==&restart_signal);restart_signal=1+(unsigned)commit;}
+static esp_err_t web_password_store_for_reboot(const char *p,esp_err_t (*writer)(const char *,const char *)){
+    assert(!strcmp(p,"fixture-phrase"));return writer("web_password","verifier");}
+static esp_err_t eth_uplink_store_for_reboot(const eth_config_t *c,char *why,size_t n){
+    assert(why && n);return nvs_param_set_blob("eth_cfg",c,sizeof *c);}
+static esp_err_t cell_uplink_store_for_reboot(const cell_config_t *c,char *why,size_t n){
+    assert(why && n);return nvs_param_set_blob("cell_cfg",c,sizeof *c);}
+
+static esp_err_t run_setup(int kind) {
+    httpd_req_t *req=NULL;
+    const cJSON *cmd=NULL;
+    const char *admin="fixture-phrase", *ssid="fixture-wifi", *wpw="fixture-wifi-passphrase";
+    const char *ap_ssid="fixture-ap", *ap_pw="fixture-ap-passphrase";
+    const char *key="permit-fixture", *server="https://test.invalid", *host="fixture-tailnet";
+    const char *tz="UTC0", *lan="fixture-gateway";
+    bool has_wifi=kind==0, eth_up=kind==1, cell_up=kind==2;
+    const char *type=has_wifi?"wifi":eth_up?"ethernet":"cellular";
+    bool ap_open=false, ap_recovery=true, share_ap=true, exit_node=false;
+    const char *cidr="192.0.2.0/24";
+    eth_config_t eth=1;
+    cell_config_t cell=2;
+    char why[2]="";
+''' + setup_finish + r'''
+static const char *setup_state(int kind) {
+    const char *const keys[]={"ap_ssid","ap_passwd","ap_open","ap_auto_off","ts_enabled","ts_authkey",
+        "ts_login","ts_hostname","hostname","ts_adv_ap","ts_routes","tz","ts_adv_exit","ui_roles",
+        "ui_adv","hist_cfg","tn_names_cfg","dev_name","web_password","setup_done"};
+    bool done=find("setup_done")!=NULL;
+    for (unsigned i=0;i<sizeof keys/sizeof *keys;i++) if ((find(keys[i])!=NULL)!=done) return "mixed";
+    if ((find("wifi_nets")!=NULL)!=(done && kind==0) ||
+        (find("eth_cfg")!=NULL)!=(done && kind==1) ||
+        (find("cell_cfg")!=NULL)!=(done && kind==2) || find("txn_undo")) return "mixed";
+    return done?"new":"old";
 }
 
 int main(int argc, char **argv) {
@@ -308,6 +407,25 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "unit")) { unit_tests(); return 0; }
     if (!strcmp(mode, "init")) { crash_at = 0; init_state(); save_store(); return 0; }
     load_store();
+    if (!strcmp(mode, "setup-init")) { memset(st,0,sizeof st);save_store();return 0; }
+    if (!strncmp(mode, "setup-", 6)) {
+        int kind = argc > 4 ? atoi(argv[4]) : 0;
+        if (!strcmp(mode, "setup-reserve-failure")) {
+            fail_restart=true;
+            assert(run_setup(kind)!=ESP_OK && !ops && !restart_signal && !s_finished);
+        } else if (!strcmp(mode, "setup-commit-failure")) {
+            fail_key="setup_done";
+            assert(run_setup(kind)!=ESP_OK && restart_signal==1 && !s_finished);
+        } else if (!strcmp(mode,"setup-save")) {
+            assert(run_setup(kind)==ESP_OK && restart_signal==2 && s_finished);
+            printf("ops %d\n", ops);
+        } else {
+            assert(nvs_param_txn_recover()==ESP_OK);
+            puts(setup_state(kind));
+        }
+        save_store();
+        return 0;
+    }
     for (int i = 0; i < 300; i++) old_blob[i] = (uint8_t)i;
     for (int i = 0; i < 200; i++) new_blob[i] = (uint8_t)(255 - i);
     if (!strcmp(mode, "save")) { run_txn(true); save_store(); printf("ops %d\n", ops); return 0; }
@@ -333,7 +451,8 @@ def main():
         if os.environ.get('NVS_TXN_SANITIZE') == '1':
             flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
         subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(path / 'test.c'),
-                        str(ROOT / 'main/nvs_params.c'), str(ROOT / 'main/wifi_networks.c'), '-o', str(binary)], check=True)
+                        str(ROOT / 'main/nvs_params.c'), str(ROOT / 'main/wifi_networks.c'),
+                        str(ROOT / 'main/nvs_flags.c'), '-o', str(binary)], check=True)
         store = str(path / 'store.bin')
 
         def run(*args, expect=0):
@@ -361,7 +480,21 @@ def main():
             assert run('boot', store) == 'old', at
         print(f'PASS: actual nvs_params undo journal: {total} power-cut points in a mixed save and '
               f'{cuts} during recovery end all old or all new, fault injection, nesting, other tasks, '
-              'size bound, damaged journals discarded, incomplete rollback retried, Wi-Fi list cache kept/reloaded (fake NVS)')
+              'size bound, damaged journals discarded, incomplete rollback retried, Wi-Fi cache published only after commit (fake NVS)')
+        setup_cuts = 0
+        for kind in ('0', '1', '2'):
+            run('setup-init', store)
+            for fault in ('setup-reserve-failure', 'setup-commit-failure'):
+                run(fault, store, '0', kind)
+                assert run('setup-boot', store, '0', kind) == 'old'
+            total = int(run('setup-save', store, '0', kind).split()[1])
+            assert run('setup-boot', store, '0', kind) == 'new'
+            for at in range(1, total + 1):
+                run('setup-init', store)
+                run('setup-save', store, str(at), kind, expect=3)
+                assert run('setup-boot', store, '0', kind) == 'old'
+                setup_cuts += 1
+        print(f'PASS: first-boot commit body: checked restart reservation, final-write failure and {setup_cuts} power-cut points across Wi-Fi, Ethernet and cellular (fake NVS)')
 
 
 if __name__ == '__main__':

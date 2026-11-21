@@ -48,9 +48,11 @@ queue_drops = between(mlc, 'static volatile uint32_t s_wg_rx_queue_drops;',
 
 # Structural (not behaviour): the WG/DISCO socket is drained per select(), AT
 # sockets read once, and both full-queue paths count the drop.
-drain = between(netio, 'if (ml->disco_sock4 >= 0 && FD_ISSET(ml->disco_sock4, &read_fds)) {',
+drain = between(netio, 'if (direct_fd >= 0 && FD_ISSET(direct_fd, &read_fds)) {',
                 'route_udp_packet(ml, pkt_data, n, src_ip, src_port);')
-assert 'int budget = ML_NET_IO_DRAIN_BUDGET(ml->disco_sock4);' in drain
+assert 'int budget = ML_NET_IO_DRAIN_BUDGET(direct_fd);' in drain
+assert 'int direct_fd = direct_udp_fd(ml, &direct_retry_at);' in netio
+assert 'ml_recvfrom(direct_fd,' in drain
 assert '#define ML_NET_IO_DRAIN_BUDGET(fd) (ml_at_socket_is_at_fd(fd) ? 1 : ML_NET_IO_DRAIN_MAX)' in netio
 assert 'drained ? MSG_DONTWAIT : 0' in drain and 'if (n <= 0)\n                break;' in drain
 assert '#define ML_NET_IO_DRAIN_MAX 16' in netio

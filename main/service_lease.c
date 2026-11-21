@@ -99,18 +99,20 @@ void service_lease_rules_changed(const tailnet_forward_rule_t *rules,int count) 
 }
 bool service_lease_tick(void) {
     if(!writer)return false;
-    time_t wall=time(NULL);uint64_t now=clock_ms();bool changed=false;unsigned closures=0;
+    bool changed=false;unsigned closures=0;
     xSemaphoreTake(writer,portMAX_DELAY);
+    time_t wall=time(NULL);uint64_t now=clock_ms();
     portENTER_CRITICAL(&state_lock);
-    bool rollback=last_wall && wall>=1700000000 && wall<last_wall;
-    if(wall>=1700000000 && wall<=UINT32_MAX && !rollback)last_wall=(uint32_t)wall;
+    bool clock_valid=wall>=1700000000 && (uint64_t)wall<=UINT32_MAX;
+    bool clock_lost=last_wall && (!clock_valid || wall<last_wall);
+    if(clock_valid && !clock_lost)last_wall=(uint32_t)wall;
     for(unsigned i=0;i<TAILNET_FORWARD_MAX;i++){
         lease_t l=saved.entries[i];if(!l.token || !l.created || expired[i])continue;
-        if(!l.expires || rollback || (wall>=1700000000 && ((uint64_t)wall<l.created || (uint64_t)wall>=l.expires))
+        if(!l.expires || clock_lost || (clock_valid && ((uint64_t)wall<l.created || (uint64_t)wall>=l.expires))
             || (deadlines[i] && now>=deadlines[i])){
             if(l.expires)closed_tokens[i]=l.token; /* Persisted tombstones do not alert again on boot. */
             expired[i]=true;deadlines[i]=0;changed=true;}
-        else if(!deadlines[i] && wall>=1700000000 && wall<=UINT32_MAX){deadlines[i]=now+((uint64_t)l.expires-(uint64_t)wall)*1000;changed=true;}
+        else if(!deadlines[i] && clock_valid){deadlines[i]=now+((uint64_t)l.expires-(uint64_t)wall)*1000;changed=true;}
     }
     lease_store_t candidate=saved;bool persist=false;
     for(unsigned i=0;i<TAILNET_FORWARD_MAX;i++)if(expired[i] && candidate.entries[i].expires){candidate.entries[i].expires=0;persist=true;}
@@ -132,11 +134,19 @@ bool service_lease_tick(void) {
 bool service_lease_allowed(int slot,const tailnet_forward_rule_t *rule) {
     if(slot<0 || slot>=TAILNET_FORWARD_MAX || !rule)return false;
     uint32_t token=service_lease_token(rule);uint64_t now=clock_ms();
+    uint32_t clock_floor=0, wall_expiry=0;
     portENTER_CRITICAL(&state_lock);int index=lease_index(&saved,token);
     bool allow=loaded && ready && index==-1 && saved.version==1; /* Untimed legacy table only. */
     if(loaded&&ready&&index>=0){lease_t l=saved.entries[index];
-        allow=(!l.created&&!l.expires)||(!expired[index]&&deadlines[index]&&now<deadlines[index]);}
-    portEXIT_CRITICAL(&state_lock);return allow;
+        allow=(!l.created&&!l.expires)||(!expired[index]&&deadlines[index]&&now<deadlines[index]);
+        if (allow && l.created) { clock_floor=last_wall; wall_expiry=l.expires; }
+    }
+    portEXIT_CRITICAL(&state_lock);
+    if (wall_expiry) {
+        time_t wall=time(NULL);
+        return wall>=1700000000 && (uint64_t)wall>=clock_floor && (uint64_t)wall<wall_expiry;
+    }
+    return allow;
 }
 esp_err_t service_lease_set(int slot,uint32_t expected,uint32_t seconds,bool permanent) {
     return service_lease_set_mode(slot,expected,seconds,permanent,false);

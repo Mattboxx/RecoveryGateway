@@ -169,11 +169,16 @@ int main(void) {
     atomic_store(&queue_failure,true);
     assert(ota_flash_bind_httpd(server)==ESP_FAIL);
     assert(!ota_flash_next_partition());
-    atomic_store(&queue_failure,false);
-    assert(ota_flash_bind_httpd(server)==ESP_OK);
-    assert(ota_flash_bind_httpd(server)==ESP_OK);
     assert(ota_flash_bind_httpd((void*)0x42)==ESP_ERR_INVALID_STATE);
+    atomic_store(&queue_failure,false);
+    atomic_store(&drop_deliveries,1);
+    ota_flash_retry_binding(); /* SDK send succeeds, but server never sees it. */
+    assert(!ota_flash_next_partition());
+    ota_flash_retry_binding();
     while (!__atomic_load_n(&s_httpd_task,__ATOMIC_ACQUIRE)) sched_yield();
+    unsigned identified=atomic_load(&deliveries);
+    ota_flash_retry_binding();assert(ota_flash_bind_httpd(server)==ESP_OK);
+    assert(atomic_load(&deliveries)==identified);
     assert(ota_flash_next_partition()==&partition);
     no_partition=true; assert(!ota_flash_next_partition()); no_partition=false;
     assert(ota_flash_begin(NULL,128,&handle)==ESP_ERR_INVALID_ARG);
@@ -187,7 +192,8 @@ int main(void) {
     handle=42;
     assert(ota_flash_abort(handle)==ESP_OK);
     assert(ota_flash_set_boot_partition(&partition)==ESP_OK);
-    ota_flash_restart(); assert(atomic_load(&restart_calls)==1);
+    /* The host stub returns from esp_restart, unlike the ESP implementation. */
+    assert(ota_flash_restart()==ESP_ERR_INVALID_STATE && atomic_load(&restart_calls)==1);
     atomic_store(&injected_error,77); handle=99;
     assert(ota_flash_begin(&partition,128,&handle)==77 && !handle);
     begin_error_with_handle=true;
@@ -204,7 +210,7 @@ int main(void) {
     assert(ota_flash_write(42,"OTA!",4)==ESP_ERR_INVALID_STATE);
     handle=42; assert(ota_flash_end(&handle)==ESP_ERR_INVALID_STATE && handle==42 && ota_flash_abort(42)==ESP_ERR_INVALID_STATE);
     assert(ota_flash_set_boot_partition(&partition)==ESP_ERR_INVALID_STATE);
-    ota_flash_restart(); assert(atomic_load(&sdk_calls)==before); /* never caller fallback */
+    assert(ota_flash_restart()==ESP_ERR_INVALID_STATE && atomic_load(&sdk_calls)==before); /* never caller fallback */
     atomic_store(&wrong_stack,false);
     reject_admission=true;
     assert(ota_flash_write(42,"OTA!",4)==ESP_ERR_TIMEOUT);
@@ -235,6 +241,8 @@ int main(void) {
     assert(ota_flash_begin(&partition,128,&handle)==ESP_ERR_TIMEOUT && !handle);
     atomic_store(&drop_deliveries,2);
     assert(!ota_flash_next_partition() && atomic_load(&sdk_calls)==calls);
+    atomic_store(&drop_deliveries,2);
+    assert(ota_flash_restart()==ESP_ERR_TIMEOUT && atomic_load(&restart_calls)==1);
     assert(ota_flash_next_partition()==&partition && atomic_load(&sdk_calls)==calls+1);
     /* Late, not lost: the server was busy past the start wait. The withdrawn
      * first delivery and the resent one both arrive; exactly one runs. */

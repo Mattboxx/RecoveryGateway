@@ -18,6 +18,12 @@
 static const char *TAG = "ota_local";
 static portMUX_TYPE s_writer_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_writer_active;
+static bool s_upload_restart_pending;
+
+bool ota_upload_restart_pending(void)
+{
+    return __atomic_load_n(&s_upload_restart_pending, __ATOMIC_ACQUIRE);
+}
 bool ota_writer_try_acquire(void)
 {
     portENTER_CRITICAL(&s_writer_lock);
@@ -131,6 +137,7 @@ esp_err_t ota_upload_handler(httpd_req_t *req)
                             esp_err_to_name(err));
         return ESP_FAIL;
     }
+    __atomic_store_n(&s_upload_restart_pending, true, __ATOMIC_RELEASE);
     ESP_LOGI(TAG, "manual upload complete; next boot partition is '%s'", target->label);
     history_event(HIST_EV_UPDATE, HIST_INFO, "Firmware uploaded from the browser (%d bytes); restart pending", req->content_len);
     httpd_resp_set_type(req, "application/json");

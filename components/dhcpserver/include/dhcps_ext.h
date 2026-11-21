@@ -44,8 +44,9 @@ typedef struct {
     char     hostname[DHCPS_EXT_MAX_HOSTNAME_LEN];
 } dhcp_lease_info_t;
 
-/* Copy up to max_leases active leases into the supplied array. Returns
- * the number written, or 0 if the server isn't running. */
+/* Call from outside the TCP/IP core. Copies up to max_leases active leases
+ * while holding TCP/IP ownership. Returns the number written, 0 if the
+ * server is stopped, or -1 if the snapshot could not be scheduled. */
 int dhcps_get_active_leases(dhcp_lease_info_t *leases, int max_leases);
 
 #ifdef __cplusplus

@@ -375,6 +375,13 @@ int main(void) {
     assert(!wifi_setup_test_matches("Fixture","example-pass"));
     live_ip=1; ap.ssid[0]='O';
     assert(!wifi_setup_test_matches("Fixture","example-pass"));
+    const char *full_ssid="123456789012345678901234567890AB";
+    const char *full_key="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    memcpy(saved.sta.ssid,full_ssid,sizeof saved.sta.ssid);
+    memcpy(saved.sta.password,full_key,sizeof saved.sta.password);
+    memcpy(ap.ssid,full_ssid,sizeof ap.ssid);
+    assert(wifi_setup_test_matches(full_ssid,full_key));
+    assert(!wifi_setup_test_matches("123456789012345678901234567890ABX",full_key));
     puts("PASS: setup proof requires a live tested address and matching Wi-Fi credentials");
 }
 ''', encoding='utf-8')

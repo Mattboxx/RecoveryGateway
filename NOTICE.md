@@ -62,7 +62,7 @@ implementation's license.
 ## ESP-IDF
 
 - **Repository:** https://github.com/espressif/esp-idf
-- **Audited SDK:** ESP-IDF 5.5.3, selected by the pinned PlatformIO environment.
+- **Pinned SDK:** ESP-IDF 6.1.0, selected by the PlatformIO environment.
 - **License:** Apache-2.0 for the SDK generally; bundled components and
   compiler runtime libraries carry their own notices and exceptions.
 - **Use:** Espressif's RTOS, WiFi/networking stack, and build system.
@@ -76,6 +76,11 @@ Runtime Library Exception keeps those runtime libraries from imposing their
 own terms on the application; the edition's GPL-3.0 licence is a separate
 choice of its author. Use the notices from the exact SDK/toolchain used for
 the image.
+
+The build generates the lwIP NAPT and timeout sources from the pinned SDK
+using `tools/prepare_lwip_napt.py`. The generated sources retain the SDK
+copyright and license notices. The generator checks both input digests
+before applying the project changes.
 
 `main/lwip_mdns/mdns.c` preserves its original BSD source notice and identifies
 the local probing and interface teardown modifications. The firmware notice generator additionally carries

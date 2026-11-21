@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "runtime_metrics.h"
 #include "snmp_agent.h"
 #include "dhcps_ext.h"
@@ -51,6 +52,7 @@
 #include "service_retry.h"
 #include "ntfy_events.h"
 #include "notify_text.h"
+#include "notify_channels.h"
 #include "tailnet_forward.h"
 #include "web_ui.h"
 #include "history.h"
@@ -71,6 +73,7 @@ static uint64_t s_config_generation;
 typedef struct {
     char message[160];
     uint64_t queued_ms;
+    uint32_t destination;
 } operational_event_t;
 
 /* Task-only text. Keep the queue in PSRAM and send at most one at a time. */
@@ -79,7 +82,11 @@ static unsigned s_operational_head;
 static unsigned s_operational_count;
 static unsigned s_operational_attempts;
 static uint64_t s_operational_retry_ms;
-static uint64_t s_operational_generation;
+static uint32_t s_operational_generation = 1;
+static remote_command_gate_t s_command_gate;
+static time_t s_command_floor;
+static char s_priming_cursor[48];
+static bool s_priming_legacy;
 
 static void operational_pop(bool dropped)
 {
@@ -97,21 +104,20 @@ static void operational_expire(uint64_t now)
         operational_pop(true);
 }
 
-bool ntfy_integration_queue_event(const char *message)
+static bool queue_operational(uint32_t destination, const char *message)
 {
-    /* History forwards independently to the enabled Telegram/email channels. */
-    if (message) history_event(HIST_EV_SERVICE, HIST_INFO, "%s", message);
     if (!s_lock || !message || !message[0] || strlen(message) >= sizeof s_operational[0].message)
         return false;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool accepted = false;
-    if (s_config.enabled) {
+    if (s_config.enabled && (!destination || destination == remote_command_ticket(&s_command_gate))) {
         uint64_t now = (uint64_t)esp_timer_get_time() / 1000;
         /* Only the worker may evict the head while a send can be in flight. */
         if (s_operational_count < NTFY_OPERATIONAL_CAPACITY) {
             unsigned tail = (s_operational_head + s_operational_count) % NTFY_OPERATIONAL_CAPACITY;
             strlcpy(s_operational[tail].message, message, sizeof s_operational[tail].message);
             s_operational[tail].queued_ms = now;
+            s_operational[tail].destination = destination;
             ++s_operational_count;
             accepted = true;
         } else {
@@ -122,8 +128,34 @@ bool ntfy_integration_queue_event(const char *message)
     return accepted;
 }
 
+bool ntfy_integration_queue_event(const char *message)
+{
+    /* History forwards independently to the enabled Telegram/email channels. */
+    if (message) history_event(HIST_EV_SERVICE, HIST_INFO, "%s", message);
+    return queue_operational(0, message);
+}
+
+bool ntfy_integration_queue_reply(uint32_t destination, const char *message)
+{
+    return destination && queue_operational(destination, message);
+}
+
+bool remote_command_active(ops_recovery_origin_t origin, uint32_t destination)
+{
+    if (origin == OPS_RECOVERY_TELEGRAM) return notify_telegram_command_active(destination);
+    if (origin == OPS_RECOVERY_NTFY) return destination && destination == remote_command_ticket(&s_command_gate);
+    return destination == 0 && (origin == OPS_RECOVERY_LOCAL || origin == OPS_RECOVERY_MQTT);
+}
+
+bool remote_command_reply(ops_recovery_origin_t origin, uint32_t destination, const char *message)
+{
+    if (origin == OPS_RECOVERY_TELEGRAM) return notify_telegram_queue_reply(destination, message);
+    if (origin == OPS_RECOVERY_NTFY) return ntfy_integration_queue_reply(destination, message);
+    return false;
+}
+
 /* TLS certificate verification needs its own stack reserve. Keep the large
- * reporting/polling frames out of task_main: GCC otherwise inlines them and
+ * reporting/polling frames out of ntfy_task_main: GCC otherwise inlines them and
  * permanently reserves their buffers even on a simple command poll. */
 #define NTFY_TASK_STACK_BYTES 12288
 #define NTFY_NOINLINE __attribute__((noinline))
@@ -535,7 +567,7 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
     return text;
 }
 
-static NTFY_NOINLINE esp_err_t send_info(const ntfy_integration_config_t *c)
+static NTFY_NOINLINE esp_err_t send_info(const ntfy_integration_config_t *c, uint32_t destination)
 {
     char *text = remote_info_text(c->info_include_details, c->poweron_events);
     if (!text) return ESP_ERR_NO_MEM;
@@ -545,6 +577,10 @@ static NTFY_NOINLINE esp_err_t send_info(const ntfy_integration_config_t *c)
     unsigned part = 1, parts = (unsigned)((length + 3499) / 3500);
     esp_err_t result = ESP_OK;
     while (offset < length) {
+        if (!remote_command_active(OPS_RECOVERY_NTFY, destination)) {
+            result = ESP_ERR_INVALID_STATE;
+            break;
+        }
         size_t take = length - offset > 3500 ? 3500 : length - offset;
         char saved = text[offset + take]; text[offset + take] = '\0';
         char title[64];
@@ -558,27 +594,60 @@ static NTFY_NOINLINE esp_err_t send_info(const ntfy_integration_config_t *c)
     return result;
 }
 
-static esp_err_t wake_argument(bool allow_direct_mac, const char *argument)
+static esp_err_t named_wol_device(const char *name, wol_device_t *device)
 {
-    while (*argument == ' ') argument++;
+    bool found = false;
     for (int i = 0; i < wol_count(); i++) {
         wol_device_t d;
-        if (wol_get(i, &d) && d.name[0] && strcasecmp(d.name, argument) == 0)
-            return wol_send_index(i);
+        if (!wol_get(i, &d) || !d.name[0] || strcasecmp(d.name, name)) continue;
+        if (found) return ESP_ERR_INVALID_SIZE;
+        *device = d;
+        found = true;
     }
+    return found ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t wake_argument(bool allow_direct_mac, const char *argument)
+{
+    wol_device_t device;
+    esp_err_t found = named_wol_device(argument, &device);
+    if (found == ESP_OK) return wol_send_mac(device.mac, device.broadcast, device.port);
+    if (found != ESP_ERR_NOT_FOUND) return found;
     uint8_t mac[6];
     if (!wol_parse_mac(argument, mac)) return ESP_ERR_NOT_FOUND;
-    if (wol_send_saved_mac_text(argument) == ESP_OK) return ESP_OK;
+    esp_err_t err = wol_send_saved_mac_text(argument);
+    if (err != ESP_ERR_NOT_FOUND) return err;
     return allow_direct_mac ? wol_send_mac(mac, NULL, 9) : ESP_ERR_INVALID_STATE;
 }
 
 /* One remote command, shared by ntfy and Telegram (remote_commands.h). */
-remote_cmd_kind_t remote_command_run(const char *message, bool info_enabled, bool allow_direct_mac,
-                                     ops_recovery_origin_t origin, char *reply, size_t cap, const char **title)
+static const char *remote_error(esp_err_t err, bool probe)
 {
-    if (reply && cap) reply[0] = '\0';
-    if (title) *title = NULL;
+    switch (err) {
+        case ESP_ERR_NOT_SUPPORTED: return "This channel is set to basic commands. In Automation, enable verified recovery for this channel.";
+        case ESP_ERR_NOT_FOUND: return probe ? "Saved TCP check not found. Send checks for the names." :
+                                             "Saved device not found. Send devices for the names.";
+        case ESP_ERR_INVALID_ARG: return probe ? "Enter the name of a saved TCP check." :
+                                               "Set a verification address and enough attempts in Devices & Recovery.";
+        case ESP_ERR_INVALID_SIZE: return "More than one device has this name. Use the saved MAC address or give each device a unique name.";
+        case ESP_ERR_TIMEOUT: return probe ? "A TCP check ran recently. Try again in a few seconds." :
+                                             "This device was checked recently. Wait a minute and try again.";
+        case ESP_ERR_INVALID_STATE: return "Another operation is running or delivering its result. Try again shortly.";
+        case ESP_ERR_NOT_ALLOWED:
+        case ESP_ERR_NO_MEM: return "The gateway is low on resources. Try again after traffic settles.";
+        default: return "The operation could not start. Check the gateway diagnostics.";
+    }
+}
+
+remote_cmd_kind_t remote_command_run(const char *message, bool info_enabled, bool allow_direct_mac,
+                                     ops_recovery_origin_t origin, uint32_t destination,
+                                     char *reply, size_t cap, const char **title)
+{
+    reply[0] = '\0';
+    *title = NULL;
+    if (!remote_command_active(origin, destination)) return REMOTE_CMD_NONE;
     while (*message && isspace((unsigned char)*message)) message++;
+    if (*message == '/') message++;
     /* Mobile clients often append a newline. Trim edges without changing
      * spaces within a saved WOL device name; reject oversized commands. */
     size_t length = strlen(message);
@@ -587,58 +656,109 @@ remote_cmd_kind_t remote_command_run(const char *message, bool info_enabled, boo
     if (!length || length >= sizeof command) return REMOTE_CMD_NONE;
     memcpy(command, message, length);
     command[length] = '\0';
-    message = command;
-    if (strcasecmp(message, "info") == 0) return info_enabled ? REMOTE_CMD_INFO : REMOTE_CMD_ERROR;
-    esp_err_t err = ESP_ERR_INVALID_ARG;
-    if (!strcasecmp(message,"checks") || !strncasecmp(message,"probe ",6)) {
-        bool list=!strcasecmp(message,"checks");
-        if (title) *title="ESP32 TCP checks";
-        if (!homelab_ops_recovery_allowed(origin)) {
-            if (reply) strlcpy(reply,"Enable verified recovery to use saved TCP checks.",cap);
-            return REMOTE_CMD_ERROR;
-        }
-        if (list) {
-            saved_tcp_summary(reply,cap);
-            return REMOTE_CMD_OK;
-        }
-        err=saved_tcp_request(message+6,origin);
-        if (reply) strlcpy(reply,err==ESP_OK?"TCP check queued. The result will follow.":
-                           err==ESP_ERR_NOT_FOUND?"No saved TCP check with that name.":
-                           "TCP check busy or unavailable. Try again shortly.",cap);
-        return err==ESP_OK ? REMOTE_CMD_OK : REMOTE_CMD_ERROR;
+    char *argument = command;
+    while (*argument && !isspace((unsigned char)*argument)) argument++;
+    if (*argument) *argument++ = '\0';
+    while (isspace((unsigned char)*argument)) argument++;
+    const bool help = !strcasecmp(command, "help") || !strcasecmp(command, "start");
+    const bool info = !strcasecmp(command, "info") || !strcasecmp(command, "status");
+    const bool devices = !strcasecmp(command, "devices");
+    const bool wol = !strcasecmp(command, "wol");
+    const bool recover = !strcasecmp(command, "recover");
+    const bool check = !strcasecmp(command, "check");
+    const bool probe = !strcasecmp(command, "probe");
+    const bool checks = !strcasecmp(command, "checks");
+    if (!(help || info || devices || wol || recover || check || probe || checks)) return REMOTE_CMD_NONE;
+    *title = "ESP32 command response";
+    const bool has_target = wol || recover || check || probe;
+    if (has_target == (*argument == '\0')) {
+        snprintf(reply, cap, "Usage: %s%s. Send help for examples.", command, has_target ? " NAME" : "");
+        return REMOTE_CMD_ERROR;
     }
-    if (strncasecmp(message,"recover ",8)==0 || strncasecmp(message,"check ",6)==0) {
-        bool wake=strncasecmp(message,"recover ",8)==0;
-        const char *selector=message+(wake?8:6);uint8_t mac[6];
-        if(wol_parse_mac(selector,mac))err=homelab_ops_command(selector,wake,origin);
-        else for(int i=0;i<wol_count();i++){
-            wol_device_t d;if(wol_get(i,&d)&&d.name[0]&&!strcasecmp(selector,d.name)){
-                char address[18];wol_format_mac(d.mac,address);err=homelab_ops_command(address,wake,origin);break;
-            }
-        }
-        if (title) *title = "ESP32 recovery response";
-        if (reply) strlcpy(reply, err==ESP_OK?"Recovery/check accepted; completion must be verified in Devices & Recovery.":"Recovery/check rejected; verify target, remote-command permission, cooldown and resources.", cap);
-    } else if (strncasecmp(message, "wol ", 4) == 0) {
-        err = wake_argument(allow_direct_mac, message + 4);
-        if (title) *title = "ESP32 WOL response";
-        if (reply) snprintf(reply, cap, "WOL %s: %s", message + 4,
-                            err == ESP_OK ? "packet sent" : esp_err_to_name(err));
+    if (help) {
+        *title = "ESP32 command guide";
+        snprintf(reply, cap,
+            "RecoveryGateway commands\n\n"
+            "help — show this guide\n"
+            "devices — saved devices and last known results\n"
+            "wol NAS — send a Wake-on-LAN packet\n"
+            "%s%s\nReplace NAS and PRINTER with your saved names. Names can contain spaces.",
+            info_enabled ? "info (or status) — gateway status\n" : "",
+            homelab_ops_recovery_allowed(origin) ?
+            "\nVerified recovery and checks\n"
+            "recover NAS — wake if needed and verify online status\n"
+            "check NAS — verify without waking\n"
+            "probe PRINTER — test a saved TCP service\n"
+            "checks — saved TCP services and last results\n" :
+            "\nEnable verified recovery for this channel in Automation to use recover, check, probe and checks.\n");
+        return REMOTE_CMD_HELP;
+    }
+    if (info) {
+        if (info_enabled) return REMOTE_CMD_INFO;
+        strlcpy(reply, "The info command is disabled for this channel. Use help for available commands.", cap);
+        return REMOTE_CMD_ERROR;
+    }
+    if (devices) {
+        *title = "ESP32 saved devices";
+        homelab_ops_device_summary(reply, cap);
+        return REMOTE_CMD_OK;
+    }
+    if (wol) {
+        if (!remote_command_active(origin, destination)) return REMOTE_CMD_NONE;
+        *title = "ESP32 Wake-on-LAN";
+        esp_err_t err = wake_argument(allow_direct_mac, argument);
+        if (err == ESP_OK) snprintf(reply, cap, "Wake packet sent for %s.%s", argument,
+            homelab_ops_recovery_allowed(origin) ? " Use recover to verify the device comes online." : "");
+        else strlcpy(reply, err == ESP_ERR_INVALID_STATE ?
+            "Wake failed. Check the uplink and whether this channel allows unsaved MAC addresses." :
+            err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_SIZE ? remote_error(err, false) :
+            "The wake packet could not be sent. Check the uplink.", cap);
+        return err == ESP_OK ? REMOTE_CMD_OK : REMOTE_CMD_ERROR;
+    }
+    if (!homelab_ops_recovery_allowed(origin)) {
+        strlcpy(reply, remote_error(ESP_ERR_NOT_SUPPORTED, probe), cap);
+        return REMOTE_CMD_ERROR;
+    }
+    if (checks) {
+        *title = "ESP32 TCP checks";
+        saved_tcp_summary(reply, cap);
+        return REMOTE_CMD_OK;
+    }
+    esp_err_t err = ESP_ERR_NOT_FOUND;
+    if (probe) {
+        err = saved_tcp_remote_request(argument, origin, destination);
     } else {
-        return REMOTE_CMD_NONE;
+        uint8_t mac[6];
+        if (wol_parse_mac(argument, mac)) {
+            err = homelab_ops_remote_request(mac, recover, origin, destination);
+        } else {
+            wol_device_t device;
+            err = named_wol_device(argument, &device);
+            if (err == ESP_OK) err = homelab_ops_remote_request(device.mac, recover, origin, destination);
+        }
     }
+    if (err == ESP_OK) snprintf(reply, cap, "%s queued for %s. The result will follow here.",
+                               probe ? "TCP check" : recover ? "Recovery" : "Reachability check", argument);
+    else strlcpy(reply, remote_error(err, probe), cap);
     return err == ESP_OK ? REMOTE_CMD_OK : REMOTE_CMD_ERROR;
 }
 
-static NTFY_NOINLINE void handle_command(const ntfy_integration_config_t *c, const char *message)
+static NTFY_NOINLINE void handle_command(const ntfy_integration_config_t *c, uint32_t destination, const char *message)
 {
-    char reply[160];
-    const char *title = NULL;
-    remote_cmd_kind_t kind = remote_command_run(message, c->info_enabled, c->allow_direct_mac,
-                                                OPS_RECOVERY_NTFY, reply, sizeof reply, &title);
-    if (kind == REMOTE_CMD_NONE) return;
-    esp_err_t err = kind == REMOTE_CMD_OK ? ESP_OK : ESP_FAIL;
-    if (kind == REMOTE_CMD_INFO) err = send_info(c);
-    else if (reply[0] && title) (void)publish_message(c, title, "mattboxx-response", reply);
+    if (!remote_command_active(OPS_RECOVERY_NTFY, destination)) return;
+    char *reply = heap_caps_malloc(REMOTE_REPLY_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    esp_err_t err = ESP_ERR_NO_MEM;
+    if (reply) {
+        const char *title = NULL;
+        remote_cmd_kind_t kind = remote_command_run(message, c->info_enabled, c->allow_direct_mac,
+                                                    OPS_RECOVERY_NTFY, destination, reply, REMOTE_REPLY_MAX, &title);
+        err = kind == REMOTE_CMD_ERROR ? ESP_FAIL : ESP_OK;
+        if (kind == REMOTE_CMD_INFO) err = send_info(c, destination);
+        else if (reply[0] && title && remote_command_active(OPS_RECOVERY_NTFY, destination) &&
+                 publish_message(c, title, "mattboxx-response", reply) != ESP_OK) err = ESP_FAIL;
+        free(reply);
+        if (kind == REMOTE_CMD_NONE) return;
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (err == ESP_OK) s_status.commands_received++;
     else s_status.command_errors++;
@@ -664,12 +784,13 @@ static void collect_bytes(command_batch_t *batch, const char *bytes, size_t leng
 }
 
 static NTFY_NOINLINE esp_err_t read_command_batch(esp_http_client_handle_t client,
-                                                command_batch_t *batch)
+                                                command_batch_t *batch, int *status)
 {
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) return err;
-    if (esp_http_client_fetch_headers(client) < 0 ||
-        esp_http_client_get_status_code(client) != 200) return ESP_FAIL;
+    if (esp_http_client_fetch_headers(client) < 0) return ESP_FAIL;
+    *status = esp_http_client_get_status_code(client);
+    if (*status != 200) return ESP_FAIL;
     int64_t deadline = esp_timer_get_time() + 30000000;
     while (batch->count < NTFY_POLL_BATCH) {
         if (esp_timer_get_time() >= deadline) return ESP_ERR_TIMEOUT;
@@ -708,7 +829,7 @@ static bool poll_current_locked(const ntfy_integration_config_t *c, uint64_t gen
     return generation == s_config_generation && config_equal(c, &s_config) &&
            c->enabled && c->commands_enabled &&
            (!c->commands_only_when_tailscale_down ||
-            (tailscale_enabled && !tailscale_is_connected()));
+            !tailscale_enabled || !tailscale_is_connected());
 }
 
 static NTFY_NOINLINE bool poll_commands(const ntfy_integration_config_t *c)
@@ -718,16 +839,21 @@ static NTFY_NOINLINE bool poll_commands(const ntfy_integration_config_t *c)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     uint64_t generation = s_config_generation;
     if (!poll_current_locked(c, generation)) { xSemaphoreGive(s_lock); return false; }
-    strlcpy(cursor, s_last_event_id, sizeof cursor);
+    uint32_t destination = remote_command_ticket(&s_command_gate);
+    time_t floor = s_command_floor;
+    bool priming = !s_last_event_id[0] && !floor;
+    bool legacy = s_priming_legacy;
+    strlcpy(cursor, priming ? s_priming_cursor : s_last_event_id, sizeof cursor);
     xSemaphoreGive(s_lock);
+    if (!destination) return false;
 
-    /* The old fixed `since=10s` window was shorter than the default
-     * 15-second polling interval.  Commands landing in that gap were lost
-     * forever.  Cover one complete interval plus network/TLS scheduling
-     * jitter until ntfy gives us a durable message-id cursor. */
+    /* A reset cursor means command permissions or the endpoint changed.
+     * Observe the latest cached ID without dispatching it. */
+    time_t checked_at = priming ? time(NULL) : 0;
     char since[48];
     if (cursor[0]) strlcpy(since, cursor, sizeof since);
-    else snprintf(since, sizeof since, "%us", (unsigned)c->poll_interval_seconds + 30U);
+    else if (priming) strlcpy(since, legacy ? "all" : "latest", sizeof since);
+    else snprintf(since, sizeof since, "%lld", (long long)floor);
     char suffix[96];
     snprintf(suffix, sizeof suffix, "/json?poll=1&since=%s", since);
     /* Fixed heap batch, allocation-free JSON projection. Neither total
@@ -741,19 +867,51 @@ static NTFY_NOINLINE bool poll_commands(const ntfy_integration_config_t *c)
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) { free(batch); return false; }
     esp_err_t err = set_auth(client, c);
-    if (err == ESP_OK) err = read_command_batch(client, batch);
-    int status = err == ESP_OK ? esp_http_client_get_status_code(client) : 0;
+    int status = 0;
+    if (err == ESP_OK) err = read_command_batch(client, batch, &status);
     esp_http_client_cleanup(client);
+    if (status == 400 && priming && !cursor[0] && !legacy) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        bool current = poll_current_locked(c, generation) && destination == remote_command_ticket(&s_command_gate);
+        if (current) s_priming_legacy = true;
+        xSemaphoreGive(s_lock);
+        free(batch);
+        return current;
+    }
     if (err != ESP_OK || status != 200) {
         ESP_LOGW(TAG, "command poll failed: %s HTTP %d", esp_err_to_name(err), status);
         free(batch);
         return false;
     }
+    if (priming) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        bool current = poll_current_locked(c, generation) && destination == remote_command_ticket(&s_command_gate);
+        bool armed = false;
+        if (current && (batch->count || cursor[0])) {
+            const char *last = batch->count ? batch->events[batch->count - 1].id : cursor;
+            if (batch->count == NTFY_POLL_BATCH) {
+                /* Older servers may replay multiple results. Retain progress
+                 * in RAM until reaching the end, with dispatch still off. */
+                armed = strcmp(last, cursor) != 0;
+                if (armed) strlcpy(s_priming_cursor, last, sizeof s_priming_cursor);
+            } else {
+                armed = save_state(c, last) == ESP_OK;
+                if (armed) strlcpy(s_last_event_id, last, sizeof s_last_event_id);
+            }
+        } else if (current && !batch->count && checked_at >= 1704067200) {
+            /* Keep a stable lower bound until the first durable ID. */
+            s_command_floor = checked_at;
+            armed = true;
+        }
+        xSemaphoreGive(s_lock);
+        free(batch);
+        return armed;
+    }
     bool completed = true;
     for (size_t i = 0; i < batch->count; ++i) {
             const ntfy_json_event_t *event = &batch->events[i];
             xSemaphoreTake(s_lock, portMAX_DELAY);
-            if (!poll_current_locked(c, generation)) {
+            if (!poll_current_locked(c, generation) || destination != remote_command_ticket(&s_command_gate)) {
                 xSemaphoreGive(s_lock); completed = false; break;
             }
             bool duplicate = strcmp(s_last_event_id, event->id) == 0;
@@ -771,7 +929,7 @@ static NTFY_NOINLINE bool poll_commands(const ntfy_integration_config_t *c)
             }
             if (!duplicate && event->has_message && !event->message_too_long &&
                 strncmp(event->title, "ESP32 ", 6) != 0)
-                handle_command(c, event->message);
+                handle_command(c, destination, event->message);
     }
     free(batch);
     return completed;
@@ -798,7 +956,7 @@ static NTFY_NOINLINE esp_err_t send_tailscale_alert(const ntfy_integration_confi
     return err;
 }
 
-/* Kept out of task_main's frame: the OTA state copy is several hundred bytes. */
+/* Kept out of ntfy_task_main's frame: the OTA state copy is several hundred bytes. */
 static NTFY_NOINLINE uint32_t available_update_id(void)
 {
     ota_remote_state_t update;
@@ -842,7 +1000,10 @@ static NTFY_NOINLINE void operational_tick(const ntfy_integration_config_t *c,
     xSemaphoreTake(s_lock, portMAX_DELAY);
     uint64_t now = (uint64_t)esp_timer_get_time() / 1000;
     operational_expire(now);
-    uint64_t queue_generation = s_operational_generation;
+    while (s_operational_count && s_operational[s_operational_head].destination &&
+           !remote_command_active(OPS_RECOVERY_NTFY, s_operational[s_operational_head].destination))
+        operational_pop(true);
+    uint32_t queue_generation = s_operational_generation;
     bool due = online && generation == s_config_generation && s_operational_count &&
                now >= s_operational_retry_ms;
     if (due) memcpy(message, s_operational[s_operational_head].message, sizeof message);
@@ -861,7 +1022,7 @@ static NTFY_NOINLINE void operational_tick(const ntfy_integration_config_t *c,
     xSemaphoreGive(s_lock);
 }
 
-static void task_main(void *arg)
+static void ntfy_task_main(void *arg)
 {
     (void)arg;
     uint32_t down_seconds = 0, retry_seconds = 0;
@@ -904,7 +1065,7 @@ static void task_main(void *arg)
             if (!alerted) retry_seconds = 60;
         }
         bool can_poll = c.commands_enabled
-                     && (!c.commands_only_when_tailscale_down || ts_down);
+                     && (!c.commands_only_when_tailscale_down || !tailscale_enabled || ts_down);
         /* Arm immediately after enabling commands (or after the
          * Tailscale-down condition becomes true) instead of waiting one
          * complete poll interval before establishing the server cursor. */
@@ -939,7 +1100,9 @@ void ntfy_integration_init(void)
         ntfy_events_decode(system_events, &other, &poweron);
         s_config.system_events = other; s_config.poweron_events = poweron;
     }
-    if (xTaskCreate(task_main, "ntfy", NTFY_TASK_STACK_BYTES, NULL, 3, &s_task) != pdPASS) {
+    remote_command_gate_reset(&s_command_gate, s_config.enabled && s_config.commands_enabled);
+    if (xTaskCreate(ntfy_task_main, "ntfy", NTFY_TASK_STACK_BYTES, NULL, 3, &s_task) != pdPASS) {
+        remote_command_gate_reset(&s_command_gate, false);
         s_task = NULL;
         ESP_LOGE(TAG, "Cannot allocate ntfy worker stack");
     }
@@ -972,8 +1135,12 @@ esp_err_t ntfy_integration_set_config_recovery(const ntfy_integration_config_t *
     esp_err_t e=nvs_param_txn_begin();
     if(e!=ESP_OK)return e;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool endpoint_changed = strcmp(s_config.server, c->server) != 0
-                         || strcmp(s_config.topic, c->topic) != 0;
+    bool command_change = !operational_destination_equal(&s_config, c) ||
+        s_config.commands_enabled != c->commands_enabled ||
+        s_config.commands_only_when_tailscale_down != c->commands_only_when_tailscale_down ||
+        s_config.allow_direct_mac != c->allow_direct_mac || s_config.info_enabled != c->info_enabled ||
+        s_config.info_include_details != c->info_include_details ||
+        (recovery >= 0 && ((recovery != 0) != homelab_ops_recovery_allowed(OPS_RECOVERY_NTFY)));
     /* Separate key keeps the main record compatible on rollback. */
     /* 0=neither, 1=both (legacy system-events), 2=power only, 3=other only.
      * Old firmware still accepts its core record; 2/3 require reselecting the
@@ -983,19 +1150,26 @@ esp_err_t ntfy_integration_set_config_recovery(const ntfy_integration_config_t *
     bool events_changed = flags != old_flags;
     uint8_t staged=0;
     if(events_changed)e=nvs_param_set_u8("ntfy_sysev",flags);
-    if(e==ESP_OK)e=save_state(c,endpoint_changed ? "" : s_last_event_id);
+    if(e==ESP_OK)e=save_state(c,command_change ? "" : s_last_event_id);
     if(e==ESP_OK)e=homelab_ops_stage_recovery(OPS_RECOVERY_NTFY,recovery,&staged);
     esp_err_t end=nvs_param_txn_end(e==ESP_OK);
     if(e==ESP_OK)e=end;
     if (e == ESP_OK) {
+        if (command_change) remote_command_gate_reset(&s_command_gate, false);
         if (!operational_destination_equal(&s_config, c)) {
-            s_operational_generation++;
+            if (++s_operational_generation == 0) ++s_operational_generation;
             while (s_operational_count) operational_pop(true);
         }
         memcpy(&s_config, c, sizeof *c);
         homelab_ops_publish_recovery(staged);
         s_config_generation++;
-        if (endpoint_changed) s_last_event_id[0] = '\0';
+        if (command_change) {
+            s_last_event_id[0] = '\0';
+            s_command_floor = 0;
+            s_priming_cursor[0] = '\0';
+            s_priming_legacy = false;
+            remote_command_gate_reset(&s_command_gate, c->enabled && c->commands_enabled);
+        }
     }
     xSemaphoreGive(s_lock);
     return e;

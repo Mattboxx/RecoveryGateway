@@ -31,6 +31,7 @@ typedef struct {
     bool worker_running;
 } ops_resources_t;
 void homelab_ops_init(void);
+void homelab_ops_retry_worker(void);
 esp_err_t homelab_ops_start_optional_worker(void);
 void homelab_ops_resources(ops_resources_t *out);
 bool homelab_ops_admit(void);
@@ -41,12 +42,17 @@ bool homelab_ops_device(int index,ops_device_t *out);
 esp_err_t homelab_ops_set_device(int index,const ops_device_t *profile);
 void homelab_ops_settings(ops_settings_t *out);
 esp_err_t homelab_ops_set_settings(const ops_settings_t *settings);
+/* For the profile HTTP handler, serialized with other registry writers. */
+esp_err_t homelab_ops_stage_settings(const ops_settings_t *settings);
+void homelab_ops_publish_settings(const ops_settings_t *settings);
 esp_err_t homelab_ops_request(int index,bool wake,ops_recovery_origin_t origin);
 esp_err_t homelab_ops_cancel(void);
 /* Coalesced closure event: no names/addresses/credentials; no packet-path I/O. */
 void homelab_ops_service_closed(unsigned count);
 /* MAC-address selectors prevent a reordered address book retargeting a command. */
 esp_err_t homelab_ops_command(const char *selector,bool wake,ops_recovery_origin_t origin);
+esp_err_t homelab_ops_remote_request(const uint8_t mac[6], bool wake, ops_recovery_origin_t origin, uint32_t destination);
+void homelab_ops_device_summary(char *out, size_t cap);
 /* The legacy shared permission is used until the first channel-specific save. */
 bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin);
 /* Stage inside the integration's settings transaction, publish after commit.

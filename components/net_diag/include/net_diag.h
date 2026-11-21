@@ -1,6 +1,6 @@
 /* Synchronous ICMP echo / traceroute helper for the /diag GUI page.
  *
- * Single-shot blocking calls suited for HTTP request handlers: returns the
+ * Single-shot blocking calls for worker tasks: returns the
  * full output as plain-text lines into the caller-supplied buffer.
  *
  * SPDX-License-Identifier: MIT

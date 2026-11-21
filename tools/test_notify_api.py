@@ -28,6 +28,7 @@ static int nvs_param_txn_end(bool keep){(void)keep;return ESP_OK;}
 #define MALLOC_CAP_SPIRAM 0
 typedef struct {const char *body;int content_len,offset,status;bool authorized;} httpd_req_t;
 static notify_config_t s_cfg;
+static remote_command_gate_t s_tg_command_gate;
 static uint8_t s_mail_level, s_startup_channels;
 static uint16_t s_link_grace_s=60, persisted_grace;
 static int timing_error;

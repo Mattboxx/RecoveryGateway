@@ -38,6 +38,8 @@
 /* Ten releases with notes measured 186 KB (2026-10-25): keep room to grow. */
 #define JSON_LIMIT (512U * 1024U)
 #define DAILY_US (24LL * 3600 * 1000000)
+#define POLL_RETRY_FIRST_US (300LL * 1000000)
+#define POLL_RETRY_MAX_US (3600LL * 1000000)
 #define WORKER_STACK 16384
 #define OTA_NOINLINE __attribute__((noinline))
 static StaticSemaphore_t s_lock_storage;
@@ -336,9 +338,20 @@ done:
     if (client) esp_http_client_cleanup(client);
     mbedtls_md_free(&hash); free(b.location); free(buffer);
     if (success) {
-        status_set("Installed; restarting");
-        history_event(HIST_EV_UPDATE, HIST_INFO, "Installed %s from GitHub; restarting", state.latest_version);
-        vTaskDelay(pdMS_TO_TICKS(2000)); ota_flash_restart();
+        /* Keep writer ownership until reboot so another upload cannot replace
+         * the selected boot image. Scheduled work must also leave this state intact. */
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_state.restart_pending = true;
+        s_state.update_available = false;
+        s_state.progress = 100;
+        strlcpy(s_state.status, "Installed; restart pending", sizeof s_state.status);
+        xSemaphoreGive(s_lock);
+        history_event(HIST_EV_UPDATE, HIST_INFO, "Installed %s from GitHub", state.latest_version);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (ota_flash_restart() != ESP_OK) ESP_LOGE("ota_fork", "Could not restart after GitHub update");
+        /* esp_restart does not return. An authenticated manual restart is
+         * still available if dispatch fails. */
+        status_set("Installed; use Restart to apply");
     } else {
         /* A failed dispatch/abort must not admit another writer over a still
          * active SDK transaction. Keep exclusion until an explicit restart. */
@@ -350,54 +363,85 @@ done:
     return success;
 }
 
+typedef struct {
+    int64_t next_poll;
+    int64_t retry_us;
+    int64_t last_install;
+} ota_schedule_t;
+
+static bool scheduled_check(ota_schedule_t *schedule)
+{
+    bool ok = check_release();
+    if (ok) schedule->retry_us = 0;
+    else if (!schedule->retry_us) schedule->retry_us = POLL_RETRY_FIRST_US;
+    else {
+        schedule->retry_us *= 2;
+        if (schedule->retry_us > POLL_RETRY_MAX_US) schedule->retry_us = POLL_RETRY_MAX_US;
+    }
+    schedule->next_poll = esp_timer_get_time() + (ok ? DAILY_US : schedule->retry_us);
+    return ok;
+}
+
+static bool auto_install_due(const ota_remote_state_t *state, int64_t last_install, int64_t now)
+{
+    if (!state->config.enabled || !state->config.auto_install || !state->checked ||
+        !state->update_available || (last_install && now - last_install < 3600LL * 1000000))
+        return false;
+    if (state->config.install_hour < 0) return true;
+    time_t epoch = time(NULL);
+    struct tm local;
+    return epoch > 1700000000 && localtime_r(&epoch, &local) && local.tm_hour == state->config.install_hour;
+}
+
+static void worker_step(ota_schedule_t *schedule, uint32_t bits)
+{
+    if (bits & CONFIG_BIT) schedule->next_poll = schedule->retry_us = 0;
+    int64_t now = esp_timer_get_time();
+    bool requested = (bits & (CHECK_BIT | INSTALL_BIT)) != 0;
+    /* Reserve background work atomically with config/HTTP requests. */
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool due = s_state.config.enabled && now >= schedule->next_poll;
+    bool automatic = auto_install_due(&s_state, schedule->last_install, now);
+    if (s_state.restart_pending || (!requested && (s_state.busy || (!due && !automatic)))) {
+        xSemaphoreGive(s_lock);
+        return;
+    }
+    s_state.busy = true;
+    s_state.progress = 0;
+    xSemaphoreGive(s_lock);
+
+    if (!uplink_internet_ready()) status_set("Waiting for an uplink");
+    else {
+        bool attempted = requested || due;
+        bool checked = attempted && scheduled_check(schedule);
+        ota_remote_state_t state;
+        ota_remote_get_state(&state);
+        automatic = auto_install_due(&state, schedule->last_install, now);
+        if (((bits & INSTALL_BIT) && checked && state.update_available) || automatic) {
+            /* Revalidate cached candidates when a delayed install comes due. */
+            bool fresh = checked || (!attempted && scheduled_check(schedule));
+            if (fresh) {
+                ota_remote_get_state(&state);
+                if (state.update_available) {
+                    (void)install_release();
+                    schedule->last_install = esp_timer_get_time();
+                }
+            }
+        }
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_state.busy = false;
+    xSemaphoreGive(s_lock);
+}
+
 static void worker(void *unused)
 {
     (void)unused;
-    int64_t last_poll = 0, last_install = 0;
+    ota_schedule_t schedule = {0};
     for (;;) {
         uint32_t bits = 0;
-        xTaskNotifyWait(0, UINT32_MAX, &bits, pdMS_TO_TICKS(last_poll ? 60000 : 20000));
-        if (bits & CONFIG_BIT) last_poll = 0;
-        ota_remote_state_t state; ota_remote_get_state(&state);
-        int64_t now = esp_timer_get_time();
-        bool requested = (bits & (CHECK_BIT | INSTALL_BIT)) != 0;
-        bool due = state.config.enabled && (!last_poll || now - last_poll >= DAILY_US);
-        /* Reserve background work atomically with config/HTTP requests.
-         * An idle iteration must never clear another request's reservation. */
-        xSemaphoreTake(s_lock, portMAX_DELAY);
-        if (!requested && s_state.busy) { xSemaphoreGive(s_lock); continue; }
-        state = s_state;
-        due = state.config.enabled && (!last_poll || now - last_poll >= DAILY_US);
-        bool pending_auto = state.config.enabled && state.config.auto_install && state.checked && state.update_available &&
-                            (!last_install || now - last_install >= 3600LL * 1000000);
-        if (!requested && !due && !pending_auto) { xSemaphoreGive(s_lock); continue; }
-        s_state.busy = true;
-        xSemaphoreGive(s_lock);
-        if (!uplink_internet_ready()) {
-            status_set("Waiting for an uplink");
-            xSemaphoreTake(s_lock, portMAX_DELAY); s_state.busy = false; xSemaphoreGive(s_lock);
-            continue;
-        }
-        bool checked = false;
-        if (requested || due) {
-            xSemaphoreTake(s_lock, portMAX_DELAY); s_state.busy = true; s_state.progress = 0; xSemaphoreGive(s_lock);
-            checked = check_release();
-            last_poll = now; /* failed polls do not hammer GitHub */
-        }
-        ota_remote_get_state(&state);
-        bool automatic = state.config.enabled && state.config.auto_install && state.checked && state.update_available &&
-                         (!last_install || now - last_install >= 3600LL * 1000000);
-        if (automatic && state.config.install_hour >= 0) {
-            time_t epoch = time(NULL); struct tm local;
-            automatic = epoch > 1700000000 && localtime_r(&epoch, &local) && local.tm_hour == state.config.install_hour;
-        }
-        if (((bits & INSTALL_BIT) && checked && state.update_available) || automatic) {
-            xSemaphoreTake(s_lock, portMAX_DELAY); s_state.busy = true; s_state.progress = 0; xSemaphoreGive(s_lock);
-            /* Automatic delayed/retry installs refresh metadata too. */
-            if (checked || check_release()) (void)install_release();
-            last_install = now;
-        }
-        xSemaphoreTake(s_lock, portMAX_DELAY); s_state.busy = false; xSemaphoreGive(s_lock);
+        xTaskNotifyWait(0, UINT32_MAX, &bits, pdMS_TO_TICKS(schedule.next_poll ? 60000 : 20000));
+        worker_step(&schedule, bits);
     }
 }
 
@@ -414,7 +458,7 @@ esp_err_t ota_remote_set_config(const ota_remote_config_t *config)
     if (!config || config->install_hour < -1 || config->install_hour > 23 ||
         (config->auto_install && !config->enabled)) return ESP_ERR_INVALID_ARG;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (s_state.busy) { xSemaphoreGive(s_lock); return ESP_ERR_INVALID_STATE; }
+    if (s_state.busy || s_state.restart_pending) { xSemaphoreGive(s_lock); return ESP_ERR_INVALID_STATE; }
     if (config->enabled && !start_worker_locked()) { xSemaphoreGive(s_lock); return ESP_ERR_NO_MEM; }
     saved_config_t saved = {1, config->enabled, config->auto_install, config->beta_channel, config->install_hour};
     nvs_handle_t nvs;
@@ -437,7 +481,7 @@ esp_err_t ota_remote_set_config(const ota_remote_config_t *config)
 esp_err_t ota_remote_request(bool install)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (s_state.busy) { xSemaphoreGive(s_lock); return ESP_ERR_INVALID_STATE; }
+    if (s_state.busy || s_state.restart_pending) { xSemaphoreGive(s_lock); return ESP_ERR_INVALID_STATE; }
     if (!start_worker_locked()) { xSemaphoreGive(s_lock); return ESP_ERR_NO_MEM; }
     s_state.busy = true; s_state.progress = 0;
     strlcpy(s_state.status, install ? "Latest install requested" : "Check requested", sizeof s_state.status);

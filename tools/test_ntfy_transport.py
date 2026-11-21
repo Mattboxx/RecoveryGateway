@@ -31,6 +31,7 @@ fixture = r'''
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
+#include <time.h>
 #include "ntfy_json_stream.h"
 #define NTFY_NOINLINE
 #define ESP_OK 0
@@ -68,14 +69,15 @@ static int s_lock=1;
 #define xSemaphoreGive(a) ((void)(a))
 static struct { bool last_publish_ok; } s_status;
 static char s_last_event_id[48];
-static uint64_t s_config_generation, s_operational_generation;
+static uint64_t s_config_generation;
+static uint32_t s_operational_generation=1;
 static unsigned s_operational_count;
 static void operational_pop(bool dropped) { assert(dropped && s_operational_count); --s_operational_count; }
 static int s_task=1;
 static void (*during_request)(void);
 static void (*after_command)(void);
 static size_t strlcpy(char *d,const char *s,size_t cap) { size_t n=strlen(s); if(cap) {size_t k=n<cap-1?n:cap-1;memcpy(d,s,k);d[k]=0;}return n; }
-typedef struct { esp_http_client_config_t config; char authorization[176]; } fake_client_t;
+typedef struct { esp_http_client_config_t config; char url[384], authorization[176]; } fake_client_t;
 typedef fake_client_t *esp_http_client_handle_t;
 static fake_client_t client;
 static int response_code=200, auth_failure, network_calls, foreign_requests, cleanups, commands, cursor_writes;
@@ -85,7 +87,10 @@ static int read_failure, open_failure_http, headers_failure;
 static bool body_complete=true;
 static int64_t esp_timer_get_time(void) { return 0; }
 static esp_http_client_handle_t esp_http_client_init(const esp_http_client_config_t *c) {
-    memset(&client,0,sizeof client); client.config=*c; return &client;
+    memset(&client,0,sizeof client); client.config=*c;
+    assert(strlcpy(client.url,c->url,sizeof client.url)<sizeof client.url);
+    client.config.url=client.url;
+    return &client;
 }
 static esp_err_t esp_http_client_set_header(esp_http_client_handle_t c,const char *k,const char *v) {
     if(!strcmp(k,"Authorization")) {
@@ -168,6 +173,11 @@ static esp_err_t nvs_commit(nvs_handle_t n) {
 static void nvs_close(nvs_handle_t n) {(void)n;nvs_closes++;pending_size=0;}
 static uint8_t sysev_value=0xff;static int sysev_failure;
 #include "remote_commands.h"
+static remote_command_gate_t s_command_gate;
+static time_t s_command_floor;
+static char s_priming_cursor[48];
+static bool s_priming_legacy;
+static bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin){assert(origin==OPS_RECOVERY_NTFY);return false;}
 static esp_err_t nvs_param_set_blob(const char *key,const void *data,size_t size){
     nvs_handle_t h;esp_err_t e=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&h);
     if(e!=ESP_OK)return e;
@@ -213,7 +223,7 @@ static esp_err_t nvs_param_get_str_buf(const char *k,char *out,size_t *size) {
 }
 static esp_err_t ntfy_integration_set_config(const ntfy_integration_config_t *);
 '''
-command_stub = 'static void handle_command(const ntfy_integration_config_t *c,const char *s) {(void)c;assert(!strcmp(s,"info"));commands++;if(after_command)after_command();}\n'
+command_stub = 'static void handle_command(const ntfy_integration_config_t *c,uint32_t id,const char *s) {(void)c;assert(id && id==remote_command_ticket(&s_command_gate));assert(!strcmp(s,"info"));commands++;if(after_command)after_command();}\n'
 tests = r'''
 static int change_mode;
 static void change_during_request(void) {
@@ -232,6 +242,9 @@ static void change_during_request(void) {
 static void reset(int code) {
     response_code=code; auth_failure=network_calls=foreign_requests=cleanups=commands=cursor_writes=0;
     s_last_event_id[0]=0;
+    s_command_floor=1704067200;
+    s_priming_cursor[0]=0;s_priming_legacy=false;
+    remote_command_gate_reset(&s_command_gate,true);
     s_config_generation=0; during_request=after_command=NULL;
     connected=false;stored_size=pending_size=0;
     open_failure=write_failure=commit_failure=nvs_closes=0;
@@ -247,10 +260,30 @@ int main(void) {
     assert(network_calls==1&&cleanups==1&&s_status.last_publish_ok);
     assert(!strcmp(client.authorization,"Bearer tk_fixture"));
     reset(200); poll_commands(&c); assert(network_calls==1&&cleanups==1&&commands==1&&cursor_writes==1);
+    const uint32_t old=remote_command_ticket(&s_command_gate);
+    ntfy_integration_config_t off=c;off.commands_enabled=false;
+    assert(ntfy_integration_set_config(&off)==ESP_OK && !remote_command_ticket(&s_command_gate));
+    assert(!poll_commands(&off) && network_calls==1 && commands==1 && !s_last_event_id[0]);
+    assert(ntfy_integration_set_config(&c)==ESP_OK && remote_command_ticket(&s_command_gate)!=old);
+    response="{\"id\":\"during-off\",\"event\":\"message\",\"message\":\"info\"}\n";
+    assert(poll_commands(&c) && commands==1 && !strcmp(s_last_event_id,"during-off"));
+    assert(strstr(client.config.url,"since=latest"));
+    response="{\"id\":\"after-on\",\"event\":\"message\",\"message\":\"info\"}\n";
+    assert(poll_commands(&c) && commands==2 && !strcmp(s_last_event_id,"after-on"));
+    reset(200);s_config=c;s_command_floor=0;response="";
+    assert(poll_commands(&c) && !commands && !s_last_event_id[0] && s_command_floor>=1704067200);
+    response="{\"id\":\"first-fresh\",\"event\":\"message\",\"message\":\"info\"}\n";
+    assert(poll_commands(&c) && commands==1 && !strcmp(s_last_event_id,"first-fresh"));
     char backlog[16000];size_t backlog_size=0;
     for(unsigned i=0;i<200;i++) backlog_size+=(size_t)snprintf(backlog+backlog_size,sizeof backlog-backlog_size,
         "{\"id\":\"msg-%u\",\"event\":\"message\",\"message\":\"info\"}\n",i);
     assert(backlog_size>8192);response=backlog;
+    reset(400);s_config=c;s_command_floor=0;
+    assert(poll_commands(&c) && s_priming_legacy && !commands && !cursor_writes);
+    response_code=200;
+    assert(poll_commands(&c) && !commands && !cursor_writes && strstr(client.config.url,"since=all"));
+    for(unsigned attempt=0;attempt<10&&!s_last_event_id[0];attempt++)assert(poll_commands(&c));
+    assert(!commands && cursor_writes==1 && !strcmp(s_last_event_id,"msg-199"));
     reset(200);poll_commands(&c);assert(commands==NTFY_POLL_BATCH);
     for(unsigned attempt=0;attempt<10&&strcmp(s_last_event_id,"msg-199");attempt++)poll_commands(&c);
     assert(commands==200&&!strcmp(s_last_event_id,"msg-199"));
@@ -291,13 +324,16 @@ int main(void) {
     c.commands_only_when_tailscale_down=true;
     reset(200);s_config=c;change_mode=8;during_request=change_during_request;poll_commands(&c);
     assert(commands==0&&cursor_writes==0&&!s_last_event_id[0]);
+    reset(200);s_config=c;tailscale_enabled=false;connected=false;poll_commands(&c);
+    assert(commands==1&&cursor_writes==1);
+    tailscale_enabled=true;
     c.commands_only_when_tailscale_down=false;s_config=c;
     response="{\"id\":\"first-id\",\"event\":\"message\",\"message\":\"info\"}\n"
              "{\"id\":\"second-id\",\"event\":\"message\",\"message\":\"info\"}\n";
     for(change_mode=2;change_mode<=3;change_mode++) {
         reset(200);s_config=c;after_command=change_during_request;poll_commands(&c);
         assert(commands==1&&cursor_writes==0);
-        assert(change_mode==2?!strcmp(s_last_event_id,"first-id"):!s_last_event_id[0]);
+        assert(!s_last_event_id[0] && !s_command_floor);
     }
     response="{\"id\":\"fixture-id\",\"event\":\"message\",\"message\":\"info\"}\n";
     reset(200);s_config=c;
@@ -359,7 +395,7 @@ int main(void) {
     assert(ntfy_integration_set_config(&c)==ESP_OK);
     assert(s_operational_count==2 && s_operational_generation==generation);
     ntfy_integration_config_t harmless=c;
-    harmless.info_include_details=!harmless.info_include_details;
+    harmless.poll_interval_seconds=20;
     assert(ntfy_integration_set_config(&harmless)==ESP_OK);
     assert(s_operational_count==2 && s_operational_generation==generation);
     assert(ntfy_integration_set_config(&c)==ESP_OK);

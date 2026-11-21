@@ -55,7 +55,8 @@ bool ddns_parse_trace(const char *text, uint32_t *ip_nbo);
 
 /* Firmware. */
 void ddns_init(void);
+void ddns_retry_scheduler(void);     /* low-rate recovery from the maintenance task */
 uint8_t ddns_provider(void);          /* DDNS_OFF when off */
-bool ddns_last_update_ok(void);       /* the newest attempt succeeded */
+bool ddns_last_update_ok(void);       /* periodic scheduler ready and last request successful */
 #include "esp_http_server.h"
 esp_err_t ddns_register_http(httpd_handle_t server);

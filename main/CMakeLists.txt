@@ -75,6 +75,7 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
                             "web_ui.c"
                             "web_port.c"
                             "web_idle.c"
+                            "web_transfer.c"
                             "peer_dns.c"
                             "netif_hooks.c"
                             "wifi_networks.c"
@@ -150,36 +151,23 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
 # (100.64/10) destinations. Otherwise NAPT rewrites the AP-client
 # source IP to the WG netif's CGNAT address and breaks the TCP
 # 4-tuple at the tailnet peer.
-# Provenance shown in System > About: exact source commit of this build and
-# of the MicroLink dependency ("-dirty" when tracked files differ). Re-run on
-# every commit so a stale value cannot be reported.
+# Native ESP-IDF refreshes the same header before compilation. PlatformIO
+# performs the refresh in its pre-build hook, independently of its CMake cache.
 get_filename_component(_mtg_root "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
-foreach(_mtg_dir IN ITEMS "${_mtg_root}" "${_mtg_root}/external/microlink")
-    execute_process(COMMAND git -C "${_mtg_dir}" rev-parse --short=12 HEAD
-                    OUTPUT_VARIABLE _mtg_rev OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    execute_process(COMMAND git -C "${_mtg_dir}" status --porcelain --untracked-files=no
-                    OUTPUT_VARIABLE _mtg_dirty OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(NOT _mtg_rev)
-        set(_mtg_rev "unknown")
-    elseif(_mtg_dirty)
-        set(_mtg_rev "${_mtg_rev}-dirty")
-    endif()
-    list(APPEND _mtg_revs "${_mtg_rev}")
-endforeach()
-list(GET _mtg_revs 0 _mtg_build_commit)
-list(GET _mtg_revs 1 _mtg_microlink_commit)
-target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    MTG_BUILD_COMMIT="${_mtg_build_commit}" MTG_MICROLINK_COMMIT="${_mtg_microlink_commit}")
-# Re-run on every commit. In a linked worktree .git is a file, so ask git for
-# the real directory: otherwise a commit that touches no configure input
-# would keep the previous commit id in the image.
-execute_process(COMMAND git -C "${_mtg_root}" rev-parse --absolute-git-dir
-                OUTPUT_VARIABLE _mtg_git_dir OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-foreach(_mtg_dep IN ITEMS "${_mtg_git_dir}/logs/HEAD" "${_mtg_git_dir}/HEAD" "${_mtg_root}/.git/logs/HEAD")
-    if(EXISTS "${_mtg_dep}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_mtg_dep}")
-    endif()
-endforeach()
+set(_mtg_identity_tool "${_mtg_root}/tools/build_identity.py")
+set(_mtg_identity_header "${CMAKE_BINARY_DIR}/mtg_build_identity.h")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" "${_mtg_identity_tool}" "${_mtg_root}" "${_mtg_identity_header}"
+    RESULT_VARIABLE _mtg_identity_result)
+if(NOT _mtg_identity_result EQUAL 0)
+    message(FATAL_ERROR "Could not write the firmware identity header")
+endif()
+add_custom_target(mtg_refresh_build_identity
+    COMMAND "${Python3_EXECUTABLE}" "${_mtg_identity_tool}" "${_mtg_root}" "${_mtg_identity_header}"
+    BYPRODUCTS "${_mtg_identity_header}"
+    VERBATIM)
+add_dependencies(${COMPONENT_LIB} mtg_refresh_build_identity)
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_BINARY_DIR}")
 
 # Address changes are announced from the GOT_IP handler (lan_name_uplink_up).
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LWIP_MDNS_RESPONDER=1 MDNS_RESP_USENETIF_EXTCALLBACK=0)

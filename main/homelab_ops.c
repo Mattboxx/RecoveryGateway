@@ -47,7 +47,8 @@
 #include "freertos/semphr.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
-#include "lwip/netdb.h"
+#include "lwip/dns.h"
+#include "lwip/tcpip.h"
 #include "esp_wifi.h"
 #include "microlink.h"
 #include "ml_policy.h"
@@ -55,6 +56,7 @@
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include "esp_attr.h"
@@ -71,7 +73,9 @@ typedef struct {uint8_t mac[6],state,monitor_state;uint16_t checks;uint32_t late
 typedef struct {
     uint32_t id;int index;job_state_t state;bool wake,manual,cancel,host_seen,service_seen,packet_sent,probe_valid;
     bool wake_attempted, notify_result;
+    uint8_t wake_datagrams;
     ops_recovery_origin_t origin;
+    uint32_t destination;
     uint16_t checks;uint64_t started,deadline,next,finished;
     wol_device_t device;ops_device_t profile;
 } job_t;
@@ -125,10 +129,12 @@ static bool valid_profile(const ops_device_t *p) {
 static void event_locked(unsigned state,unsigned index) {
     event_t *e=&events[event_seq%OPS_EVENTS];e->seq=++event_seq;e->uptime_ms=now_ms();e->state=state;e->index=index;
 }
+static esp_err_t store_registry(ops_store_t *candidate) {
+    candidate->checksum=checksum(candidate);
+    return nvs_param_set_blob("ops_registry",candidate,sizeof *candidate);
+}
 static esp_err_t save_locked(ops_store_t *candidate) {
-    candidate->checksum=checksum(candidate);nvs_handle_t nvs;
-    esp_err_t err=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&nvs);
-    if(err==ESP_OK){err=nvs_set_blob(nvs,"ops_registry",candidate,sizeof *candidate);if(err==ESP_OK)err=nvs_commit(nvs);nvs_close(nvs);}
+    esp_err_t err=store_registry(candidate);
     if(err==ESP_OK)store=*candidate;
     return err;
 }
@@ -161,6 +167,18 @@ void homelab_ops_init(void) {
     initialized=true;bool monitoring=store.settings.monitoring;UNLOCK();
     health_monitor_init();
     if(monitoring||health_monitor_enabled()||saved_tcp_schedule_enabled())(void)ensure_worker();
+}
+void homelab_ops_retry_worker(void)
+{
+    static int64_t next_retry;
+    int64_t now = esp_timer_get_time();
+    LOCK();
+    bool retry = initialized && !task && !starting && now >= next_retry;
+    bool monitoring = retry && store.settings.monitoring;
+    if (retry) next_retry = now + 30000000;
+    UNLOCK();
+    if (retry && (monitoring || health_monitor_enabled() || saved_tcp_schedule_enabled()))
+        (void)ensure_worker();
 }
 static int find_profile_locked(const uint8_t mac[6]) {
     for(int i=0;i<WOL_MAX_DEVICES;i++)if(store.devices[i].timeout_s && !memcmp(store.devices[i].mac,mac,6))return i;
@@ -248,13 +266,24 @@ static esp_err_t ensure_worker(void) {
     if(!created)free(stack);
     return created?ESP_OK:ESP_ERR_NO_MEM;
 }
-esp_err_t homelab_ops_set_settings(const ops_settings_t *settings) {
+static esp_err_t save_settings(const ops_settings_t *settings, bool publish) {
     if(!valid_settings(settings))return ESP_ERR_INVALID_ARG;
     homelab_ops_init();
     if(settings->monitoring && ensure_worker()!=ESP_OK)return ESP_ERR_NO_MEM;
     ops_store_t *candidate=heap_caps_malloc(sizeof *candidate,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     if(!candidate)return ESP_ERR_NO_MEM;
-    LOCK();*candidate=store;candidate->settings=*settings;esp_err_t err=save_locked(candidate);UNLOCK();free(candidate);return err;
+    LOCK();*candidate=store;candidate->settings=*settings;
+    esp_err_t err=publish?save_locked(candidate):store_registry(candidate);
+    UNLOCK();free(candidate);return err;
+}
+esp_err_t homelab_ops_set_settings(const ops_settings_t *settings) {
+    return save_settings(settings,true);
+}
+esp_err_t homelab_ops_stage_settings(const ops_settings_t *settings) {
+    return save_settings(settings,false);
+}
+void homelab_ops_publish_settings(const ops_settings_t *settings) {
+    LOCK();store.settings=*settings;store.checksum=checksum(&store);UNLOCK();
 }
 esp_err_t homelab_ops_start_optional_worker(void) {return ensure_worker();}
 static uint8_t recovery_bit(ops_recovery_origin_t origin) {
@@ -266,6 +295,10 @@ static uint8_t recovery_mask_locked(void) {
 }
 static bool recovery_allowed_locked(ops_recovery_origin_t origin) {
     return origin==OPS_RECOVERY_LOCAL || (recovery_mask_locked() & recovery_bit(origin))!=0;
+}
+static bool job_allowed_locked(const job_t *candidate) {
+    return !candidate->cancel && recovery_allowed_locked(candidate->origin) &&
+           remote_command_active(candidate->origin, candidate->destination);
 }
 bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin) {
     homelab_ops_init();LOCK();bool allowed=recovery_allowed_locked(origin);UNLOCK();return allowed;
@@ -289,16 +322,19 @@ void homelab_ops_publish_recovery(uint8_t staged) {
     if(active(job.state) && !recovery_allowed_locked(job.origin))job.cancel=true;
     UNLOCK();
 }
-esp_err_t homelab_ops_request(int index,bool wake,ops_recovery_origin_t origin) {
+static esp_err_t request_device(int index, const uint8_t *expected, bool wake,
+                                ops_recovery_origin_t origin, uint32_t destination) {
     ops_device_t profile;wol_device_t device;
-    if(index<0 || index>=WOL_MAX_DEVICES || !homelab_ops_device(index,&profile) || !wol_get(index,&device)
-        || memcmp(profile.mac,device.mac,6))return ESP_ERR_INVALID_ARG;
+    if(index<0 || index>=WOL_MAX_DEVICES || !wol_get(index,&device) ||
+       (expected && memcmp(expected,device.mac,6)))return ESP_ERR_NOT_FOUND;
+    if(!homelab_ops_device(index,&profile) || memcmp(profile.mac,device.mac,6))return ESP_ERR_INVALID_ARG;
+    if(destination && (!profile.target[0] || !profile.host_port))return ESP_ERR_INVALID_ARG;
     if(wake && profile.max_checks<2)return ESP_ERR_INVALID_ARG;
-    if(!homelab_ops_recovery_allowed(origin))return ESP_ERR_NOT_SUPPORTED;
+    if(!remote_command_active(origin,destination) || !homelab_ops_recovery_allowed(origin))return ESP_ERR_NOT_SUPPORTED;
     if(!homelab_ops_admit())return ESP_ERR_NOT_ALLOWED;
     esp_err_t err=ensure_worker();if(err!=ESP_OK)return err;
     uint64_t now=now_ms();LOCK();
-    if(!recovery_allowed_locked(origin)){UNLOCK();return ESP_ERR_NOT_SUPPORTED;}
+    if(!remote_command_active(origin,destination) || !recovery_allowed_locked(origin)){UNLOCK();return ESP_ERR_NOT_SUPPORTED;}
     int cooldown=-1,oldest=0;
     for(int i=0;i<WOL_MAX_DEVICES;i++){
         if(!memcmp(last_manual[i].mac,device.mac,6))cooldown=i;
@@ -307,21 +343,95 @@ esp_err_t homelab_ops_request(int index,bool wake,ops_recovery_origin_t origin) 
     /* One job at a time; each device at most once a minute by hand. */
     if(active(job.state) || job.notify_result){UNLOCK();return ESP_ERR_INVALID_STATE;}
     if(cooldown>=0 && now-last_manual[cooldown].time<60000){UNLOCK();return ESP_ERR_TIMEOUT;}
-    job=(job_t){.id=++job_seq,.index=index,.state=J_PRECHECK,.wake=wake,.manual=true,.origin=origin,.started=now,
+    job=(job_t){.id=++job_seq,.index=index,.state=J_PRECHECK,.wake=wake,.manual=true,.origin=origin,.destination=destination,.started=now,
         .deadline=now+(uint64_t)profile.timeout_s*1000,.device=device,.profile=profile};
     if(cooldown<0)cooldown=oldest;
     memcpy(last_manual[cooldown].mac,device.mac,6);last_manual[cooldown].time=now;
     event_locked(J_PRECHECK,index);UNLOCK();return ESP_OK;
 }
+esp_err_t homelab_ops_request(int index,bool wake,ops_recovery_origin_t origin) {
+    return request_device(index,NULL,wake,origin,0);
+}
+esp_err_t homelab_ops_remote_request(const uint8_t mac[6], bool wake, ops_recovery_origin_t origin, uint32_t destination) {
+    for(int i=0;i<wol_count();i++){
+        wol_device_t device;
+        if(wol_get(i,&device) && !memcmp(mac,device.mac,6))return request_device(i,mac,wake,origin,destination);
+    }
+    return ESP_ERR_NOT_FOUND;
+}
 esp_err_t homelab_ops_cancel(void) {homelab_ops_init();LOCK();bool running=active(job.state);if(running)job.cancel=true;UNLOCK();return running?ESP_OK:ESP_ERR_INVALID_STATE;}
 esp_err_t homelab_ops_command(const char *selector,bool wake,ops_recovery_origin_t origin) {
     uint8_t mac[6];if(!wol_parse_mac(selector,mac))return ESP_ERR_INVALID_ARG;
-    for(int i=0;i<wol_count();i++){wol_device_t d;if(wol_get(i,&d)&&!memcmp(mac,d.mac,6))return homelab_ops_request(i,wake,origin);}
-    return ESP_ERR_NOT_FOUND;
+    return homelab_ops_remote_request(mac,wake,origin,0);
 }
-/* One TCP probe per worker; serialized SDK DNS uses finite retry limits.
- * An in-flight resolver can outlast a job deadline; it never blocks TCPIP. */
-static int connect_probe(const ops_device_t *p,uint16_t port,uint32_t *latency) {
+
+void homelab_ops_device_summary(char *out, size_t cap) {
+    homelab_ops_init();
+    size_t used = 0;
+    for (int i = 0; i < wol_count(); i++) {
+        wol_device_t device;
+        if (!wol_get(i,&device)) continue;
+        LOCK();
+        result_t result = results[i];
+        UNLOCK();
+        const char *state = result.observed_ms && !memcmp(result.mac,device.mac,6) ?
+                            states[result.state] : "not checked";
+        int n = snprintf(out+used,cap-used,"%s%s: %s",used?"\n":"Saved devices · last known results\n\n",
+                         device.name[0]?device.name:"Unnamed device",state);
+        if (n<0 || (size_t)n>=cap-used) break;
+        used+=(size_t)n;
+    }
+    if (!used) snprintf(out,cap,"No saved devices. Add one in Devices & Recovery.");
+}
+enum {PROBE_DNS_IDLE, PROBE_DNS_PENDING, PROBE_DNS_DONE};
+enum {OPS_PROBE_PENDING = -2};
+static struct {
+    atomic_int state;
+    uint32_t job_id, address;
+    char host[sizeof ((ops_device_t *)0)->target];
+} s_probe_dns;
+
+static void probe_dns_done(const char *name, const ip_addr_t *address, void *arg)
+{
+    (void)name; (void)arg;
+    s_probe_dns.address = address && IP_IS_V4(address) ? ip4_addr_get_u32(ip_2_ip4(address)) : 0;
+    atomic_store(&s_probe_dns.state, PROBE_DNS_DONE);
+}
+
+static void probe_dns_start(void *arg)
+{
+    (void)arg;
+    ip_addr_t answer;
+    err_t err = dns_gethostbyname_addrtype(s_probe_dns.host, &answer, probe_dns_done, NULL, LWIP_DNS_ADDRTYPE_IPV4);
+    if (err != ERR_INPROGRESS) probe_dns_done(NULL, err == ERR_OK ? &answer : NULL, NULL);
+}
+
+static int probe_dns_address(const job_t *local, uint32_t *address)
+{
+    int state = atomic_load(&s_probe_dns.state);
+    if (state == PROBE_DNS_PENDING) return OPS_PROBE_PENDING;
+    if (state == PROBE_DNS_DONE && s_probe_dns.job_id == local->id) {
+        *address = s_probe_dns.address;
+        atomic_store(&s_probe_dns.state, PROBE_DNS_IDLE);
+        return *address ? 0 : -1;
+    }
+    s_probe_dns.job_id = local->id;
+    memcpy(s_probe_dns.host, local->profile.target, sizeof s_probe_dns.host);
+    atomic_store(&s_probe_dns.state, PROBE_DNS_PENDING);
+    if (tcpip_try_callback(probe_dns_start, NULL) == ERR_OK) return OPS_PROBE_PENDING;
+    atomic_store(&s_probe_dns.state, PROBE_DNS_IDLE);
+    return -1;
+}
+
+static uint32_t probe_wait_budget(uint64_t now, uint64_t deadline)
+{
+    if (now >= deadline) return 0;
+    return deadline - now < 1000 ? (uint32_t)(deadline - now) : 1000;
+}
+
+/* One TCP probe at a time. A pending DNS answer owns no recovery socket. */
+static int connect_probe(const job_t *local, uint16_t port, uint32_t *latency) {
+    const ops_device_t *p = &local->profile;
     if(!p->target[0] || !port)return -1;
     struct sockaddr_in address={.sin_family=AF_INET,.sin_port=htons(port)};
     if(inet_pton(AF_INET,p->target,&address.sin_addr)!=1){
@@ -329,9 +439,10 @@ static int connect_probe(const ops_device_t *p,uint16_t port,uint32_t *latency) 
         if(ip)address.sin_addr.s_addr=htonl(ip);
         else{
             if(p->reserved[0]==2)return -1; /* Tailnet scope never uses uplink DNS. */
-            struct addrinfo hints={.ai_family=AF_INET,.ai_socktype=SOCK_STREAM},*answer=NULL;
-            if(getaddrinfo(p->target,NULL,&hints,&answer)!=0 || !answer){if(answer)freeaddrinfo(answer);return -1;}
-            address.sin_addr=((struct sockaddr_in*)answer->ai_addr)->sin_addr;freeaddrinfo(answer);
+            int resolved = probe_dns_address(local, &address.sin_addr.s_addr);
+            if (resolved == OPS_PROBE_PENDING && local->state == J_PRECHECK && local->wake &&
+                now_ms() - local->started >= 2000) return -1;
+            if (resolved < 0) return resolved;
         }
     }
     uint32_t ip=ntohl(address.sin_addr.s_addr);
@@ -341,11 +452,12 @@ static int connect_probe(const ops_device_t *p,uint16_t port,uint32_t *latency) 
         if(!uplink_address(uplink_local_netif(), &info) ||
            (address.sin_addr.s_addr&info.netmask.addr)!=(info.ip.addr&info.netmask.addr))return -1;
     }else if(p->reserved[0]==2 && (!tailscale_is_connected() || (ip&0xffc00000u)!=0x64400000u))return -1;
-    LOCK();bool proceed=!job.cancel && recovery_allowed_locked(job.origin) && now_ms()<job.deadline;UNLOCK();
+    LOCK();bool proceed=job.id == local->id && job_allowed_locked(&job);UNLOCK();
     if(!proceed)return -1;
     int fd=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);if(fd<0)return -1;
     int flags=fcntl(fd,F_GETFL,0);if(flags<0 || fcntl(fd,F_SETFL,flags|O_NONBLOCK)<0){close(fd);return -1;}
     uint64_t began = now_ms();
+    if (began >= local->deadline) {close(fd); return -1;}
     int result = -1; /* local or routing failure: no evidence about the target */
     int error = 0;
     int connected = connect(fd, (struct sockaddr *)&address, sizeof address);
@@ -355,8 +467,9 @@ static int connect_probe(const ops_device_t *p,uint16_t port,uint32_t *latency) 
         fd_set writable;
         FD_ZERO(&writable);
         FD_SET(fd, &writable);
-        struct timeval timeout = {.tv_sec=1};
-        int ready = select(fd + 1, NULL, &writable, NULL, &timeout);
+        uint32_t remain = probe_wait_budget(now_ms(), local->deadline);
+        struct timeval timeout = {.tv_sec=(long)(remain / 1000), .tv_usec=(long)(remain % 1000) * 1000};
+        int ready = remain ? select(fd + 1, NULL, &writable, NULL, &timeout) : -1;
         socklen_t size = sizeof error;
         if (ready == 0) error = ETIMEDOUT;
         else if (ready > 0 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0) {
@@ -376,7 +489,7 @@ static void finish_locked(job_state_t state) {
     bool outage = !job.manual && state == J_TIMEOUT && monitor == MONITOR_REACHABLE;
     if (!job.manual && state == J_REACHABLE) monitor = MONITOR_REACHABLE;
     if (!job.manual && state == J_TIMEOUT) monitor = MONITOR_DOWN;
-    job.notify_result = job.profile.notify && (job.manual || outage);
+    job.notify_result = job.destination || (job.profile.notify && (job.manual || outage));
     *result = (result_t){.state=state,.monitor_state=monitor,.checks=job.checks,
                          .latency_ms=result->latency_ms,.observed_ms=job.finished};
     memcpy(result->mac, job.device.mac, sizeof result->mac);
@@ -386,18 +499,30 @@ static void finish_locked(job_state_t state) {
 static void notify_job_result(const job_t *done)
 {
     char message[144];
+    const char *name = done->device.name[0] ? done->device.name : "unnamed device";
+    const char *result = done->state == J_TIMEOUT ? "not reachable" :
+                         done->state == J_RESOURCE ? "deferred (gateway busy)" : states[done->state];
     if (!done->manual) {
         snprintf(message, sizeof message, "Device %.32s stopped responding to its configured check.",
-                 done->device.name);
+                 name);
     } else if (!done->wake) {
-        snprintf(message, sizeof message, "Check for %.32s: %s.", done->device.name, states[done->state]);
+        snprintf(message, sizeof message, "Check for %.32s: %s.%s", name, result,
+                 done->host_seen && !done->service_seen && done->profile.service_port ?
+                 " Host reachable; configured service unverified." : "");
+    } else if (done->destination && done->state == J_REACHABLE && !done->wake_attempted) {
+        snprintf(message, sizeof message, "%.32s was already reachable. No wake packet needed.", name);
     } else {
-        const char *wake = done->packet_sent ? "packet sent" : done->wake_attempted ? "send failed" : "not sent";
-        snprintf(message, sizeof message, "WoL recovery for %.32s: %s. WoL %s. Service verified: %s.",
-                 done->device.name, states[done->state], wake, done->service_seen ? "yes" : "no");
+        const char *wake = done->packet_sent ? "packet sent" : done->wake_datagrams ? "burst partly sent" :
+                           done->wake_attempted ? "send failed" : "not sent";
+        snprintf(message, sizeof message, "WoL recovery for %.32s: %s. Wake %s.%s",
+                 name, result, wake, !done->profile.service_port ? "" :
+                 done->service_seen ? " Service verified." : " Service unverified.");
     }
-    /* One event feeds ntfy and the existing Telegram/email history sink. */
-    (void)ntfy_integration_queue_event(message);
+    if (done->destination) {
+        (void)remote_command_reply(done->origin, done->destination, message);
+    } else {
+        (void)ntfy_integration_queue_event(message);
+    }
 }
 static void apply_probe_locked(const job_t *local, int result, uint32_t latency)
 {
@@ -405,28 +530,30 @@ static void apply_probe_locked(const job_t *local, int result, uint32_t latency)
     job.checks++;
     results[job.index].latency_ms = latency;
     job.probe_valid = result >= 0;
-    if (job.cancel || !recovery_allowed_locked(job.origin)) {
+    if (!job_allowed_locked(&job)) {
         finish_locked(J_CANCELLED);
         return;
     }
     const uint64_t now = now_ms();
     const bool expired = now >= job.deadline;
     const bool service = local->state == J_SERVICE;
+    if (expired) {
+        finish_locked(result == 0 ? J_TIMEOUT : J_UNKNOWN);
+        return;
+    }
     if (result > 0) {
         job.host_seen = true;
         job.service_seen = service;
         if (service || !local->profile.service_port) finish_locked(J_REACHABLE);
-        else if (expired) finish_locked(J_UNKNOWN); /* service still untested */
         else {
             job.probe_valid = false;
             job.state = J_SERVICE;
             job.next = now;
         }
-    } else if (expired) finish_locked(result == 0 ? J_TIMEOUT : J_UNKNOWN);
-    else if (local->state == J_PRECHECK && local->wake) {
+    } else if (local->state == J_PRECHECK && local->wake) {
         job.state = J_WAKE;
         job.next = now;
-    } else if (result < 0 && !(local->manual && local->packet_sent)) finish_locked(J_UNKNOWN);
+    } else if (result < 0 && !(local->manual && local->wake_datagrams)) finish_locked(J_UNKNOWN);
     else if (!local->manual) finish_locked(J_TIMEOUT);
     else {
         job.state = service ? J_SERVICE : J_WAIT;
@@ -474,7 +601,7 @@ static void worker(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(200));
         uint64_t now=now_ms();job_t local;LOCK();bool ready=task!=NULL;local=job;ops_settings_t settings=store.settings;
         if (ready && local.notify_result) job.notify_result = false;
-        if(!recovery_allowed_locked(local.origin))local.cancel=true;
+        if(!job_allowed_locked(&local))local.cancel=true;
         UNLOCK();
         if(!ready)continue;
         if(local.id && !active(local.state) && local.id!=notified){
@@ -505,12 +632,16 @@ static void worker(void *arg) {
         if(now<local.next)continue;
         if(!homelab_ops_admit()){LOCK();if(job.id==local.id)finish_locked(J_RESOURCE);UNLOCK();continue;}
         if(local.state==J_WAKE){
-            LOCK();bool permitted=job.id==local.id && !job.cancel && recovery_allowed_locked(job.origin);UNLOCK();
-            esp_err_t err=permitted?wol_send_mac(local.device.mac,local.device.broadcast,local.device.port):ESP_ERR_INVALID_STATE;
-            LOCK();if(job.id==local.id){job.wake_attempted=permitted;job.packet_sent=err==ESP_OK;job.state=J_WAIT;job.next=now_ms()+3000;
-                if(err!=ESP_OK || !local.profile.target[0])finish_locked(J_UNKNOWN);else event_locked(J_WAIT,job.index);}UNLOCK();continue;
+            LOCK();bool permitted=job.id==local.id && job_allowed_locked(&job);UNLOCK();
+            uint8_t sent=0;
+            esp_err_t err=permitted?wol_send_mac_count(local.device.mac,local.device.broadcast,local.device.port,&sent):ESP_ERR_INVALID_STATE;
+            LOCK();if(job.id==local.id){job.wake_attempted=permitted;job.packet_sent=err==ESP_OK;job.wake_datagrams=sent;job.state=J_WAIT;job.next=now_ms()+3000;
+                if(!job_allowed_locked(&job))finish_locked(J_CANCELLED);
+                else if(!sent || !local.profile.target[0])finish_locked(J_UNKNOWN);
+                else event_locked(J_WAIT,job.index);}UNLOCK();continue;
         }
-        uint32_t latency=0;int result=connect_probe(&local.profile,local.state==J_SERVICE?local.profile.service_port:local.profile.host_port,&latency);
+        uint32_t latency=0;int result=connect_probe(&local,local.state==J_SERVICE?local.profile.service_port:local.profile.host_port,&latency);
+        if (result == OPS_PROBE_PENDING) continue;
         LOCK();
         apply_probe_locked(&local,result,latency);
         UNLOCK();
@@ -542,6 +673,7 @@ cJSON *homelab_ops_snapshot(bool detailed) {
     LOCK();job_t j=job;ops_settings_t s=store.settings;uint32_t denied=denied_jobs;
     cJSON_AddStringToObject(root,"recovery_state",states[j.state]);cJSON_AddNumberToObject(root,"job_id",j.id);
     cJSON_AddNumberToObject(root,"device_index",j.index);cJSON_AddBoolToObject(root,"packet_sent",j.packet_sent);
+    cJSON_AddNumberToObject(root,"wake_datagrams",j.wake_datagrams);
     cJSON_AddBoolToObject(root,"host_verified",j.host_seen);cJSON_AddBoolToObject(root,"service_verified",j.service_seen);
     cJSON_AddNumberToObject(root,"checks",j.checks);cJSON_AddNumberToObject(root,"denied_jobs",denied);
     cJSON_AddNumberToObject(root,"duration_ms",j.id?(j.finished?j.finished:now_ms())-j.started:0);

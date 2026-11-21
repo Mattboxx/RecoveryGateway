@@ -14,7 +14,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / 'main/ota_remote.c').read_text()
 selector = 'bool ota_remote_select_release' + source.split('bool ota_remote_select_release', 1)[1].split('typedef struct { char *body', 1)[0]
-installer = 'static bool image_matches' + source.split('static bool image_matches', 1)[1].split('static void worker(', 1)[0]
+schedule_start = 'typedef struct {\n    int64_t next_poll;'
+installer = 'static bool image_matches' + source.split('static bool image_matches', 1)[1].split(schedule_start, 1)[0]
+request = 'esp_err_t ota_remote_request' + source.split('esp_err_t ota_remote_request', 1)[1].split('\n}', 1)[0] + '\n}'
 writer_source = (ROOT / 'main/ota.c').read_text()
 writer = 'static portMUX_TYPE s_writer_lock' + writer_source.split('static portMUX_TYPE s_writer_lock', 1)[1].split('esp_err_t ota_upload_handler', 1)[0]
 fixture = r'''
@@ -28,6 +30,8 @@ fixture = r'''
 #include "ota_validation.h"
 #define OTA_NOINLINE
 #define ESP_OK 0
+#define ESP_ERR_INVALID_STATE 0x103
+#define ESP_ERR_NO_MEM 0x101
 #define ESP_ERR_HTTP_EAGAIN 0x7007
 #define pdMS_TO_TICKS(x) (x)
 #define portMAX_DELAY 0
@@ -46,7 +50,7 @@ typedef struct { uint32_t magic_word,secure,pad[2]; char version[32],project_nam
 typedef struct { uint32_t size; } esp_partition_t;
 typedef unsigned esp_ota_handle_t;
 typedef struct { bool enabled,auto_install,beta_channel; int install_hour; } ota_remote_config_t;
-typedef struct { ota_remote_config_t config; bool busy,checked,update_available; uint32_t last_check,asset_size; unsigned progress; uint8_t repo; char latest_version[32],status[96],release_url[192]; char asset[24]; } ota_remote_state_t;
+typedef struct { ota_remote_config_t config; bool busy,checked,update_available,restart_pending; uint32_t last_check,asset_size; unsigned progress; uint8_t repo; char latest_version[32],status[96],release_url[192]; char asset[24]; } ota_remote_state_t;
 static ota_remote_state_t s_state;
 static unsigned char s_digest[32];
 static int s_lock;
@@ -121,7 +125,16 @@ static esp_err_t ota_flash_end(esp_ota_handle_t *h) { assert(*h==1); if(fault==1
 static esp_err_t ota_flash_set_boot_partition(const esp_partition_t *p) { assert(p==&partition); boots++; return fault==7?-1:0; }
 static esp_err_t ota_flash_abort(esp_ota_handle_t h) { assert(h==1); aborts++; return fault==14?-1:0; }
 static void vTaskDelay(int t) { clock_us+=(int64_t)t*1000; }
-static void ota_flash_restart(void) { restarts++; }
+static bool restart_fails;
+static esp_err_t ota_flash_restart(void) {
+    assert(s_state.restart_pending && !s_state.update_available && s_state.progress==100);
+    restarts++;
+    return restart_fails ? ESP_ERR_INVALID_STATE : ESP_OK;
+}
+enum { CHECK_BIT=1, INSTALL_BIT=2, eSetBits=3 };
+static int s_task, worker_starts, notified;
+static bool start_worker_locked(void) { worker_starts++; return true; }
+static void xTaskNotify(int task,int bits,int mode) { (void)task;assert(mode==eSetBits);notified=bits; }
 '''
 tests = r'''
 static void reset(void) {
@@ -135,7 +148,8 @@ static void reset(void) {
     strcpy(app.version,"0.1.31-Mattboxx-1.10");
     memcpy(image,&header,sizeof header); memcpy(image+32,&app,sizeof app);
     opens=reads=offset=begins=writes=aborts=ends=boots=restarts=releases=0;
-    fault=0; clock_us=0; retry_logs=read_errors=0; s_writer_active=false;
+    fault=0; clock_us=0; retry_logs=read_errors=0; s_writer_active=restart_fails=false;
+    worker_starts=notified=0;
 }
 static void release_row(cJSON *rows,const char *tag,bool pre,bool draft,const char *file,const char *digest,int size) {
     cJSON *r=cJSON_CreateObject(),*assets=cJSON_AddArrayToObject(r,"assets"),*a=cJSON_CreateObject();
@@ -288,6 +302,14 @@ int main(void) {
     assert(strstr(s_state.status,"restart"));
     fault=0; assert(!install_release()&&!ota_writer_try_acquire()&&aborts==1);
     for(int f=0;f<=11;f+=11) { reset(); fault=f; assert(install_release()); assert(boots==1&&restarts==1&&!aborts&&ends==1&&s_writer_active&&s_state.progress==100); }
+    reset(); restart_fails=true; assert(install_release());
+    assert(boots==1&&ends==1&&!aborts&&restarts==1&&read_errors==1);
+    assert(s_state.restart_pending&&s_writer_active&&!s_state.update_available);
+    assert(!strcmp(s_state.status,"Installed; use Restart to apply"));
+    assert(ota_remote_request(false)==ESP_ERR_INVALID_STATE&&ota_remote_request(true)==ESP_ERR_INVALID_STATE);
+    assert(!worker_starts&&!notified&&!ota_writer_try_acquire()&&!install_release());
+    assert(boots==1&&restarts==1&&!strcmp(s_state.status,"Installed; use Restart to apply"));
+    reset(); assert(ota_remote_request(false)==ESP_OK&&worker_starts==1&&notified==CHECK_BIT);
     for(int f=0;f<3;f++) { reset(); if(f==0)image[12]=1; if(f==1)image[32+48]='!'; if(f==2)image[32+16]='!'; assert(!install_release()); assert(!begins&&!boots&&!restarts&&!s_writer_active); }
     for(int f=17;f<=24;f++) {
         if(f==21||f==22)continue;
@@ -316,7 +338,7 @@ int main(void) {
 for variant in ([],):
   with tempfile.TemporaryDirectory(prefix='ota-remote-') as directory:
       path = Path(directory)
-      (path / 'test.c').write_text(fixture + writer + selector + installer + tests, encoding='utf-8')
+      (path / 'test.c').write_text(fixture + writer + selector + installer + '\n' + request + '\n' + tests, encoding='utf-8')
       flags = ['-std=c11', '-pthread', '-Wall', '-Wextra', '-Werror', '-I', str(ROOT / 'main')] + variant
       libs = []
       cjson = os.environ.get('CJSON_SOURCE')
@@ -421,6 +443,93 @@ with tempfile.TemporaryDirectory(prefix='ota-check-') as directory:
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     binary = path / ('check.exe' if os.name == 'nt' else 'check')
     subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(path / 'check.c'), '-o', str(binary), *libs], check=True)
+    subprocess.run([str(binary)], check=True, timeout=30)
+
+scheduler = '\n'.join(line for line in source.splitlines() if line.startswith((
+    '#define DAILY_US ', '#define POLL_RETRY_', '#define CHECK_BIT ', '#define INSTALL_BIT ', '#define CONFIG_BIT '))) + '\n'
+scheduler += schedule_start + source.split(schedule_start, 1)[1].split('static void worker(', 1)[0]
+scheduler_fixture = r'''
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+typedef struct {
+    struct {bool enabled, auto_install; int install_hour;} config;
+    bool restart_pending,busy,checked,update_available;
+    unsigned progress;
+} ota_remote_state_t;
+static ota_remote_state_t s_state;
+static int lock,*s_lock=&lock;
+#define portMAX_DELAY 0
+static int64_t now=1000;
+static bool uplink, server_ok, available;
+static int checks, installs, local_hour=23;
+static void xSemaphoreTake(int *m,int wait){assert(m==s_lock && !wait && !lock);lock=1;}
+static void xSemaphoreGive(int *m){assert(m==s_lock && lock);lock=0;}
+static int64_t esp_timer_get_time(void){return now;}
+static time_t fixed_time(time_t *out){(void)out;return 1700000001;}
+static struct tm *fixed_localtime(const time_t *t,struct tm *local){assert(*t>1700000000);local->tm_hour=local_hour;return local;}
+#define time fixed_time
+#define localtime_r fixed_localtime
+static bool uplink_internet_ready(void){assert(s_state.busy && !lock);return uplink;}
+static void status_set(const char *text){assert(!lock && !strcmp(text,"Waiting for an uplink"));}
+static void ota_remote_get_state(ota_remote_state_t *out){assert(!lock && s_state.busy);*out=s_state;}
+static bool check_release(void){
+    assert(!lock && s_state.busy && uplink);
+    checks++;now+=50;
+    s_state.checked=server_ok;s_state.update_available=server_ok && available;
+    return server_ok;
+}
+static bool install_release(void){
+    assert(!lock && s_state.busy && s_state.checked && s_state.update_available);
+    installs++;return true;
+}
+''' + scheduler + r'''
+int main(void){
+    ota_schedule_t sched={0};s_state.config.install_hour=-1;
+    worker_step(&sched,0);assert(!checks && !s_state.busy);
+    s_state.config.enabled=true;
+    worker_step(&sched,0);assert(!checks && !sched.next_poll && !s_state.busy);
+    uplink=true;
+    worker_step(&sched,0);
+    assert(checks==1 && sched.next_poll==now+POLL_RETRY_FIRST_US && !s_state.checked);
+    now=sched.next_poll-1;worker_step(&sched,0);assert(checks==1);
+    now=sched.next_poll;worker_step(&sched,0);
+    assert(checks==2 && sched.next_poll==now+2*POLL_RETRY_FIRST_US);
+    for(int i=0;i<6;i++){now=sched.next_poll;worker_step(&sched,0);}
+    assert(checks==8 && sched.next_poll==now+POLL_RETRY_MAX_US);
+    server_ok=true;now=sched.next_poll;worker_step(&sched,0);
+    assert(checks==9 && s_state.checked && !s_state.update_available && sched.next_poll==now+DAILY_US && !sched.retry_us);
+    available=true;s_state.config.auto_install=true;s_state.config.install_hour=3;
+    s_state.busy=true;worker_step(&sched,CHECK_BIT);
+    assert(checks==10 && s_state.update_available && !s_state.busy && !installs);
+    local_hour=23;worker_step(&sched,0);assert(checks==10 && !installs);
+    local_hour=3;server_ok=false;worker_step(&sched,0);
+    assert(checks==11 && !installs && !s_state.checked && sched.next_poll==now+POLL_RETRY_FIRST_US);
+    now=sched.next_poll;server_ok=true;worker_step(&sched,0);
+    assert(checks==12 && installs==1 && sched.next_poll==now+DAILY_US && sched.last_install==now);
+    s_state.busy=true;worker_step(&sched,0);assert(s_state.busy && checks==12);
+    s_state.busy=false;s_state.config.enabled=false;worker_step(&sched,CONFIG_BIT);
+    assert(!sched.next_poll && !sched.retry_us && !s_state.busy && checks==12);
+    worker_step(&sched,INSTALL_BIT); /* manual requests remain usable */
+    assert(checks==13 && installs==2 && !s_state.busy);
+    s_state.restart_pending=true;worker_step(&sched,INSTALL_BIT);
+    assert(checks==13 && installs==2);
+    puts("PASS: GitHub retry has capped exponential backoff, delayed auto-install revalidates, normal daily interval restored");
+}
+'''
+with tempfile.TemporaryDirectory(prefix='ota-schedule-') as folder:
+    path = Path(folder)
+    c = path / 'schedule.c'
+    c.write_text(scheduler_fixture, encoding='utf-8')
+    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror']
+    if os.environ.get('OTA_SANITIZE') == '1':
+        flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+    binary = path / ('schedule.exe' if os.name == 'nt' else 'schedule')
+    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(c), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)
 
 parser = argparse.ArgumentParser(description=__doc__)

@@ -53,13 +53,36 @@ const char *throughput_stop(uint64_t bytes, uint64_t us, uint32_t seconds, size_
     if (us >= (uint64_t)seconds * 1000000u) return "time limit reached";
     return NULL;
 }
+static size_t throughput_read_limit(uint64_t bytes, size_t capacity)
+{
+    if (bytes >= THR_MAX_BYTES) return 0;
+    uint64_t remaining = THR_MAX_BYTES - bytes;
+    return remaining < capacity ? (size_t)remaining : capacity;
+}
+
+static bool throughput_blob_size(const char *value, uint32_t *bytes)
+{
+    uint32_t n = 0;
+    for (const char *p = value; *p; p++) {
+        if (*p < '0' || *p > '9') return false;
+        unsigned digit = (unsigned)(*p - '0');
+        if (n > (THR_BLOB_MAX - digit) / 10) return false;
+        n = n * 10 + digit;
+    }
+    if (n < 65536) return false;
+    *bytes = n;
+    return true;
+}
+
 /* --- throughput core (end) --- */
 
 #ifdef ESP_PLATFORM
 #include "history.h"
+#include "homelab_ops.h"
 #include "json_guard.h"
 #include "task_reaper.h"
 #include "web_ui.h"
+#include "web_transfer.h"
 #include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "ml_tls_distrust.h"
@@ -70,6 +93,7 @@ const char *throughput_stop(uint64_t bytes, uint64_t us, uint32_t seconds, size_
 #include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 #include <stdlib.h>
 
 typedef struct {
@@ -83,41 +107,152 @@ typedef struct {
 EXT_RAM_BSS_ATTR static job_t s_job;            /* PSRAM: no internal RAM between tests */
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
+/* The HTTP client's receive timeout is renewed on each transport read.
+ * A separate on-demand task ends a stalled header or body read without
+ * blocking the ESP timer task. Join it before closing the borrowed socket. */
+#define THR_CHUNK 4096
+#define THR_HEADER_US 10000000LL
+#define THR_DEADLINE_REARM 1u
+#define THR_DEADLINE_STOP 2u
+
+typedef struct {
+    int fd;
+    int64_t due_us;
+    bool expired;
+    TaskHandle_t task;
+    SemaphoreHandle_t done;
+} throughput_deadline_t;
+
+static void deadline_worker(void *arg)
+{
+    throughput_deadline_t *deadline = arg;
+    for (;;) {
+        int64_t now = esp_timer_get_time();
+        taskENTER_CRITICAL(&s_mux);
+        int64_t remaining = deadline->due_us - now;
+        bool expire_now = !deadline->expired && remaining <= 0;
+        if (expire_now) deadline->expired = true;
+        bool expired = deadline->expired;
+        taskEXIT_CRITICAL(&s_mux);
+
+        if (expire_now) (void)shutdown(deadline->fd, SHUT_RD);
+        /* Round up rather than polling at the final sub-tick boundary. */
+        TickType_t timeout = expired ? portMAX_DELAY :
+            pdMS_TO_TICKS((remaining + 999) / 1000) + 1;
+        uint32_t command = 0;
+        if (xTaskNotifyWait(0, UINT32_MAX, &command, timeout) == pdTRUE &&
+            (command & THR_DEADLINE_STOP)) break;
+    }
+    xSemaphoreGive(deadline->done);
+    task_reaper_self_delete();
+}
+
+static bool deadline_start(throughput_deadline_t *deadline, int fd)
+{
+    if (fd < 0) return false;
+    deadline->fd = fd;
+    deadline->due_us = esp_timer_get_time() + THR_HEADER_US;
+    deadline->done = xSemaphoreCreateBinary();
+    if (!deadline->done) return false;
+    if (xTaskCreateWithCaps(deadline_worker, "speed_deadline", 4096, deadline,
+                            3, &deadline->task, MALLOC_CAP_SPIRAM) != pdPASS) {
+        vSemaphoreDelete(deadline->done);
+        return false;
+    }
+    return true;
+}
+
+static bool deadline_for_body(throughput_deadline_t *deadline, int64_t start,
+                              uint32_t seconds)
+{
+    taskENTER_CRITICAL(&s_mux);
+    bool ready = !deadline->expired && start < deadline->due_us;
+    if (ready) deadline->due_us = start + (int64_t)seconds * 1000000;
+    taskEXIT_CRITICAL(&s_mux);
+    if (ready) xTaskNotify(deadline->task, THR_DEADLINE_REARM, eSetBits);
+    return ready;
+}
+
+static void deadline_finish(throughput_deadline_t *deadline)
+{
+    xTaskNotify(deadline->task, THR_DEADLINE_STOP, eSetBits);
+    xSemaphoreTake(deadline->done, portMAX_DELAY);
+    vSemaphoreDelete(deadline->done);
+}
+
+static const char *read_test_payload(esp_http_client_handle_t client, char *buffer,
+                                     int64_t body_start, uint64_t *bytes, int status)
+{
+    for (;;) {
+        uint64_t elapsed = (uint64_t)(esp_timer_get_time() - body_start);
+        const char *stop = throughput_stop(*bytes, elapsed, s_job.seconds,
+                                          heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        if (stop) return stop;
+
+        size_t limit = throughput_read_limit(*bytes, THR_CHUNK);
+        int n = esp_http_client_read(client, buffer, (int)limit);
+        if (n == -ESP_ERR_HTTP_EAGAIN) continue;
+        if (n < 0) return "connection lost";
+        if (n == 0)
+            return esp_http_client_is_complete_data_received(client) ? "file complete" : "connection closed";
+
+        *bytes += (uint64_t)n;
+        elapsed = (uint64_t)(esp_timer_get_time() - body_start);
+        taskENTER_CRITICAL(&s_mux);
+        s_job.bytes = *bytes;
+        s_job.elapsed_us = elapsed;
+        s_job.status = status;
+        taskEXIT_CRITICAL(&s_mux);
+    }
+}
+
 static void worker(void *arg)
 {
     (void)arg;
-    char *buffer = heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
-    esp_http_client_config_t hc = {.url = s_job.url, .timeout_ms = 10000, .buffer_size = 4096,
+    char *buffer = heap_caps_malloc(THR_CHUNK, MALLOC_CAP_SPIRAM);
+    esp_http_client_config_t hc = {.url = s_job.url, .timeout_ms = 10000, .buffer_size = THR_CHUNK,
                                    .crt_bundle_attach = ml_tls_bundle_attach, .max_redirection_count = 3};
     esp_http_client_handle_t client = buffer ? esp_http_client_init(&hc) : NULL;
-    const char *why = !buffer || !client ? "out of memory" : NULL;
-    int64_t start = esp_timer_get_time(), body_start = 0;
+    const char *why = "out of memory";
+    int64_t start = esp_timer_get_time(), header_end = 0, body_start = 0;
     uint64_t bytes = 0;
     int status = 0;
-    if (client && esp_http_client_open(client, 0) == ESP_OK && esp_http_client_fetch_headers(client) >= 0) {
-        status = esp_http_client_get_status_code(client);
-        body_start = esp_timer_get_time();
-        if (status < 200 || status >= 300) why = "the server did not return the file";
-        while (!why) {
-            int n = esp_http_client_read(client, buffer, 4096);
-            int64_t now = esp_timer_get_time();
-            if (n < 0) {why = "connection lost"; break;}
-            if (n == 0) {why = esp_http_client_is_complete_data_received(client) ? "file complete" : "connection closed"; break;}
-            bytes += (uint64_t)n;
-            taskENTER_CRITICAL(&s_mux);
-            s_job.bytes = bytes; s_job.elapsed_us = (uint64_t)(now - body_start); s_job.status = status;
-            taskEXIT_CRITICAL(&s_mux);
-            why = throughput_stop(bytes, (uint64_t)(now - body_start), s_job.seconds, heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    int64_t payload_end = 0;
+
+    if (client) {
+        why = "cannot connect (check the URL, DNS and the certificate)";
+        if (esp_http_client_open(client, 0) == ESP_OK) {
+            throughput_deadline_t deadline = {0};
+            why = "test deadline unavailable";
+            if (deadline_start(&deadline, esp_http_client_get_socket(client))) {
+                why = "cannot read the response headers";
+                if (esp_http_client_fetch_headers(client) >= 0) {
+                    header_end = esp_timer_get_time();
+                    status = esp_http_client_get_status_code(client);
+                    if (!deadline_for_body(&deadline, header_end, s_job.seconds))
+                        why = "response headers timed out";
+                    else if (status < 200 || status >= 300)
+                        why = "the server did not return the file";
+                    else {
+                        body_start = header_end;
+                        why = read_test_payload(client, buffer, body_start, &bytes, status);
+                        payload_end = esp_timer_get_time();
+                    }
+                }
+                int64_t finished = body_start ? payload_end : esp_timer_get_time();
+                if (finished >= deadline.due_us)
+                    why = body_start ? "time limit reached" : "response headers timed out";
+                deadline_finish(&deadline);
+            }
         }
-    } else if (!why) why = "cannot connect (check the URL, DNS and the certificate)";
-    int64_t end = esp_timer_get_time();
+    }
     if (client) esp_http_client_cleanup(client);
     free(buffer);
-    uint64_t elapsed = body_start ? (uint64_t)(end - body_start) : 0;
+    uint64_t elapsed = body_start ? (uint64_t)(payload_end - body_start) : 0;
     uint32_t kbps = throughput_kbps(bytes, elapsed);
     taskENTER_CRITICAL(&s_mux);
     s_job.bytes = bytes; s_job.elapsed_us = elapsed; s_job.status = status;
-    s_job.first_byte_us = body_start ? (uint64_t)(body_start - start) : 0;
+    s_job.first_byte_us = header_end ? (uint64_t)(header_end - start) : 0;
     snprintf(s_job.result, sizeof s_job.result, "%s", why);
     s_job.running = false;
     taskEXIT_CRITICAL(&s_mux);
@@ -156,9 +291,17 @@ static esp_err_t post_test(httpd_req_t *req)
     const cJSON *url = cJSON_GetObjectItemCaseSensitive(root, "url"), *seconds = cJSON_GetObjectItemCaseSensitive(root, "seconds");
     ok = cJSON_IsObject(root) && cJSON_IsString(url) && throughput_url_valid(url->valuestring, why, sizeof why) &&
          (!seconds || (cJSON_IsNumber(seconds) && seconds->valuedouble >= 3 && seconds->valuedouble <= THR_MAX_S));
-    bool started = false, busy = false;
-    if (ok && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 24576) {ok = false; snprintf(why, sizeof why, "not enough free memory right now");}
+    bool admitted = false;
     if (ok) {
+        if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 24576)
+            snprintf(why, sizeof why, "not enough free memory right now");
+        else if (!homelab_ops_admit())
+            snprintf(why, sizeof why, "resource guard is deferring this test");
+        else
+            admitted = true;
+    }
+    bool started = false, busy = false;
+    if (admitted) {
         taskENTER_CRITICAL(&s_mux);
         busy = s_job.running;
         if (!busy) {
@@ -185,15 +328,10 @@ static esp_err_t post_test(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
-/* Zero bytes to the browser, which measures the link to the gateway. */
-static esp_err_t get_blob(httpd_req_t *req)
+static esp_err_t serve_blob(httpd_req_t *req, const void *argument)
 {
-    if (web_ui_require_auth(req) != ESP_OK) return ESP_FAIL;
-    char query[32], value[12];
-    uint32_t bytes = 4u * 1024u * 1024u;
-    if (httpd_req_get_url_query_str(req, query, sizeof query) == ESP_OK && httpd_query_key_value(query, "bytes", value, sizeof value) == ESP_OK)
-        bytes = (uint32_t)strtoul(value, NULL, 10);
-    if (bytes < 65536 || bytes > THR_BLOB_MAX) {httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bytes must be 65536-16777216"); return ESP_FAIL;}
+    uint32_t bytes;
+    memcpy(&bytes, argument, sizeof bytes);
     char *chunk = heap_caps_calloc(1, 4096, MALLOC_CAP_SPIRAM);
     if (!chunk) {httpd_resp_send_500(req); return ESP_FAIL;}
     httpd_resp_set_type(req, "application/octet-stream");
@@ -204,6 +342,28 @@ static esp_err_t get_blob(httpd_req_t *req)
     if (err == ESP_OK) err = httpd_resp_send_chunk(req, NULL, 0);
     free(chunk);
     return err;
+}
+
+/* Zero bytes to the browser, which measures the link to the gateway. */
+static esp_err_t get_blob(httpd_req_t *req)
+{
+    if (web_ui_require_auth(req) != ESP_OK) return ESP_FAIL;
+    char query[32], value[12];
+    uint32_t bytes = 4u * 1024u * 1024u;
+    if (httpd_req_get_url_query_len(req) > 0) {
+        esp_err_t query_result = httpd_req_get_url_query_str(req, query, sizeof query);
+        bool valid = query_result == ESP_OK;
+        if (valid) {
+            query_result = httpd_query_key_value(query, "bytes", value, sizeof value);
+            valid = query_result == ESP_ERR_NOT_FOUND ||
+                    (query_result == ESP_OK && throughput_blob_size(value, &bytes));
+        }
+        if (!valid) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bytes must be 65536-16777216");
+            return ESP_FAIL;
+        }
+    }
+    return web_transfer_start(req, serve_blob, &bytes, sizeof bytes);
 }
 
 esp_err_t throughput_register_http(httpd_handle_t server)

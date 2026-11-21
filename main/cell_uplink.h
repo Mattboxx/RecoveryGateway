@@ -99,7 +99,9 @@ bool cell_uplink_usb_configured(void);
 /* Secrets (password, PIN) are never returned by the HTTP API. */
 void cell_uplink_get_config(cell_config_t *out);
 esp_err_t cell_uplink_set_config(const cell_config_t *c, char *why, size_t why_size);
+esp_err_t cell_uplink_store_for_reboot(const cell_config_t *c, char *why, size_t why_size);
 void cell_uplink_get_status(cell_status_t *out);
+bool cell_uplink_restart_required(void);
 /* TCP/IP context only (route supervisor): the cellular netif when it should
  * carry the Internet uplink instead of `current`, otherwise NULL. */
 struct netif *cell_uplink_lwip_select(struct netif *current);

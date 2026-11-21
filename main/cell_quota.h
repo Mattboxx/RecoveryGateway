@@ -5,8 +5,9 @@
  * stick): bytes in both directions, as carriers count them. Off (limit 0)
  * by default: nothing is counted, stored or written to flash. With a limit
  * it warns once at a chosen percentage and once at the limit, and can stop
- * using mobile data until the next period. The count is approximate: up to
- * 1 MB or 10 minutes of use since the last save is lost on a power cut.
+ * using mobile data until the next period. A power cut can lose the usage
+ * since the last checkpoint. Regular checkpoints need at least 1 MiB of
+ * new data and 10 minutes since the last successful write.
  * Original implementation, Mattboxx Edition. */
 #pragma once
 #include <stdbool.h>
@@ -31,7 +32,8 @@ typedef struct {
     uint8_t alerted;                        /* CELL_QUOTA_* */
 } cell_quota_state_t;
 
-enum {CELL_QUOTA_EV_NEW_PERIOD = 1, CELL_QUOTA_EV_WARN = 2, CELL_QUOTA_EV_LIMIT = 4};
+enum {CELL_QUOTA_EV_NEW_PERIOD = 1, CELL_QUOTA_EV_WARN = 2, CELL_QUOTA_EV_LIMIT = 4,
+      CELL_QUOTA_EV_CLOCK_CORRECTED = 8};
 
 /* Core (pure, host-tested). */
 bool cell_quota_config_valid(const cell_quota_config_t *c, char *why, size_t n);
@@ -42,7 +44,8 @@ uint32_t cell_quota_period(int year, int month, int day, uint8_t reset_day);
 void cell_quota_period_start(uint32_t period, uint8_t reset_day, int *year, int *month, int *day);
 /* Adds `delta` bytes in `period` (0: unknown, the stored period goes on).
  * A later period starts from zero; *previous gets the finished period's
- * use. Returns CELL_QUOTA_EV_* flags, each alert once per period. */
+ * use. A distant backward correction moves the marker and keeps usage.
+ * Pass only periods from a stable clock. Returns CELL_QUOTA_EV_* flags. */
 int cell_quota_add(const cell_quota_config_t *c, cell_quota_state_t *s, uint64_t delta, uint32_t period, uint64_t *previous);
 /* After a settings change: alerts whose threshold is no longer reached are
  * re-armed. */
@@ -55,8 +58,8 @@ bool cell_quota_save_due(uint64_t used, uint64_t saved_used, uint32_t now_s, uin
 #include "esp_err.h"
 #include "cJSON.h"
 void cell_quota_init(void);
-/* Cellular task: the uplink's byte totals since boot. Cheap when off. */
-void cell_quota_tick(uint64_t total_bytes);
+/* Cellular task: snapshot the uplink's totals since boot. Cheap when off. */
+void cell_quota_tick(void);
 /* True while the limit is reached and "stop at the limit" is on. */
 bool cell_quota_paused(void);
 void cell_quota_get(cell_quota_config_t *c, cell_quota_state_t *s);

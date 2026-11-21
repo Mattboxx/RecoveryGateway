@@ -39,9 +39,29 @@ void cell_quota_period_start(uint32_t period, uint8_t reset_day, int *year, int 
 
 static uint64_t cq_limit(const cell_quota_config_t *c) {return (uint64_t)c->limit_mb * 1024u * 1024u;}
 
+/* Age a plausible clock against uptime before it can change billing periods.
+ * Normal month boundaries and DST preserve UTC continuity. */
+typedef struct {
+    int64_t wall;
+    uint32_t uptime, steady_since;
+} cq_clock_t;
+
+static bool cq_clock_ready(cq_clock_t *clock, int64_t wall, uint32_t uptime)
+{
+    if (wall < 1700000000 || wall > INT64_C(253402300799)) {
+        clock->wall = 0;
+        return false;
+    }
+    int64_t drift = wall - clock->wall - (uptime - clock->uptime);
+    if (!clock->wall || drift < -3 || drift > 3) clock->steady_since = uptime;
+    clock->wall = wall;
+    clock->uptime = uptime;
+    return uptime - clock->steady_since >= 120;
+}
+
 static bool cq_warn_reached(const cell_quota_config_t *c, uint64_t used)
 {
-    return c->limit_mb && c->warn_pct && used * 100u >= cq_limit(c) * c->warn_pct;
+    return c->limit_mb && c->warn_pct && used >= (cq_limit(c) * c->warn_pct + 99u) / 100u;
 }
 
 bool cell_quota_limit_reached(const cell_quota_config_t *c, const cell_quota_state_t *s)
@@ -53,15 +73,20 @@ int cell_quota_add(const cell_quota_config_t *c, cell_quota_state_t *s, uint64_t
 {
     int events = 0;
     if (previous) *previous = 0;
-    if (period && period != s->period) {
-        if (s->period && period > s->period) {      /* a new month: start again */
+    if (period > s->period) {
+        if (s->period) {      /* a new month: start again */
             if (previous) *previous = s->used;
             s->used = 0;
             s->alerted = 0;
             events |= CELL_QUOTA_EV_NEW_PERIOD;
         }
-        /* First clock reading, or a clock set back: same use, the right period. */
+        /* Track the highest observed period so a backward clock correction
+         * cannot make returning to the same month reset usage a second time. */
         s->period = period;
+    } else if (period && s->period - period > 1) {
+        /* Recover an obsolete future marker without granting a new quota. */
+        s->period = period;
+        events |= CELL_QUOTA_EV_CLOCK_CORRECTED;
     }
     s->used = s->used + delta < s->used ? UINT64_MAX : s->used + delta;
     if (!(s->alerted & CELL_QUOTA_WARNED) && cq_warn_reached(c, s->used) && !cell_quota_limit_reached(c, s)) {
@@ -84,18 +109,21 @@ void cell_quota_rearm(const cell_quota_config_t *c, cell_quota_state_t *s)
 bool cell_quota_save_due(uint64_t used, uint64_t saved_used, uint32_t now_s, uint32_t saved_at_s, int events)
 {
     if (events) return true;
-    return used >= saved_used + CELL_QUOTA_SAVE_BYTES && now_s - saved_at_s >= CELL_QUOTA_SAVE_S;
+    return used >= saved_used && used - saved_used >= CELL_QUOTA_SAVE_BYTES &&
+           now_s - saved_at_s >= CELL_QUOTA_SAVE_S;
 }
 /* --- cell_quota core (end) --- */
 
 #if !defined(CELL_QUOTA_HOST_TEST)
 #include "history.h"
+#include "netif_hooks.h"
 #include "nvs.h"
 #include "nvs_params.h"
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <time.h>
 
 #define TAG "cell_quota"
@@ -104,11 +132,16 @@ typedef struct {uint32_t magic, version; cell_quota_config_t config; uint32_t ch
 typedef struct {uint32_t magic, version; cell_quota_state_t state; uint32_t checksum;} cq_state_record_t;
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
+/* Serializes settings changes with the accounting and its flash write.
+ * Routing readers use only s_mux and never wait for NVS. */
+static SemaphoreHandle_t s_writer;
+static StaticSemaphore_t s_writer_storage;
 /* Plain data in PSRAM: no internal RAM, whether used or not. */
 EXT_RAM_BSS_ATTR static cell_quota_config_t s_cfg;
 EXT_RAM_BSS_ATTR static cell_quota_state_t s_state;
 EXT_RAM_BSS_ATTR static uint64_t s_last_total, s_saved_used;
-EXT_RAM_BSS_ATTR static uint32_t s_saved_at;
+EXT_RAM_BSS_ATTR static uint32_t s_saved_at, s_saved_period, s_retry_at;
+EXT_RAM_BSS_ATTR static cq_clock_t s_clock;
 static bool s_loaded;
 
 static uint32_t cq_fnv(const void *data, size_t n)
@@ -121,9 +154,8 @@ static uint32_t cq_fnv(const void *data, size_t n)
 
 static uint32_t uptime_s(void) {return (uint32_t)(esp_timer_get_time() / 1000000);}
 
-static uint32_t period_now(uint8_t reset_day)
+static uint32_t period_at(time_t t, uint8_t reset_day)
 {
-    time_t t = time(NULL);
     struct tm local;
     if (t < 1700000000 || !localtime_r(&t, &local)) return 0;   /* clock not set yet */
     return cell_quota_period(local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, reset_day);
@@ -131,6 +163,7 @@ static uint32_t period_now(uint8_t reset_day)
 
 void cell_quota_init(void)
 {
+    s_writer = xSemaphoreCreateMutexStatic(&s_writer_storage);
     cell_quota_config_t c = {.reset_day = 1, .warn_pct = 80};
     cell_quota_state_t st = {0};
     nvs_handle_t nvs;
@@ -151,7 +184,10 @@ void cell_quota_init(void)
     s_cfg = c;
     s_state = st;
     s_saved_used = st.used;
+    s_saved_period = st.period;
     s_saved_at = 0;
+    s_retry_at = 0;
+    s_clock = (cq_clock_t){0};
     s_last_total = 0;
     s_loaded = true;
     portEXIT_CRITICAL(&s_mux);
@@ -180,6 +216,7 @@ static void save_state(const cell_quota_state_t *st)
     if (history_run_job(save_state_job, &copy) == ESP_OK) {
         portENTER_CRITICAL(&s_mux);
         s_saved_used = copy.used;
+        s_saved_period = copy.period;
         s_saved_at = uptime_s();
         portEXIT_CRITICAL(&s_mux);
     } else {
@@ -193,6 +230,8 @@ static void report(int events, const cell_quota_config_t *c, const cell_quota_st
     if (events & CELL_QUOTA_EV_NEW_PERIOD)
         history_event(HIST_EV_UPLINK, HIST_INFO, "Mobile data: new monthly period, counter reset (previous period %u MB)",
                       (unsigned)(previous / (1024u * 1024u)));
+    if (events & CELL_QUOTA_EV_CLOCK_CORRECTED)
+        history_event(HIST_EV_UPLINK, HIST_INFO, "Mobile data: billing date corrected; usage retained");
     if (events & CELL_QUOTA_EV_WARN)
         history_event(HIST_EV_UPLINK, HIST_WARN, "Mobile data: %u%% of the monthly limit used (%u MB of %u MB)",
                       (unsigned)c->warn_pct, used_mb, (unsigned)c->limit_mb);
@@ -202,25 +241,36 @@ static void report(int events, const cell_quota_config_t *c, const cell_quota_st
                       (unsigned)c->limit_mb);
 }
 
-void cell_quota_tick(uint64_t total_bytes)
+void cell_quota_tick(void)
 {
-    if (!s_loaded) return;
+    /* Keep the previous byte baseline if a settings write is in progress.
+     * The next successful tick will still account for those bytes. */
+    if (!s_loaded || !s_writer || xSemaphoreTake(s_writer, 0) != pdTRUE) return;
+    uint64_t rx, tx;
+    netif_hooks_get_mobile_bytes(&rx, &tx);
+    uint64_t total_bytes = rx + tx;
     portENTER_CRITICAL(&s_mux);
     bool on = s_cfg.limit_mb != 0;
     uint64_t delta = total_bytes >= s_last_total ? total_bytes - s_last_total : total_bytes;
     s_last_total = total_bytes;
     portEXIT_CRITICAL(&s_mux);
-    if (!on) return;                                  /* off: no counting, no flash writes */
-    uint32_t period = period_now(s_cfg.reset_day);
+    if (!on) {xSemaphoreGive(s_writer); return;}     /* off: no counting or flash writes */
+    uint32_t now = uptime_s();
+    time_t wall = time(NULL);
+    uint32_t period = cq_clock_ready(&s_clock, wall, now) ? period_at(wall, s_cfg.reset_day) : 0;
     uint64_t previous = 0;
     portENTER_CRITICAL(&s_mux);
     int events = cell_quota_add(&s_cfg, &s_state, delta, period, &previous);
     cell_quota_config_t c = s_cfg;
     cell_quota_state_t st = s_state;
-    bool due = cell_quota_save_due(st.used, s_saved_used, uptime_s(), s_saved_at, events);
+    bool due = events || ((int32_t)(now - s_retry_at) >= 0 &&
+               (st.period != s_saved_period ||
+                cell_quota_save_due(st.used, s_saved_used, now, s_saved_at, 0)));
+    if (due) s_retry_at = now + 60;
     portEXIT_CRITICAL(&s_mux);
     if (events) report(events, &c, &st, previous);
     if (due) save_state(&st);
+    xSemaphoreGive(s_writer);
 }
 
 bool cell_quota_paused(void)
@@ -242,6 +292,10 @@ void cell_quota_get(cell_quota_config_t *c, cell_quota_state_t *s)
 esp_err_t cell_quota_set(const cell_quota_config_t *c, bool reset_usage, char *why, size_t n)
 {
     if (!cell_quota_config_valid(c, why, n)) return ESP_ERR_INVALID_ARG;
+    if (!s_writer || xSemaphoreTake(s_writer, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        snprintf(why, n, "mobile data settings are busy");
+        return ESP_ERR_TIMEOUT;
+    }
     cq_config_record_t r;
     memset(&r, 0, sizeof r);
     r.magic = CQ_MAGIC; r.version = 1; r.config = *c;
@@ -249,31 +303,43 @@ esp_err_t cell_quota_set(const cell_quota_config_t *c, bool reset_usage, char *w
     cell_quota_state_t st;
     portENTER_CRITICAL(&s_mux);
     st = s_state;
+    bool new_baseline = reset_usage || !c->limit_mb || !s_cfg.limit_mb;
     portEXIT_CRITICAL(&s_mux);
-    if (reset_usage || !c->limit_mb) {st.used = 0; st.alerted = 0;}
+    if (reset_usage || !c->limit_mb) {
+        st.used = 0;
+        st.alerted = 0;
+        st.period = 0;
+    }
     cell_quota_rearm(c, &st);
     cq_state_record_t rs;
     memset(&rs, 0, sizeof rs);
     rs.magic = CQ_MAGIC; rs.version = 1; rs.state = st;
     rs.checksum = cq_fnv(&rs, offsetof(cq_state_record_t, checksum));
-    nvs_handle_t nvs;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    esp_err_t err = nvs_param_txn_begin();
     if (err == ESP_OK) {
-        err = nvs_set_blob(nvs, "cell_qcfg", &r, sizeof r);
-        /* Off: the counter is dropped, not kept in flash. */
-        if (err == ESP_OK) err = c->limit_mb ? nvs_set_blob(nvs, "cell_quse", &rs, sizeof rs) : nvs_erase_key(nvs, "cell_quse");
-        if (err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
-        if (err == ESP_OK) err = nvs_commit(nvs);
-        nvs_close(nvs);
+        err = nvs_param_set_blob("cell_qcfg", &r, sizeof r);
+        if (err == ESP_OK)
+            err = c->limit_mb ? nvs_param_set_blob("cell_quse", &rs, sizeof rs) : nvs_param_erase("cell_quse");
+        esp_err_t end = nvs_param_txn_end(err == ESP_OK);
+        if (err == ESP_OK) err = end;
     }
-    if (err != ESP_OK) {snprintf(why, n, "settings not saved"); return err;}   /* RAM keeps the previous values */
+    if (err != ESP_OK) {
+        snprintf(why, n, "settings not saved");
+        xSemaphoreGive(s_writer);
+        return err;  /* RAM keeps the previous values. */
+    }
+    uint64_t rx = 0, tx = 0;
+    if (new_baseline) netif_hooks_get_mobile_bytes(&rx, &tx);
     portENTER_CRITICAL(&s_mux);
+    if (new_baseline) s_last_total = rx + tx;
     s_cfg = *c;
     s_state = st;
     s_saved_used = st.used;
+    s_saved_period = st.period;
     s_saved_at = uptime_s();
     s_loaded = true;
     portEXIT_CRITICAL(&s_mux);
+    xSemaphoreGive(s_writer);
     return ESP_OK;
 }
 
@@ -290,7 +356,7 @@ void cell_quota_json(cJSON *parent)
     cJSON_AddBoolToObject(o, "pause", c.pause);
     cJSON_AddNumberToObject(o, "used_bytes", (double)(c.limit_mb ? s.used : 0));
     cJSON_AddBoolToObject(o, "paused", c.pause && cell_quota_limit_reached(&c, &s));
-    cJSON_AddBoolToObject(o, "clock", period_now(c.reset_day ? c.reset_day : 1) != 0);
+    cJSON_AddBoolToObject(o, "clock", period_at(time(NULL), c.reset_day ? c.reset_day : 1) != 0);
     if (c.limit_mb && s.period) {
         int y, m, d;
         char date[40];   /* the compiler bounds every int field */

@@ -32,6 +32,7 @@ typedef struct {
 typedef struct {
     bool configured;            /* enabled with broker URI and base topic */
     bool connected;
+    bool commands_ready;        /* broker accepted the current subscription */
     bool connecting;            /* one bounded attempt is in flight */
     bool discovery_pending;     /* Discovery still being paced out */
     uint8_t retry_level;        /* consecutive failures, saturating at 7 */

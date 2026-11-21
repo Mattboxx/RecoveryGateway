@@ -19,6 +19,8 @@
 #include <arpa/inet.h>
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_event.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"
@@ -39,6 +41,7 @@
 #include "boot_timeline.h"
 #include "tailnet_names.h"
 #include "ml_tls_distrust.h"
+#include "uplink_services.h"
 
 /* Local helper: load a string from NVS, defaulting to an empty heap
  * buffer when the key isn't there. Other modules assume non-NULL. */
@@ -114,8 +117,15 @@ static SemaphoreHandle_t s_lifecycle;
 static portMUX_TYPE s_connect_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_connect_in_flight;
 static bool s_instance_ready; /* Published instance owns its reconnects; lock below. */
+static bool s_start_cleanup_failed;
 static esp_err_t s_start_error;
 static bool s_start_retrying;
+static esp_timer_handle_t s_admission_timer;
+static bool s_admission_pending;
+static unsigned s_admission_backoff;
+ESP_EVENT_DEFINE_BASE(TAILSCALE_ADMISSION_EVENT);
+#define TS_ADMISSION_FIRST_MS 2000u
+#define TS_ADMISSION_MAX_MS 30000u
 
 esp_err_t tailscale_start_error(void)
 {
@@ -128,7 +138,7 @@ esp_err_t tailscale_start_error(void)
 bool tailscale_start_retrying(void)
 {
     taskENTER_CRITICAL(&s_connect_lock);
-    bool retrying = s_start_retrying;
+    bool retrying = s_start_retrying || s_admission_pending;
     taskEXIT_CRITICAL(&s_connect_lock);
     return retrying;
 }
@@ -160,6 +170,21 @@ bool tailscale_exit_server_configured(void)
     return enabled && !selected && (offer || tailscale_manual_exit_configured());
 }
 uint16_t tailscale_peerapi_port(void) { return s_peerapi_port; }
+
+void tailscale_retry_peer_dns(void)
+{
+    static int64_t retry_at;
+    if (!tailscale_exit_server_active() || peer_dns_is_running()) return;
+    int64_t now = esp_timer_get_time();
+    if (now < retry_at || !tailscale_lifecycle_try_acquire()) return;
+    if (s_microlink && !peer_dns_is_running()) {
+        retry_at = now + 30000000;
+        peer_dns_start();
+        if (peer_dns_is_running())
+            microlink_set_peer_api_port(s_microlink, tailscale_peerapi_port());
+    }
+    tailscale_lifecycle_release();
+}
 
 /* Read saved settings into caller-owned storage: no mutable static preview
  * shared between HTTP, MQTT and the connect task. Manual routes are untouched. */
@@ -217,6 +242,8 @@ void init_sntp_if_needed(void)
     esp_sntp_setservername(0, "pool.ntp.org");
     esp_sntp_init();
 }
+
+static void tailscale_admission_retry_init(void);
 
 void tailscale_init(void)
 {
@@ -304,6 +331,7 @@ void tailscale_init(void)
     s_peerapi_port = web_ui_configured_port() == TAILSCALE_PEERAPI_PORT
                   ? TAILSCALE_PEERAPI_PORT + 1 : TAILSCALE_PEERAPI_PORT;
     s_routes_valid = tailscale_routes_preview(s_active_routes, sizeof s_active_routes);
+    if (tailscale_enabled) tailscale_admission_retry_init();
     ESP_LOGI(TAG, "Config loaded (enabled=%ld, max_peers=%ld, login_server=%s, exit_node=%lu.%lu.%lu.%lu)",
              (long)tailscale_enabled, (long)tailscale_max_peers,
              (tailscale_login_server && tailscale_login_server[0]) ? tailscale_login_server : "<saas>",
@@ -350,6 +378,7 @@ static void tailscale_dns_state(microlink_t *ml, microlink_state_t state, void *
 
 static esp_err_t tailscale_connect_locked(void)
 {
+    if (s_start_cleanup_failed) return ESP_ERR_INVALID_STATE;
     if (!tailscale_enabled) {
         ESP_LOGI(TAG, "Tailscale not enabled");
         return ESP_ERR_INVALID_STATE;
@@ -380,8 +409,8 @@ static esp_err_t tailscale_connect_locked(void)
                  s_active_ipn_version, strchr(s_active_ipn_version, '-') ? "" : "-t00000000000-g00000000000");
     }
 
-    /* Start before announcing PeerAPI; a failed listener must not be advertised.
-     * This is the sole startup caller, serialized by the lifecycle mutex. */
+    /* Start before announcing PeerAPI. Any later retry uses this same
+     * lifecycle mutex and advertises the service after successful startup. */
     peer_dns_start();
     ++s_lifecycle_generation;
     microlink_config_t cfg = {
@@ -418,6 +447,13 @@ static esp_err_t tailscale_connect_locked(void)
     esp_err_t err = microlink_start(instance);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "microlink_start failed: %s", esp_err_to_name(err));
+        if (err == ESP_ERR_INVALID_STATE) {
+            /* MicroLink could not quiesce a partially started instance.
+             * Leave restart as the recovery path even on another GOT_IP. */
+            taskENTER_CRITICAL(&s_connect_lock);
+            s_start_cleanup_failed = true;
+            taskEXIT_CRITICAL(&s_connect_lock);
+        }
         microlink_destroy(instance);
         return err;
     }
@@ -483,25 +519,105 @@ bool tailscale_is_connected(void)
 
 static void tailscale_connect_task(void *pvParameters);
 
-/* Called from the uplink event task. Reserve before spawning so a second IP
- * event cannot allocate a duplicate stack while the first task is starting. */
+static void tailscale_admission_schedule(unsigned delay_ms)
+{
+    if (esp_timer_start_once(s_admission_timer, (uint64_t)delay_ms * 1000u) == ESP_OK) return;
+    taskENTER_CRITICAL(&s_connect_lock);
+    s_admission_pending = false;
+    taskEXIT_CRITICAL(&s_connect_lock);
+    ESP_LOGE(TAG, "Could not schedule Tailscale startup retry");
+}
+
+static void tailscale_admission_tick(void *arg)
+{
+    (void)arg;
+    /* Leave allocation and netif inspection to the event loop. A full event
+     * queue must not consume the sole scheduled retry. */
+    if (esp_event_post(TAILSCALE_ADMISSION_EVENT, 0, NULL, 0, 0) != ESP_OK)
+        tailscale_admission_schedule(TS_ADMISSION_FIRST_MS);
+}
+
+static void tailscale_admission_event(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg; (void)base; (void)id; (void)data;
+    bool ready = tailscale_enabled && uplink_internet_ready();
+    taskENTER_CRITICAL(&s_connect_lock);
+    bool pending = s_admission_pending;
+    s_admission_pending = false;
+    if (!ready) s_admission_backoff = 0;
+    taskEXIT_CRITICAL(&s_connect_lock);
+    if (pending && ready) (void)tailscale_request_connect();
+}
+
+static void tailscale_admission_retry_init(void)
+{
+    const esp_timer_create_args_t args = {.callback = tailscale_admission_tick, .name = "ts_admission"};
+    if (esp_timer_create(&args, &s_admission_timer) != ESP_OK) {
+        ESP_LOGE(TAG, "Could not allocate Tailscale startup retry timer");
+        return;
+    }
+    if (esp_event_handler_register(TAILSCALE_ADMISSION_EVENT, 0, tailscale_admission_event, NULL) != ESP_OK) {
+        esp_timer_delete(s_admission_timer);
+        s_admission_timer = NULL;
+        ESP_LOGE(TAG, "Could not register Tailscale startup retry handler");
+    }
+}
+
+static void tailscale_finish_start(esp_err_t err)
+{
+    unsigned delay = 0;
+    taskENTER_CRITICAL(&s_connect_lock);
+    s_connect_in_flight = false;
+    s_start_retrying = false;
+    if (!s_instance_ready) s_start_error = err;
+    s_admission_pending = err == ESP_ERR_NO_MEM && !s_instance_ready &&
+                          !s_start_cleanup_failed && s_admission_timer;
+    if (s_admission_pending) {
+        delay = TS_ADMISSION_FIRST_MS << s_admission_backoff;
+        if (delay < TS_ADMISSION_MAX_MS) s_admission_backoff++;
+        else delay = TS_ADMISSION_MAX_MS;
+    } else {
+        s_admission_backoff = 0;
+    }
+    taskEXIT_CRITICAL(&s_connect_lock);
+    if (delay) tailscale_admission_schedule(delay);
+}
+
+/* Reserve before spawning so simultaneous uplink events cannot allocate
+ * duplicate stacks. A pending timer owns admission until it fires. */
 esp_err_t tailscale_request_connect(void)
 {
     if (!tailscale_enabled) return ESP_OK;
     taskENTER_CRITICAL(&s_connect_lock);
-    bool duplicate = s_instance_ready || s_connect_in_flight;
+    bool blocked = s_start_cleanup_failed;
+    bool duplicate = blocked || s_instance_ready || s_connect_in_flight || s_admission_pending;
     if (!duplicate) s_connect_in_flight = true;
     taskEXIT_CRITICAL(&s_connect_lock);
-    if (duplicate) return ESP_OK;
+    if (duplicate) return blocked ? ESP_ERR_INVALID_STATE : ESP_OK;
     if (xTaskCreateWithCaps(tailscale_connect_task, "ts_connect", 4096, NULL, 5,
                            NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-        taskENTER_CRITICAL(&s_connect_lock);
-        s_connect_in_flight = false;
-        taskEXIT_CRITICAL(&s_connect_lock);
-        ESP_LOGE(TAG, "Cannot create Tailscale startup task; next uplink request may retry");
+        ESP_LOGW(TAG, "Cannot create Tailscale startup task");
+        tailscale_finish_start(ESP_ERR_NO_MEM);
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+static void tailscale_start_attempts(void)
+{
+    for (unsigned attempt = 0; ; ++attempt) {
+        esp_err_t err = tailscale_connect();
+        if (err != ESP_ERR_NO_MEM || attempt == 4) {
+            tailscale_finish_start(err);
+            return;
+        }
+        taskENTER_CRITICAL(&s_connect_lock);
+        s_start_retrying = true;
+        taskEXIT_CRITICAL(&s_connect_lock);
+        unsigned delay_ms = 2000u << attempt;
+        ESP_LOGW(TAG, "Startup memory shortage; retry %u/4 in %u ms", attempt + 1, delay_ms);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
 }
 
 static void tailscale_connect_task(void *pvParameters)
@@ -537,19 +653,6 @@ static void tailscale_connect_task(void *pvParameters)
     /* Startup-only retries, never re-register an already published instance.
      * Other boot services can release temporary allocations after the first
      * attempt. Keep the same saved identity and avoid reboot loops. */
-    for (unsigned attempt = 0; attempt < 5; ++attempt) {
-        esp_err_t err = tailscale_connect();
-        bool retrying = err == ESP_ERR_NO_MEM && attempt < 4;
-        taskENTER_CRITICAL(&s_connect_lock);
-        s_start_retrying = retrying;
-        taskEXIT_CRITICAL(&s_connect_lock);
-        if (!retrying) break;
-        unsigned delay_ms = 2000u << attempt;
-        ESP_LOGW(TAG, "Startup memory shortage; retry %u/4 in %u ms", attempt + 1, delay_ms);
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
-    }
-    taskENTER_CRITICAL(&s_connect_lock);
-    s_connect_in_flight = false;
-    taskEXIT_CRITICAL(&s_connect_lock);
+    tailscale_start_attempts();
     task_reaper_self_delete(); /* no runtime clean-up task allocation */
 }

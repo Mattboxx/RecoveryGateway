@@ -18,11 +18,13 @@ def between(path, start, end):
 forward = between('main/tailnet_forward.h', '#define TAILNET_FORWARD_MAX', 'typedef struct {\n    bool installed;')
 header = between('main/service_check.h', 'typedef enum {', '/* ESP_ERR_INVALID_ARG') + between('main/service_check.h', 'typedef struct {bool enabled, notify;', 'void service_check_init')
 core = between('main/service_check.c', '/* --- service check core (begin) --- */', '/* --- service check core (end) --- */')
+startup = between('main/service_check.c', 'typedef struct {uint8_t enabled, notify, reserved[2];', 'void service_watch_get(')
 
 PROGRAM = r'''
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 typedef int esp_err_t;
@@ -35,17 +37,24 @@ typedef int esp_err_t;
 ''' + forward + header + r'''
 typedef struct {bool ready, connected, authority; uint32_t resolved_ip;} sc_path_t;
 static uint64_t now; static tailnet_forward_rule_t rules[TAILNET_FORWARD_MAX]; static bool present[TAILNET_FORWARD_MAX];
+static uint32_t revisions[TAILNET_FORWARD_MAX];
 static sc_path_t path; static int connect_result=1, connects; static bool admit=true; static uint32_t last_ip; static uint16_t last_port;
 static int edit_during_connect=-1;
 static uint64_t sc_now_ms(void){return now;}
-static bool sc_rule(int i,tailnet_forward_rule_t *r){if(i<0||i>=TAILNET_FORWARD_MAX||!present[i])return false;*r=rules[i];return true;}
+static bool sc_rule(int i,tailnet_forward_rule_t *r,uint32_t *revision){
+    if(i<0||i>=TAILNET_FORWARD_MAX||!present[i])return false;
+    *r=rules[i];*revision=revisions[i];return true;
+}
 static void sc_path(const tailnet_forward_rule_t *r,sc_path_t *out){(void)r;*out=path;}
 static void sc_run(void);
 static int notify_down,notify_up,notify_index=-1;
-static void sc_notify(int index,bool recovered){notify_index=index;if(recovered)notify_up++;else notify_down++;}
+static void sc_notify(int index,const tailnet_forward_rule_t *rule,bool recovered){
+    assert(rule->destination_port==rules[index].destination_port);
+    notify_index=index;if(recovered)notify_up++;else notify_down++;
+}
 static int sc_connect(uint32_t ip,uint16_t port,uint32_t timeout){
     assert(timeout==SERVICE_CHECK_TIMEOUT_MS);connects++;last_ip=ip;last_port=port;now+=37;
-    if(edit_during_connect>=0){rules[edit_during_connect].destination_port++;edit_during_connect=-1;}
+    if(edit_during_connect>=0){rules[edit_during_connect].destination_port++;revisions[edit_during_connect]++;edit_during_connect=-1;}
     return connect_result;}
 static bool sc_admit(void){return admit;}
 static uint32_t service_lease_token(const tailnet_forward_rule_t *r){
@@ -53,11 +62,31 @@ static uint32_t service_lease_token(const tailnet_forward_rule_t *r){
     h=(h^r->destination_port)*16777619u;h=(h^r->proto)*16777619u;h=(h^r->listen_port)*16777619u;return h;}
 #define SC_LOCK() ((void)0)
 #define SC_UNLOCK() ((void)0)
-''' + core + r'''
+static int sc_lock;
+#define pdTRUE 1
+static int xSemaphoreTake(int lock,int wait){assert(!lock && !wait);return pdTRUE;}
+enum {NVS_READONLY};
+#define NVS_NAMESPACE "fixture"
+typedef int nvs_handle_t;
+static bool nvs_fail,nvs_missing,short_read,invalid_flags,fail_worker;
+static unsigned starts;
+static esp_err_t nvs_open(const char *ns,int mode,nvs_handle_t *out){assert(ns && mode==NVS_READONLY);*out=1;return nvs_fail ? -1 : ESP_OK;}
+static esp_err_t nvs_get_blob(nvs_handle_t h,const char *key,void *out,size_t *size){
+    assert(h==1 && !strcmp(key,"svc_watch") && *size==8);
+    if(nvs_missing)return -1;
+    const uint8_t raw[]={invalid_flags?2:1,1,0,0,60,0,0,0};
+    if(short_read)*size=1;
+    memcpy(out,raw,*size);
+    return ESP_OK;
+}
+static void nvs_close(nvs_handle_t h){assert(h==1);}
+static void sc_init(void){}
+static esp_err_t sc_start_worker(void){starts++;return fail_worker ? ESP_ERR_NO_MEM : ESP_OK;}
+''' + core + startup + r'''
 static uint32_t token(int i){return service_lease_token(&rules[i]);}
 static service_check_result_t got(int i){service_check_result_t r={0};assert(sc_get_locked(i,token(i),&r));return r;}
 int main(void){
-    for(int i=0;i<3;i++){present[i]=true;rules[i].valid=1;rules[i].proto=TAILNET_FORWARD_PROTO_TCP;rules[i].listen_port=8000+i;rules[i].destination_port=443;
+    for(int i=0;i<3;i++){present[i]=true;revisions[i]=1;rules[i].valid=1;rules[i].proto=TAILNET_FORWARD_PROTO_TCP;rules[i].listen_port=8000+i;rules[i].destination_port=443;
         snprintf(rules[i].destination,sizeof rules[i].destination,"nas-%d",i);}
     rules[2].proto=TAILNET_FORWARD_PROTO_UDP;
     path=(sc_path_t){.connected=true,.authority=true,.resolved_ip=0x64400001u};now=1000;
@@ -84,6 +113,10 @@ int main(void){
     /* Editing the rule hides old evidence (new identity has no result). */
     rules[0].destination_port=8443;assert(!sc_get_locked(0,token(0),&r));rules[0].destination_port=443;
     assert(sc_get_locked(0,token(0),&r)&&r.state==SC_LOCAL_ERROR);
+    revisions[0]++; /* Removed and recreated with identical persisted fields. */
+    assert(!sc_get_locked(0,token(0),&r));
+    assert(sc_request_locked(0,token(0),now)==ESP_OK);
+    sc_run();assert(got(0).state==SC_REACHABLE);
 
     /* UDP never connects and never claims reachability. */
     now+=10000;int before=connects;assert(sc_request_locked(2,token(2),now)==ESP_OK);sc_run();
@@ -107,12 +140,13 @@ int main(void){
     /* Rule changed or removed while queued: nothing tested. */
     now+=10000;uint32_t queued=token(1);assert(sc_request_locked(1,queued,now)==ESP_OK);
     rules[1].destination_port=22;before=connects;sc_run();
-    assert(connects==before&&sc_get_locked(1,queued,&r)&&r.state==SC_CHANGED&&!sc_get_locked(1,token(1),&r));
+    assert(connects==before&&sc_results[1].state==SC_CHANGED);
+    assert(!sc_get_locked(1,queued,&r)&&!sc_get_locked(1,token(1),&r));
     now+=10000;assert(sc_request_locked(1,token(1),now)==ESP_OK);present[1]=false;sc_run();
     assert(sc_results[1].state==SC_CHANGED&&!sc_pending.active);present[1]=true;
     /* Edit during the connect: the result is bound to the tested identity only. */
     now+=10000;queued=token(0);edit_during_connect=0;assert(sc_request_locked(0,queued,now)==ESP_OK);sc_run();
-    assert(sc_get_locked(0,queued,&r)&&r.state==SC_REACHABLE&&!sc_get_locked(0,token(0),&r));
+    assert(sc_results[0].state==SC_REACHABLE&&!sc_get_locked(0,queued,&r)&&!sc_get_locked(0,token(0),&r));
     /* Zero clock still publishes a nonzero observation time. */
     now=0;rules[0].destination_port=443;assert(sc_request_locked(1,token(1),0)==ESP_OK);
     path.connected=false;sc_run();assert(got(1).observed_ms==1&&!sc_pending.active);
@@ -138,6 +172,29 @@ int main(void){
     rules[1].enabled=1;now+=60000;assert(sc_request_locked(1,token(1),now)==ESP_OK);
     sc_watch_schedule_locked(now);assert(sc_pending.index==1);sc_run();
     sc_watch.notify=false;connect_result=0;for(int k=0;k<6;k++){now+=60000;sc_run();}assert(notify_down==1); /* notify off: no messages */
+    /* Reusing a slot must not inherit a prior target's failure or recovery. */
+    sc_watch.notify=true;sc_watch_cursor=0;rules[1].enabled=0;sc_watch_revision[0]=0;
+    now+=60000;sc_run();assert(notify_down==1 && sc_watch_fails[0]==1);
+    revisions[0]++; /* Delete and recreate with the same rule content. */
+    now+=60000;sc_run();assert(notify_down==1 && sc_watch_fails[0]==1);
+    now+=60000;sc_run();assert(notify_down==2);
+    rules[0].destination_port++;revisions[0]++;connect_result=1;now+=60000;sc_run();assert(notify_up==1);
+    /* A result from an old binding cannot fire a watch alert after an edit. */
+    connect_result=0;now+=60000;sc_run();assert(sc_watch_fails[0]==1);
+    edit_during_connect=0;now+=60000;sc_run();assert(notify_down==2);
+
+    /* Absent or damaged persisted data never starts the watch. */
+    sc_watch.enabled=false;
+    nvs_fail=true;service_check_init();assert(!sc_watch.enabled && !starts);
+    nvs_fail=false;nvs_missing=true;service_check_init();assert(!sc_watch.enabled && !starts);
+    nvs_missing=false;short_read=true;service_check_init();assert(!sc_watch.enabled && !starts);
+    short_read=false;invalid_flags=true;service_check_init();assert(!sc_watch.enabled && !starts);
+    invalid_flags=false;fail_worker=true;service_check_init();
+    assert(sc_watch.enabled && service_watch_waiting() && starts==1);
+    now+=29999;service_watch_retry_worker();assert(starts==1);
+    now++;service_watch_retry_worker();assert(starts==2 && service_watch_waiting());
+    now+=30000;fail_worker=false;service_watch_retry_worker();assert(starts==3 && !service_watch_waiting());
+    now+=30000;service_watch_retry_worker();assert(starts==3);
     puts("PASS: actual destination check: validation, identity binding, single slot, cooldown/clock, UDP honesty, gates, queued edits; periodic watch scheduling/alerts (fixtures)");
 }
 '''
