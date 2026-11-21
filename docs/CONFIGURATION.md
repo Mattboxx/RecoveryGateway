@@ -25,6 +25,11 @@ Up to **5** networks, tried in order. Per network:
 | **Static IP** *(optional)* | `ip` / `mask` / `gw` / `dns`; empty = DHCP. |
 | **WPA2-Enterprise (EAP)** *(optional)* | Method, phase-2, identity/username/password, optional CA bundle. |
 
+To remove the Wi-Fi uplink, delete all saved networks under **Network →
+Internet**, click **Save** and confirm **Remove Wi-Fi uplink**. The change
+applies after restart. Make sure you can reach the gateway over Ethernet or
+its access point before restarting.
+
 ## Network → Access Point (AP)
 
 | Field | Default | Meaning |
