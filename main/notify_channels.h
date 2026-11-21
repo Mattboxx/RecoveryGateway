@@ -62,11 +62,17 @@ bool notify_wanted(uint8_t level_setting, unsigned kind, unsigned level);
 
 /* Firmware. */
 void notify_channels_init(void);       /* before history_init */
+void notify_channels_retry_setup(void);
 /* The Telegram bot target for remote commands; false (and empty) when the
  * Telegram channel is off or incomplete. The token is secret: wipe it. */
 bool notify_telegram_target(char *token, size_t token_cap, char *chat, size_t chat_cap);
-/* Send one text to the configured chat now (remote command replies). */
-esp_err_t notify_telegram_send_text(const char *text, char *why, size_t cap);
+/* Replies are valid only for the destination authorized by the poller. */
+enum { TG_SHORTCUTS = 1, TG_SHORTCUT_STATUS = 2, TG_SHORTCUT_CHECKS = 4 };
+uint32_t notify_telegram_destination(const char *token, const char *chat);
+bool notify_telegram_command_active(uint32_t destination);
+void notify_telegram_set_commands_enabled(bool enabled);
+esp_err_t notify_telegram_send_text(uint32_t destination, const char *text, unsigned shortcuts, char *why, size_t cap);
+bool notify_telegram_queue_reply(uint32_t destination, const char *text);
 void notify_channels_enabled(bool *telegram, bool *email);
 #include "esp_http_server.h"
 esp_err_t notify_channels_register_http(httpd_handle_t server);

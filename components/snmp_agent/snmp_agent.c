@@ -1182,16 +1182,25 @@ static void start_snmp_task_reserved(void)
     xSemaphoreGive(s_mutex);
 }
 
-static void start_snmp_task_if_needed(void)
+static void start_snmp_task_if_needed(bool immediate)
 {
+    static int64_t retry_at;
+    int64_t now = esp_timer_get_time();
     bool start = false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_enabled && !s_running && !s_starting && !s_stopping) {
+    if (s_enabled && !s_running && !s_starting && !s_stopping &&
+        (immediate || now >= retry_at)) {
         s_starting = true;
+        retry_at = now + 30000000;
         start = true;
     }
     xSemaphoreGive(s_mutex);
     if (start) start_snmp_task_reserved();
+}
+
+void snmp_agent_retry(void)
+{
+    if (s_strings) start_snmp_task_if_needed(false);
 }
 
 static void snmp_task(void *arg)
@@ -1231,7 +1240,7 @@ static void snmp_task(void *arg)
     }
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_enabled) {
+    if (s_enabled && !s_stopping) {
         s_sock = sock;
         s_running = true;
         s_starting = false;
@@ -1399,7 +1408,7 @@ void snmp_agent_init(void)
              desc ? desc->version : "?");
 
     if (!s_enabled) { ESP_LOGI(TAG, "disabled"); return; }
-    start_snmp_task_if_needed();
+    start_snmp_task_if_needed(true);
 }
 
 void snmp_agent_apply_live(bool enabled,
@@ -1424,7 +1433,7 @@ void snmp_agent_apply_live(bool enabled,
         if (s_sock >= 0) shutdown(s_sock, SHUT_RDWR);
     }
     xSemaphoreGive(s_mutex);
-    if (enabled) start_snmp_task_if_needed();
+    if (enabled) start_snmp_task_if_needed(true);
 }
 
 esp_err_t snmp_agent_save_config(bool enabled,

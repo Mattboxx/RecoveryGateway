@@ -14,6 +14,10 @@ void health_monitor_init(void);
 bool health_monitor_enabled(void);
 esp_err_t health_monitor_set(const health_config_t *config);
 esp_err_t health_monitor_set_enabled(bool enabled);
+/* On success, holds the settings lock until first-party profile commit or
+ * rollback. MQTT updates cannot interleave with the staged setting. */
+esp_err_t health_monitor_stage_enabled(bool expected, bool enabled);
+void health_monitor_finish_staged(bool enabled, bool committed);
 /* Single optional ops worker only; no new task, timer, socket queue or reboot. */
 void health_monitor_poll(void);
 /* Detailed includes user targets; sanitized never includes those identifiers. */
@@ -32,4 +36,5 @@ typedef struct {
 bool saved_tcp_schedule_enabled(void);
 esp_err_t saved_tcp_set(const saved_tcp_target_t targets[SAVED_TCP_MAX]);
 esp_err_t saved_tcp_request(const char *name, ops_recovery_origin_t origin);
+esp_err_t saved_tcp_remote_request(const char *name, ops_recovery_origin_t origin, uint32_t destination);
 void saved_tcp_summary(char *out, size_t capacity);

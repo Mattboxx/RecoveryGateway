@@ -28,7 +28,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # PROJECT_VER lands in the esp_app_desc_t struct so the running firmware
 # can report its version via the OTA APIs and the web UI's Status page.
-set(PROJECT_VER "3.0.30")
+set(PROJECT_VER "3.1.0")
 # The migration bridge (env esp32-s3-bridge, CONFIG_TSR_MIGRATION_BRIDGE) is a
 # 2.x-line release so that 2.x updaters install it like any other update.
 set(TSR_BRIDGE_VER "2.1.0")
@@ -66,6 +66,39 @@ endif()
 
 project(esp32_tsr)
 
+if(CONFIG_LWIP_IPV4_NAPT OR CONFIG_LWIP_DHCPS)
+    idf_component_get_property(_lwip_dir lwip COMPONENT_DIR)
+    idf_component_get_property(_lwip_lib lwip COMPONENT_LIB)
+    idf_build_get_property(_idf_python PYTHON)
+    set(_napt_patch "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare_lwip_napt.py")
+    set(_napt_generated "${CMAKE_CURRENT_BINARY_DIR}/lwip-napt")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_napt_patch}"
+        "${_lwip_dir}/lwip/src/core/ipv4/ip4_napt.c"
+        "${_lwip_dir}/lwip/src/core/timeouts.c")
+    execute_process(
+        COMMAND "${_idf_python}" "${_napt_patch}" "${_lwip_dir}/lwip" "${_napt_generated}"
+        RESULT_VARIABLE _napt_result
+        ERROR_VARIABLE _napt_error)
+    if(NOT _napt_result STREQUAL "0")
+        message(FATAL_ERROR "Could not prepare lwIP NAPT: ${_napt_error}")
+    endif()
+    get_target_property(_lwip_sources ${_lwip_lib} SOURCES)
+    list(LENGTH _lwip_sources _lwip_original_count)
+    list(FILTER _lwip_sources EXCLUDE REGEX "(^|/)(ip4_napt|timeouts)[.]c$")
+    list(LENGTH _lwip_sources _lwip_filtered_count)
+    math(EXPR _lwip_removed_count "${_lwip_original_count} - ${_lwip_filtered_count}")
+    if(NOT _lwip_removed_count EQUAL 2)
+        message(FATAL_ERROR "Could not locate the two pinned lwIP sources to replace")
+    endif()
+    list(APPEND _lwip_sources "${_napt_generated}/ip4_napt.c" "${_napt_generated}/timeouts.c")
+    set_property(TARGET ${_lwip_lib} PROPERTY SOURCES "${_lwip_sources}")
+    target_include_directories(${_lwip_lib} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/components/dhcpserver/include")
+    if(CONFIG_LWIP_DHCPS)
+        idf_component_get_property(_dhcps_lib dhcpserver COMPONENT_LIB)
+        target_compile_definitions(${_dhcps_lib} PRIVATE RECOVERYGATEWAY_LWIP_OWNED_TIMEOUTS=1)
+    endif()
+endif()
 
 # Keep the reviewed task reaper. The upstream external-stack option uses
 # vTaskDeleteWithCaps(NULL), which can allocate during self-deletion.

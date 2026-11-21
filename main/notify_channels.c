@@ -116,14 +116,26 @@ static size_t json_text(char *out, size_t cap, const char *in)
     return n;
 }
 
+static size_t telegram_body(char *out, size_t cap, const char *chat, const char *text, unsigned shortcuts)
+{
+    char chat_json[64];
+    if (!out || !chat || !text || !json_text(chat_json, sizeof chat_json, chat)) return 0;
+    int prefix = snprintf(out, cap, "{\"chat_id\":\"%s\",\"text\":\"", chat_json);
+    if (prefix < 0 || (size_t)prefix >= cap) return 0;
+    size_t length = json_text(out + prefix, cap - (size_t)prefix, text);
+    if (!length) return 0;
+    size_t used = (size_t)prefix + length;
+    int suffix = snprintf(out + used, cap - used, "\",\"disable_web_page_preview\":true%s%s%s%s}",
+        shortcuts ? ",\"reply_markup\":{\"resize_keyboard\":true,\"one_time_keyboard\":true,\"keyboard\":[[\"/devices\"" : "",
+        shortcuts & TG_SHORTCUT_STATUS ? ",\"/status\"" : "",
+        shortcuts & TG_SHORTCUT_CHECKS ? ",\"/checks\"" : "",
+        shortcuts ? "]]}" : "");
+    return suffix >= 0 && (size_t)suffix < cap - used ? used + (size_t)suffix : 0;
+}
+
 size_t notify_telegram_body(char *out, size_t cap, const char *chat, const char *text)
 {
-    char chat_json[64], text_json[NOTIFY_TEXT_MAX * 6 + 64];
-    if (!out || !chat || !text || !json_text(chat_json, sizeof chat_json, chat) ||
-        (text[0] && !json_text(text_json, sizeof text_json, text))) return 0;
-    if (!text[0]) return 0;
-    int n = snprintf(out, cap, "{\"chat_id\":\"%s\",\"text\":\"%s\",\"disable_web_page_preview\":true}", chat_json, text_json);
-    return n > 0 && (size_t)n < cap ? (size_t)n : 0;
+    return telegram_body(out, cap, chat, text, 0);
 }
 
 bool notify_wanted(uint8_t setting, unsigned kind, unsigned level)
@@ -325,6 +337,7 @@ done:
 #include "nvs_params.h"
 #include "telegram_commands.h"
 #include "homelab_ops.h"
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -339,7 +352,7 @@ static const char *TAG = "notify";
 /* Producers are history_event (at most HIST_TEXT_MAX bytes) and the short
  * explicit test. Preserve a complete history message without overallocating
  * every queue slot for the delivery wrapper's larger formatting buffer. */
-typedef struct {uint8_t kind, level, channels, attempts; uint32_t wall, id, episode; uint8_t link; char text[HIST_TEXT_MAX + 1];} note_t;
+typedef struct {uint8_t kind, level, channels, attempts; uint32_t wall, id, episode, due; uint8_t link; char text[HIST_TEXT_MAX + 1];} note_t;
 _Static_assert(HIST_TEXT_MAX + 1 <= NOTIFY_TEXT_MAX, "Delivery must fit a complete history event");
 _Static_assert(sizeof(note_t) <= 200, "Keep the queue within its 3.0.2 memory budget");
 typedef struct {uint32_t sent, failed; bool last_ok; char last_error[192];} channel_status_t;   /* PSRAM */
@@ -374,7 +387,10 @@ enum {LINK_NONE, LINK_UPLINK, LINK_TAILNET, LINK_END};
 typedef struct {uint32_t since, episode; uint8_t delivered; bool down, announced, suppress_up;} link_state_t;
 EXT_RAM_BSS_ATTR static link_state_t s_links[LINK_END];
 EXT_RAM_BSS_ATTR static uint32_t s_note_id, s_worker_retry;
+static uint32_t s_setup_retry_at;
+static atomic_bool s_setup_pending;
 static uint16_t s_worker_backoff = 30; /* capped at 300 seconds */
+static remote_command_gate_t s_tg_command_gate;
 
 /* --- notify store (begin) --- */
 /* One NVS record holds everything, so a save is all or nothing. The email
@@ -449,13 +465,20 @@ static void when_text(uint32_t wall, char *out, size_t cap)
 }
 
 /* --- Telegram --- */
-static esp_err_t telegram(const notify_config_t *c, const char *text, char *why, size_t cap)
+static esp_err_t telegram_failure_status(int status)
 {
-    size_t body_cap = strlen(text) * 6 + 160;   /* worst case: every byte escaped as \u00XX */
+    /* Terminal API rejection for this payload or destination. */
+    return status >= 400 && status < 500 && status != 408 && status != 425 && status != 429 ?
+           ESP_ERR_NOT_SUPPORTED : ESP_FAIL;
+}
+
+static esp_err_t telegram(const notify_config_t *c, const char *text, unsigned shortcuts, char *why, size_t cap)
+{
+    size_t body_cap = strlen(text) * 6 + (shortcuts ? 288 : 160);
     char url[160], *body = heap_caps_malloc(body_cap, MALLOC_CAP_SPIRAM);
     if (!body) return ESP_ERR_NO_MEM;
     snprintf(url, sizeof url, "https://api.telegram.org/bot%s/sendMessage", c->tg_token);
-    size_t n = notify_telegram_body(body, body_cap, c->tg_chat, text);
+    size_t n = telegram_body(body, body_cap, c->tg_chat, text, shortcuts);
     esp_http_client_config_t hc = {.url = url, .method = HTTP_METHOD_POST, .timeout_ms = 15000,
                                    .crt_bundle_attach = ml_tls_bundle_attach, .disable_auto_redirect = true};
     esp_http_client_handle_t client = n ? esp_http_client_init(&hc) : NULL;
@@ -469,14 +492,21 @@ static esp_err_t telegram(const notify_config_t *c, const char *text, char *why,
         if (!err) {
             int status = esp_http_client_get_status_code(client);
             char answer[256];
-            int got = esp_http_client_read(client, answer, sizeof answer - 1);
-            answer[got > 0 ? got : 0] = 0;
+            size_t used = 0;
+            answer[0] = 0;
+            while (used < sizeof answer - 1) {
+                int got = esp_http_client_read(client, answer + used, sizeof answer - 1 - used);
+                if (got <= 0) break;
+                used += (size_t)got;
+                answer[used] = 0;
+                if (status == 200 && strstr(answer, "\"ok\":true")) break;
+            }
             if (status != 200 || !strstr(answer, "\"ok\":true")) {
                 const char *d = strstr(answer, "\"description\":\"");
                 char text_why[80] = "";
                 if (d) {d += 15; size_t k = 0; while (d[k] && d[k] != '"' && k < sizeof text_why - 1) {text_why[k] = d[k]; k++;} text_why[k] = 0;}
                 snprintf(why, cap, "Telegram answered %d%s%s", status, text_why[0] ? ": " : "", text_why);
-                err = ESP_FAIL;
+                err = telegram_failure_status(status);
             }
         } else snprintf(why, cap, "cannot reach api.telegram.org (%s)", esp_err_to_name(err));
         esp_http_client_cleanup(client);
@@ -582,14 +612,43 @@ static void record(channel_status_t *st, esp_err_t err, const char *why)
     xSemaphoreGive(s_lock);
 }
 
+/* Delayed retries must not hold up ready messages on either channel. */
+static int ready_note_locked(uint32_t now)
+{
+    for (unsigned i = 0; i < s_count; i++) {
+        note_t *n = &s_queue[(s_head + i) % QUEUE_MAX];
+        if (!n->due || (int32_t)(now - n->due) >= 0) return (int)i;
+    }
+    return -1;
+}
+
+static void remove_note_locked(unsigned index)
+{
+    if (!index) s_head = (s_head + 1) % QUEUE_MAX;
+    else {
+        for (unsigned i = index; i + 1 < s_count; i++)
+            s_queue[(s_head + i) % QUEUE_MAX] = s_queue[(s_head + i + 1) % QUEUE_MAX];
+    }
+    s_count--;
+}
+
 static void worker(void *arg)
 {
     (void)arg;
     for (;;) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        if (!s_count || !s_queue) {s_worker = false; xSemaphoreGive(s_lock); task_reaper_self_delete();}
-        note_t note = s_queue[s_head];
+        int ready = ready_note_locked((uint32_t)(esp_timer_get_time() / 1000000));
+        if (ready < 0) {
+            s_worker = false;
+            xSemaphoreGive(s_lock);
+            task_reaper_self_delete();
+            return;
+        }
+        note_t note = s_queue[(s_head + ready) % QUEUE_MAX];
         notify_config_t c = s_cfg;
+        /* Only link events and targeted replies use the episode field. */
+        bool reply_current = note.link != LINK_NONE || !note.episode ||
+                             notify_telegram_command_active(note.episode);
         uint8_t poweron_channels = s_startup_channels >> 2;
         xSemaphoreGive(s_lock);
         /* The title and message ntfy uses for the same event (notify_text.c);
@@ -602,16 +661,17 @@ static void worker(void *arg)
         int reset = (int)esp_reset_reason();
         static const char *const mark[] = {"", "\xE2\x9A\xA0\xEF\xB8\x8F ", "\xE2\x9D\x97 "};   /* warning, error */
         uint8_t done = 0, delivered = 0;
-        if ((note.channels & CH_TG) && c.tg_enabled) {
+        if ((note.channels & CH_TG) && c.tg_enabled && reply_current) {
             notify_text_compose(note.kind, note.level, note.text, version, reset, (poweron_channels & CH_TG) != 0,
                                 title, msg, sizeof msg);
             snprintf(text, sizeof text, "%s%s%s%s\n%s", note.level < 3 ? mark[note.level] : "", when, when[0] ? " " : "", title, msg);
-            why[0] = 0; esp_err_t err = telegram(&c, text, why, sizeof why); record(&s_tg, err, why);
+            why[0] = 0; esp_err_t err = telegram(&c, text, 0, why, sizeof why); record(&s_tg, err, why);
             if (err) ESP_LOGW(TAG, "Telegram delivery failed: event=%u id=%lu attempt=%u/%u error=%s internal=%u largest=%u psram=%u",
                 note.kind, (unsigned long)note.id, (unsigned)note.attempts + 1, MAX_ATTEMPTS, esp_err_to_name(err),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
             if (!err) {done |= CH_TG; delivered |= CH_TG;}
+            else if (err == ESP_ERR_NOT_SUPPORTED) done |= CH_TG;
         } else done |= CH_TG;
         if ((note.channels & CH_MAIL) && c.mail_enabled) {
             notify_text_compose(note.kind, note.level, note.text, version, reset, (poweron_channels & CH_MAIL) != 0,
@@ -628,17 +688,18 @@ static void worker(void *arg)
         xSemaphoreTake(s_lock, portMAX_DELAY);
         if (note.link > LINK_NONE && note.link < LINK_END && s_links[note.link].episode == note.episode)
             s_links[note.link].delivered |= delivered;
-        /* A producer may have evicted the in-flight head while HTTPS/SMTP
+        /* A producer may have evicted the in-flight message while HTTPS/SMTP
          * ran without the lock. Never complete or retry a different message. */
-        bool same = s_count && s_queue[s_head].id == note.id;
-        bool pop = !same;
-        if (same) {
-            pop = (done & note.channels) == note.channels || ++s_queue[s_head].attempts >= MAX_ATTEMPTS;
-            if (!pop) s_queue[s_head].channels &= (uint8_t)~done;
-            if (pop) {s_head = (s_head + 1) % QUEUE_MAX; s_count--;}
+        for (unsigned i = 0; i < s_count; i++) {
+            note_t *queued = &s_queue[(s_head + i) % QUEUE_MAX];
+            if (queued->id != note.id) continue;
+            queued->channels &= (uint8_t)~done;
+            if (!queued->channels || ++queued->attempts >= MAX_ATTEMPTS)
+                remove_note_locked(i);
+            else queued->due = (uint32_t)(esp_timer_get_time() / 1000000) + RETRY_S;
+            break;
         }
         xSemaphoreGive(s_lock);
-        if (!pop) vTaskDelay(pdMS_TO_TICKS(RETRY_S * 1000));   /* uplink down or server busy */
     }
 }
 
@@ -646,7 +707,8 @@ static void worker(void *arg)
  * new event, using the already running history poll and bounded backoff. */
 static void start_worker_locked(uint32_t now)
 {
-    if (s_worker || !s_count || (int32_t)(now - s_worker_retry) < 0) return;
+    if (s_worker || (s_worker_retry && (int32_t)(now - s_worker_retry) < 0) ||
+        ready_note_locked(now) < 0) return;
     s_worker = xTaskCreateWithCaps(worker, "notify", 12288, NULL, 2, NULL, MALLOC_CAP_SPIRAM) == pdPASS;
     if (s_worker) {s_worker_retry = 0; s_worker_backoff = 30;}
     else {
@@ -738,7 +800,7 @@ static void link_recovered_locked(unsigned link, uint32_t now)
             note_t *n = &s_queue[(s_head + i) % QUEUE_MAX];
             if (n->link == link && n->episode == s->episode) {
                 snprintf(n->text, sizeof n->text, "%.*s", (int)sizeof n->text - 1, text);
-                n->wall = notify_wall(); n->attempts = 0;
+                n->wall = notify_wall(); n->attempts = 0; n->due = 0;
                 if (++s_note_id == 0) ++s_note_id;
                 n->id = s_note_id;   /* an in-flight old warning cannot discard the new summary */
                 queued |= n->channels;
@@ -848,9 +910,20 @@ static void apply_locked(void)
 {
     bool on = s_cfg.tg_enabled || s_cfg.mail_enabled;
     if (on && !s_queue) s_queue = heap_caps_calloc(QUEUE_MAX, sizeof *s_queue, MALLOC_CAP_SPIRAM);
-    if (!on && s_queue && !s_worker) {memset(s_queue, 0, QUEUE_MAX * sizeof *s_queue); free(s_queue); s_queue = NULL; s_head = s_count = 0;}
+    if (!on && s_queue) {memset(s_queue, 0, QUEUE_MAX * sizeof *s_queue); free(s_queue); s_queue = NULL; s_head = s_count = 0;}
     if (!on) memset(s_links, 0, sizeof s_links);
-    history_set_sink_poller(on && s_queue ? offer : NULL, on && s_queue ? notify_poll : NULL);
+    esp_err_t sink = history_set_sink_poller(on && s_queue ? offer : NULL, on && s_queue ? notify_poll : NULL);
+    s_setup_retry_at = (uint32_t)(esp_timer_get_time() / 1000000) +
+                       (sink == ESP_ERR_INVALID_STATE ? 0 : RETRY_S);
+    atomic_store(&s_setup_pending, on && (!s_queue || sink != ESP_OK));
+}
+
+void notify_channels_retry_setup(void)
+{
+    if (!atomic_load(&s_setup_pending) || xSemaphoreTake(s_lock, 0) != pdTRUE) return;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000000);
+    if ((int32_t)(now - s_setup_retry_at) >= 0) apply_locked();
+    xSemaphoreGive(s_lock);
 }
 
 bool notify_telegram_target(char *token, size_t token_cap, char *chat, size_t chat_cap)
@@ -864,18 +937,57 @@ bool notify_telegram_target(char *token, size_t token_cap, char *chat, size_t ch
     return ok;
 }
 
-esp_err_t notify_telegram_send_text(const char *text, char *why, size_t cap)
+uint32_t notify_telegram_destination(const char *token, const char *chat)
 {
-    if (!s_lock || !text || !text[0]) return ESP_ERR_INVALID_ARG;
+    if (!s_lock) return 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    uint32_t id = s_cfg.tg_enabled && !strcmp(s_cfg.tg_token, token) && !strcmp(s_cfg.tg_chat, chat) ?
+                  remote_command_ticket(&s_tg_command_gate) : 0;
+    xSemaphoreGive(s_lock);
+    return id;
+}
+
+bool notify_telegram_command_active(uint32_t destination)
+{
+    return destination && destination == remote_command_ticket(&s_tg_command_gate);
+}
+
+void notify_telegram_set_commands_enabled(bool enabled)
+{
+    if (!s_lock) return;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ready = enabled && s_cfg.tg_enabled && s_cfg.tg_token[0] && s_cfg.tg_chat[0];
+    if (ready != (remote_command_ticket(&s_tg_command_gate) != 0))
+        remote_command_gate_reset(&s_tg_command_gate, ready);
+    xSemaphoreGive(s_lock);
+}
+
+esp_err_t notify_telegram_send_text(uint32_t destination, const char *text, unsigned shortcuts, char *why, size_t cap)
+{
+    if (!s_lock || !destination || !text || !text[0]) return ESP_ERR_INVALID_ARG;
     notify_config_t *c = heap_caps_malloc(sizeof *c, MALLOC_CAP_SPIRAM);
     if (!c) return ESP_ERR_NO_MEM;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *c = s_cfg;
+    bool current = notify_telegram_command_active(destination);
     xSemaphoreGive(s_lock);
-    esp_err_t err = c->tg_enabled && c->tg_token[0] ? telegram(c, text, why, cap) : ESP_ERR_INVALID_STATE;
+    esp_err_t err = current && c->tg_enabled && c->tg_token[0] ? telegram(c, text, shortcuts, why, cap) : ESP_ERR_INVALID_STATE;
     memset(c, 0, sizeof *c);
     free(c);
     return err;
+}
+
+bool notify_telegram_queue_reply(uint32_t destination, const char *text)
+{
+    if (!s_lock || !destination || !text || !text[0] || strlen(text) > HIST_TEXT_MAX) return false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool accepted = s_cfg.tg_enabled && notify_telegram_command_active(destination) && s_queue;
+    if (accepted) {
+        enqueue_locked(HIST_EV_SERVICE, HIST_INFO, CH_TG, notify_wall(), text);
+        s_queue[(s_head + s_count - 1) % QUEUE_MAX].episode = destination;
+    }
+    xSemaphoreGive(s_lock);
+    return accepted;
 }
 
 void notify_channels_enabled(bool *telegram, bool *email)
@@ -912,6 +1024,7 @@ static esp_err_t get_notify(httpd_req_t *req)
     unsigned waiting = s_count, dropped = s_dropped, pending = 0;
     for (unsigned i = LINK_UPLINK; i < LINK_END; ++i) if (s_links[i].down && !s_links[i].announced) pending++;
     bool worker_running = s_worker;
+    bool delivery_ready = s_queue && !atomic_load(&s_setup_pending);
     xSemaphoreGive(s_lock);
     cJSON_AddStringToObject(root, "events", c.level == NOTIFY_ALL ? "all" : "problems");
     cJSON_AddNumberToObject(root, "waiting", waiting);
@@ -919,6 +1032,7 @@ static esp_err_t get_notify(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "connectivity_grace_seconds", grace);
     cJSON_AddNumberToObject(root, "pending_connectivity", pending);
     cJSON_AddBoolToObject(root, "worker_running", worker_running);
+    cJSON_AddBoolToObject(root, "delivery_ready", delivery_ready);
     cJSON_AddBoolToObject(tg, "enabled", c.tg_enabled);
     cJSON_AddBoolToObject(tg, "notify_startup", (startup_channels & CH_TG) != 0);
     cJSON_AddBoolToObject(tg, "notify_poweron", (startup_channels & (CH_TG << 2)) != 0);
@@ -1116,14 +1230,18 @@ static esp_err_t post_notify(httpd_req_t *req)
     }
     if (ok && !err) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (have_tcmd || s_cfg.tg_enabled != next->tg_enabled || strcmp(s_cfg.tg_chat,next->tg_chat) ||
+            strcmp(s_cfg.tg_token,next->tg_token)) {
+            remote_command_gate_reset(&s_tg_command_gate, false);
+        }
         s_cfg = *next;
         s_mail_level = mail_level;
         s_startup_channels = startup_channels;
         apply_locked();
         xSemaphoreGive(s_lock);
+        homelab_ops_publish_recovery(staged);
         if (have_tcmd) telegram_commands_apply_config(&tcmd);
         else telegram_commands_refresh();
-        homelab_ops_publish_recovery(staged);
         (void)nvs_param_set_u8("ntf_mlv",mail_level); /* compatibility with 3.0.1 */
     }
     memset(next, 0, sizeof *next); free(next); free(body);
@@ -1174,11 +1292,16 @@ static esp_err_t post_test(httpd_req_t *req)
     if (receive(req, body, sizeof body) <= 0) {httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "expected {\"channel\":\"telegram\"|\"email\"}"); return ESP_FAIL;}
     uint8_t channel = strstr(body, "\"telegram\"") ? CH_TG : strstr(body, "\"email\"") ? CH_MAIL : 0;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool on = channel && (channels_locked() & channel) && s_queue;
-    if (on) enqueue_locked(HIST_EV_SERVICE, HIST_INFO, channel, (uint32_t)time(NULL), "Test message: notifications from this gateway work.");
+    bool on = channel && (channels_locked() & channel);
+    bool ready = s_queue && !atomic_load(&s_setup_pending);
+    if (on && ready) enqueue_locked(HIST_EV_SERVICE, HIST_INFO, channel, (uint32_t)time(NULL), "Test message: notifications from this gateway work.");
     xSemaphoreGive(s_lock);
     httpd_resp_set_type(req, "application/json");
     if (!on) {httpd_resp_set_status(req, "409 Conflict"); return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"save and switch on this channel first\"}");}
+    if (!ready) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"notification setup is waiting for resources\"}");
+    }
     return httpd_resp_sendstr(req, "{\"ok\":true,\"queued\":true}");
 }
 

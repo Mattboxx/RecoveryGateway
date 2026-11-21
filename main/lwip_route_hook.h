@@ -11,6 +11,9 @@ extern "C" {
  * upstream interface (STA) and the WireGuard netif depending on
  * `tailscale_exit_node_ip`. Idempotent; safe to call more than once. */
 void lwip_route_hook_init(void);
+/* Task and TCP/IP request storage are ready. Route convergence is separate. */
+bool lwip_route_hook_supervisor_running(void);
+bool lwip_route_hook_supervisor_degraded(void);
 
 /* Enable/disable the per-packet [ROUTE_HOOK] WARN trace at runtime. OFF at
  * boot — it's high-volume and carries no wedge signal. Turn it on only for a

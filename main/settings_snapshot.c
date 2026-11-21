@@ -102,11 +102,15 @@ int snap_take(const store_flash_t *storage, const store_flash_t *nvs, uint32_t n
     return snap_read_header(storage, (unsigned)slot, &check) && check.seq == h.seq ? slot : -1;
 }
 
+static bool control_valid(const snap_control_t *c)
+{
+    return c->magic == SNAP_CONTROL_MAGIC && c->crc == store_crc32(0, c, offsetof(snap_control_t, crc)) &&
+           c->slot < STORE_SNAPSHOT_SLOTS;
+}
+
 static bool read_control(const store_flash_t *storage, snap_control_t *c)
 {
-    return storage->read(storage->ctx, STORE_CONTROL_BASE, c, sizeof *c) == 0 &&
-           c->magic == SNAP_CONTROL_MAGIC && c->crc == store_crc32(0, c, offsetof(snap_control_t, crc)) &&
-           c->slot < STORE_SNAPSHOT_SLOTS;
+    return storage->read(storage->ctx, STORE_CONTROL_BASE, c, sizeof *c) == ESP_OK && control_valid(c);
 }
 
 bool snap_restore_pending(const store_flash_t *storage)
@@ -139,42 +143,65 @@ esp_err_t snap_request_restore(const store_flash_t *storage, unsigned slot, uint
     return err ? err : snap_restore_pending(storage) ? ESP_OK : ESP_FAIL;
 }
 
+static snap_boot_t finalize_restore(const store_flash_t *storage)
+{
+    /* A consumed request is invalid on older firmware too. Once the live
+     * copy is verified, clearing its magic prevents replay if erase fails. */
+    const uint32_t consumed = 0;
+    esp_err_t marked = storage->write(storage->ctx, STORE_CONTROL_BASE, &consumed, sizeof consumed);
+    esp_err_t erased = snap_cancel_restore(storage);
+    return marked == ESP_OK || erased == ESP_OK ? SNAP_BOOT_RESTORED : SNAP_BOOT_FINALIZE_FAILED;
+}
+
 snap_boot_t snap_boot_restore(const store_flash_t *storage, const store_flash_t *nvs, uint32_t nvs_size,
                               uint8_t *buffer, unsigned *slot_out)
 {
     snap_control_t c;
     if (!storage || !nvs || !buffer) return SNAP_BOOT_NONE;
-    uint32_t magic = 0;
-    if (storage->read(storage->ctx, STORE_CONTROL_BASE, &magic, sizeof magic) || magic == 0xFFFFFFFFu) return SNAP_BOOT_NONE;
-    if (!read_control(storage, &c)) {snap_cancel_restore(storage); return SNAP_BOOT_INVALID;}
+    if (storage->read(storage->ctx, STORE_CONTROL_BASE, &c, sizeof c) != ESP_OK) return SNAP_BOOT_FAILED;
+    if (c.magic == UINT32_MAX || c.magic == 0) return SNAP_BOOT_NONE;
+    if (!control_valid(&c)) {snap_cancel_restore(storage); return SNAP_BOOT_INVALID;}
     if (slot_out) *slot_out = c.slot;
     uint8_t attempts[SNAP_RESTORE_ATTEMPTS];
-    storage->read(storage->ctx, STORE_CONTROL_BASE + ATTEMPTS_AT, attempts, sizeof attempts);
+    if (storage->read(storage->ctx, STORE_CONTROL_BASE + ATTEMPTS_AT, attempts, sizeof attempts) != ESP_OK)
+        return SNAP_BOOT_FAILED;
     unsigned used = 0;
     while (used < SNAP_RESTORE_ATTEMPTS && attempts[used] != 0xFF) used++;
-    if (used >= SNAP_RESTORE_ATTEMPTS) {snap_cancel_restore(storage); return SNAP_BOOT_GAVE_UP;}
-    /* Count the attempt before touching NVS: a cut retries a bounded number of times. */
-    uint8_t zero = 0;
-    if (storage->write(storage->ctx, STORE_CONTROL_BASE + ATTEMPTS_AT + used, &zero, 1)) return SNAP_BOOT_FAILED;
     snap_header_t h;
-    /* Fail closed: a changed or damaged copy never reaches NVS. */
     if (!slot_intact(storage, c.slot, &h, buffer) || h.seq != c.seq || h.data_crc != c.data_crc || h.size != nvs_size) {
+        /* A prior attempt may have erased part of NVS. Keep the request
+         * and recovery copy when we can no longer establish integrity. */
+        if (used) return SNAP_BOOT_FAILED;
         snap_cancel_restore(storage);
         return SNAP_BOOT_INVALID;
     }
     uint32_t crc, written;
+    /* Recover an interruption between a successful copy and finalization
+     * without erasing verified data again, even at the last attempt. */
+    if (used && crc_of(nvs, 0, nvs_size, buffer, &written) == ESP_OK && written == h.data_crc)
+        return finalize_restore(storage);
+    if (used >= SNAP_RESTORE_ATTEMPTS) return SNAP_BOOT_GAVE_UP;
+
+    /* Count the attempt before touching NVS: a cut retries a bounded number of times. */
+    const uint8_t zero = 0;
+    if (storage->write(storage->ctx, STORE_CONTROL_BASE + ATTEMPTS_AT + used, &zero, 1) != ESP_OK)
+        return SNAP_BOOT_FAILED;
     if (erase(nvs, 0, nvs_size) || copy(storage, slot_base(c.slot) + SNAP_DATA, nvs, 0, nvs_size, buffer, &crc) ||
         crc != h.data_crc || crc_of(nvs, 0, nvs_size, buffer, &written) || written != h.data_crc)
         return SNAP_BOOT_FAILED;          /* the request stays: retried at the next boot */
-    snap_cancel_restore(storage);
-    return SNAP_BOOT_RESTORED;
+    return finalize_restore(storage);
 }
 
 esp_err_t snap_delete(const store_flash_t *storage, unsigned slot)
 {
     if (!storage || slot >= STORE_SNAPSHOT_SLOTS) return ESP_ERR_INVALID_ARG;
     snap_control_t c;
-    if (read_control(storage, &c) && c.slot == slot) snap_cancel_restore(storage);
+    esp_err_t err = storage->read(storage->ctx, STORE_CONTROL_BASE, &c, sizeof c);
+    if (err != ESP_OK) return err;
+    if (control_valid(&c) && c.slot == slot) {
+        err = snap_cancel_restore(storage);
+        if (err != ESP_OK) return err;
+    }
     return erase(storage, slot_base(slot), STORE_SNAPSHOT_SLOT);   /* the secrets too, not just the header */
 }
 /* --- snapshot core (end) --- */
@@ -212,27 +239,35 @@ static const store_flash_t *nvs_flash(void)
 
 static uint32_t wall_now(void) {time_t t = time(NULL); return t > 1700000000 ? (uint32_t)t : 0;}
 
-void settings_snapshot_boot(void)
+esp_err_t settings_snapshot_boot(void)
 {
     const store_flash_t *storage = storage_store_flash();
-    if (!storage) return;
-    uint32_t magic = 0;
-    if (storage->read(storage->ctx, STORE_CONTROL_BASE, &magic, sizeof magic) || magic == 0xFFFFFFFFu) return;
+    if (!storage) return ESP_OK;
+    uint32_t magic;
+    esp_err_t err = storage->read(storage->ctx, STORE_CONTROL_BASE, &magic, sizeof magic);
+    if (err != ESP_OK) return err;
+    if (magic == UINT32_MAX || magic == 0) return ESP_OK;
     const store_flash_t *nvs = nvs_flash();
+    if (!nvs) return ESP_ERR_INVALID_STATE;
     uint8_t *buffer = malloc(STORE_SECTOR);
-    if (!nvs || !buffer) {free(buffer); s_boot_result = SNAP_BOOT_FAILED; return;}
+    if (!buffer) return ESP_ERR_NO_MEM;
     storage_store_lock();
     s_boot_result = snap_boot_restore(storage, nvs, s_nvs->size, buffer, &s_boot_slot);
     storage_store_unlock();
     free(buffer);
     ESP_LOGW(TAG, "settings restore from copy %u: %d", s_boot_slot + 1, (int)s_boot_result);
+    /* Never start ordinary NVS writers until an interrupted restore has
+     * finished or the operator can recover the persistent copy. */
+    return s_boot_result == SNAP_BOOT_NONE || s_boot_result == SNAP_BOOT_RESTORED ||
+           s_boot_result == SNAP_BOOT_INVALID ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
 void settings_snapshot_log_boot(void)
 {
     static const char *const text[] = {"", "Settings restored from copy %u", "Settings copy %u was damaged or changed: not restored",
                                        "Settings restore from copy %u failed, retrying at the next start",
-                                       "Settings restore from copy %u abandoned after repeated failures"};
+                                       "Settings restore from copy %u stopped after repeated failures",
+                                       "Settings restore from copy %u could not be finalized"};
     if (s_boot_result != SNAP_BOOT_NONE)
         history_event(HIST_EV_SETTINGS, s_boot_result == SNAP_BOOT_RESTORED ? HIST_INFO : HIST_ERROR,
                       text[s_boot_result], s_boot_slot + 1);

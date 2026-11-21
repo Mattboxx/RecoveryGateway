@@ -261,6 +261,7 @@ typedef struct {bool enabled, notify; uint32_t interval_s;} service_watch_config
 #define SERVICE_WATCH_MAX_S 86400u
 static service_watch_config_t saved={.interval_s=900};static esp_err_t set_result;static int sets;
 static void service_watch_get(service_watch_config_t *o){*o=saved;}
+static bool service_watch_waiting(void){return saved.enabled;}
 static esp_err_t service_watch_set(const service_watch_config_t *c){sets++;if(c->interval_s<SERVICE_WATCH_MIN_S||c->interval_s>SERVICE_WATCH_MAX_S)return ESP_ERR_INVALID_ARG;if(set_result)return set_result;saved=*c;return ESP_OK;}
 static const char *esp_err_to_name(esp_err_t e){return e==ESP_ERR_NO_MEM?"ESP_ERR_NO_MEM":"ESP_FAIL";}
 static int web_ui_require_auth(httpd_req_t *r){if(r->authorized)return ESP_OK;r->status=401;return ESP_FAIL;}
@@ -275,6 +276,7 @@ static httpd_req_t post(const char *body){httpd_req_t r={.content_len=(int)strle
 int main(void){
     httpd_req_t r=post("{\"enabled\":true,\"notify\":false,\"interval_s\":300}");
     assert(r.status==200&&saved.enabled&&saved.interval_s==300&&strstr(r.reply,"\"interval_s\":300"));
+    assert(strstr(r.reply,"\"waiting_for_worker\":true"));
     const char *bad[]={"{\"enabled\":true,\"notify\":false}","{\"enabled\":1,\"notify\":false,\"interval_s\":300}",
         "{\"enabled\":true,\"notify\":false,\"interval_s\":300.5}","{\"enabled\":true,\"notify\":false,\"interval_s\":-1}",
         "{\"enabled\":true,\"notify\":false,\"interval_s\":86401}","{\"enabled\":true,\"notify\":false,\"interval_s\":59}",

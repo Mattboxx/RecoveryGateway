@@ -19,6 +19,10 @@
 #include "lwip/mem.h"
 #include "lwip/ip_addr.h"
 #include "lwip/timeouts.h"
+#include "lwip/tcpip.h"
+#if defined(RECOVERYGATEWAY_LWIP_OWNED_TIMEOUTS)
+#include "lwip_owned_timeout.h"
+#endif
 #include "lwip/etharp.h"
 #include "lwip/prot/ethernet.h"
 
@@ -128,7 +132,6 @@ typedef enum {
     DHCPS_HANDLE_CREATED = 0,
     DHCPS_HANDLE_STARTED,
     DHCPS_HANDLE_STOPPED,
-    DHCPS_HANDLE_DELETE_PENDING,
 } dhcps_handle_state;
 
 typedef struct list_node {
@@ -167,12 +170,25 @@ struct dhcps_t {
     void* dhcps_cb_arg;
     struct udp_pcb *dhcps_pcb;
     dhcps_handle_state state;
+#if defined(RECOVERYGATEWAY_LWIP_OWNED_TIMEOUTS)
+    lwip_owned_timeout_t lease_timeout;
+#endif
     bool has_declined_ip;
     char current_hostname[DHCPS_MAX_HOSTNAME_LEN];  // Temporary storage for current client's hostname
 };
 
 
-static void dhcps_tmr(void* arg);
+static void dhcps_tmr(void *arg);
+static void dhcps_release_runtime(dhcps_t *dhcps);
+
+static void dhcps_schedule_lease_timer(dhcps_t *dhcps)
+{
+#if defined(RECOVERYGATEWAY_LWIP_OWNED_TIMEOUTS)
+    lwip_owned_timeout_schedule(&dhcps->lease_timeout, DHCP_COARSE_TIMER_MSECS, dhcps_tmr, dhcps, "dhcps_tmr");
+#else
+    sys_timeout(DHCP_COARSE_TIMER_MSECS, dhcps_tmr, dhcps);
+#endif
+}
 
 
 dhcps_t *__wrap_dhcps_new(void)
@@ -207,15 +223,9 @@ dhcps_t *__wrap_dhcps_new(void)
 
 void __wrap_dhcps_delete(dhcps_t *dhcps)
 {
-    if (dhcps) {
-        if (dhcps->state == DHCPS_HANDLE_STARTED) {
-            // if the dhcp-server has started already, we have to postpone the deletion
-            dhcps->state = DHCPS_HANDLE_DELETE_PENDING;
-        } else {
-            // otherwise, we're free to delete the handle immediately
-            free(dhcps);
-        }
-    }
+    if (!dhcps) return;
+    if (dhcps->state == DHCPS_HANDLE_STARTED) dhcps_release_runtime(dhcps);
+    mem_free(dhcps);
 }
 
 static void get_ip_info(struct netif * netif, ip_info_t *ip_info)
@@ -1411,40 +1421,60 @@ err_t __wrap_dhcps_start(dhcps_t *dhcps, struct netif *netif, ip4_addr_t ip)
 {
     ESP_LOGI(TAG, "Starting DHCP server on %d.%d.%d.%d (custom implementation)",
              ip4_addr1_16(&ip), ip4_addr2_16(&ip), ip4_addr3_16(&ip), ip4_addr4_16(&ip));
-    if (dhcps == NULL || netif == NULL) {
+    if (dhcps == NULL || netif == NULL || ip4_addr_isany_val(ip)) {
         return ERR_ARG;
     }
-    dhcps->dhcps_netif = netif;
-    if (dhcps->dhcps_pcb != NULL) {
-        udp_remove(dhcps->dhcps_pcb);
-    }
-
-    dhcps->dhcps_pcb = udp_new();
-
-    if (dhcps->dhcps_pcb == NULL || ip4_addr_isany_val(ip)) {
-        DHCPS_LOG("dhcps_start(): could not obtain pcb\n");
-        return ERR_ARG;
-    }
-
-    IP4_ADDR(&dhcps->broadcast_dhcps, 255, 255, 255, 255);
-
-    dhcps->server_address.addr = ip.addr;
     DHCP_CHECK_SUBNET_MASK_IP(htonl(dhcps->dhcps_mask.addr));
     DHCP_CHECK_IP_MATCH_SUBNET_MASK(htonl(dhcps->dhcps_mask.addr), htonl(ip.addr));
+    if (dhcps->state == DHCPS_HANDLE_STARTED) {
+        if (dhcps->dhcps_netif == netif && dhcps->server_address.addr == ip.addr) return ERR_OK;
+        dhcps_release_runtime(dhcps);
+    }
+    struct udp_pcb *pcb = udp_new();
+    if (!pcb) return ERR_MEM;
+    udp_bind_netif(pcb, netif);
+    err_t bound = udp_bind(pcb, &netif->ip_addr, DHCPS_SERVER_PORT);
+    if (bound != ERR_OK) {
+        udp_remove(pcb);
+        return bound;
+    }
+    dhcps->dhcps_netif = netif;
+    dhcps->dhcps_pcb = pcb;
+    IP4_ADDR(&dhcps->broadcast_dhcps, 255, 255, 255, 255);
+    dhcps->server_address.addr = ip.addr;
     dhcps_poll_set(dhcps, dhcps->server_address.addr);
-
     dhcps->client_address_plus.addr = dhcps->dhcps_poll.start_ip.addr;
 
-    udp_bind_netif(dhcps->dhcps_pcb, dhcps->dhcps_netif);
-    udp_bind(dhcps->dhcps_pcb, &netif->ip_addr, DHCPS_SERVER_PORT);
-    udp_recv(dhcps->dhcps_pcb, handle_dhcp, dhcps);
+    udp_recv(pcb, handle_dhcp, dhcps);
 #if DHCPS_DEBUG
     DHCPS_LOG("dhcps:dhcps_start->udp_recv function Set a receive callback handle_dhcp for UDP_PCB pcb_dhcps\n");
 #endif
     dhcps->state = DHCPS_HANDLE_STARTED;
     g_dhcps_instance = dhcps;  // Store for external access
-    sys_timeout(DHCP_COARSE_TIMER_MSECS, dhcps_tmr, dhcps);
+    dhcps_schedule_lease_timer(dhcps);
     return ERR_OK;
+}
+
+static void dhcps_release_runtime(dhcps_t *dhcps)
+{
+    LWIP_ASSERT_CORE_LOCKED();
+#if defined(RECOVERYGATEWAY_LWIP_OWNED_TIMEOUTS)
+    lwip_owned_timeout_cancel(&dhcps->lease_timeout);
+#else
+    sys_untimeout(dhcps_tmr, dhcps);
+#endif
+    if (g_dhcps_instance == dhcps) g_dhcps_instance = NULL;
+    dhcps->state = DHCPS_HANDLE_STOPPED;
+    if (dhcps->dhcps_pcb) {
+        udp_remove(dhcps->dhcps_pcb);
+        dhcps->dhcps_pcb = NULL;
+    }
+    while (dhcps->plist) {
+        list_node *node = dhcps->plist;
+        dhcps->plist = node->pnext;
+        free(node->pnode);
+        free(node);
+    }
 }
 
 /******************************************************************************
@@ -1463,28 +1493,7 @@ err_t __wrap_dhcps_stop(dhcps_t *dhcps, struct netif *netif)
         return ERR_ARG;
     }
 
-    if (dhcps->dhcps_pcb != NULL) {
-        udp_disconnect(dhcps->dhcps_pcb);
-        udp_remove(dhcps->dhcps_pcb);
-        dhcps->dhcps_pcb = NULL;
-    }
-
-    list_node *pnode = NULL;
-    list_node *pback_node = NULL;
-    pnode = dhcps->plist;
-
-    while (pnode != NULL) {
-        pback_node = pnode;
-        pnode = pback_node->pnext;
-        node_remove_from_list(&dhcps->plist, pback_node);
-        free(pback_node->pnode);
-        pback_node->pnode = NULL;
-        free(pback_node);
-        pback_node = NULL;
-    }
-    sys_untimeout(dhcps_tmr, dhcps);
-    dhcps->state = DHCPS_HANDLE_STOPPED;
-    g_dhcps_instance = NULL;  // Clear global reference
+    dhcps_release_runtime(dhcps);
     return ERR_OK;
 }
 
@@ -1540,16 +1549,8 @@ static void kill_oldest_dhcps_pool(dhcps_t *dhcps)
 static void dhcps_tmr(void *arg)
 {
     dhcps_t *dhcps = arg;
-    dhcps_handle_state state = dhcps->state;
-    if (state == DHCPS_HANDLE_DELETE_PENDING) {
-        free(dhcps);
-        return;
-    }
-
-    if (state != DHCPS_HANDLE_STARTED) {
-        return;
-    }
-    sys_timeout(DHCP_COARSE_TIMER_MSECS, dhcps_tmr, dhcps);
+    if (dhcps->state != DHCPS_HANDLE_STARTED) return;
+    dhcps_schedule_lease_timer(dhcps);
     u8_t num_dhcps_pool = 0;
     list_node *pback_node = NULL;
     list_node *pnode = NULL;
@@ -1677,39 +1678,40 @@ err_t __wrap_dhcps_dns_getserver(dhcps_t *dhcps, ip4_addr_t *dnsserver)
     return __wrap_dhcps_dns_getserver_by_type(dhcps, dnsserver, DNS_TYPE_MAIN);
 }
 
-/******************************************************************************
- * FunctionName : dhcps_get_active_leases
- * Description  : Enumerate all active DHCP leases
- * Parameters   : leases -- Array to store lease info
- *                max_leases -- Maximum number of leases to return
- * Returns      : Number of active leases found
- * Note         : Uses global g_dhcps_instance, safe to call from any context
- ******************************************************************************/
-int dhcps_get_active_leases(dhcp_lease_info_t *leases, int max_leases)
+typedef struct {
+    dhcp_lease_info_t *leases;
+    int capacity;
+    int count;
+} dhcps_lease_snapshot_t;
+
+/* Same TCP/IP ownership as lease expiry and server stop. Return only
+ * copied values so callers can format responses after releasing the core. */
+static void dhcps_copy_active_leases(void *context)
 {
-    struct dhcps_pool *pdhcps_pool = NULL;
-    list_node *pback_node = NULL;
-    int count = 0;
+    LWIP_ASSERT_CORE_LOCKED();
+    dhcps_lease_snapshot_t *snapshot = context;
+    if (!g_dhcps_instance) return;
 
-    if (leases == NULL || max_leases <= 0 || g_dhcps_instance == NULL) {
-        return 0;
-    }
-
-    for (pback_node = g_dhcps_instance->plist;
-         pback_node != NULL && count < max_leases;
-         pback_node = pback_node->pnext) {
-        pdhcps_pool = pback_node->pnode;
-        if (pdhcps_pool != NULL) {
-            memcpy(leases[count].mac, pdhcps_pool->mac, 6);
-            leases[count].ip = pdhcps_pool->ip.addr;
-            leases[count].lease_timer = pdhcps_pool->lease_timer;
-            strncpy(leases[count].hostname, pdhcps_pool->hostname, sizeof(leases[count].hostname) - 1);
-            leases[count].hostname[sizeof(leases[count].hostname) - 1] = '\0';
-            count++;
+    for (list_node *node = g_dhcps_instance->plist;
+         node && snapshot->count < snapshot->capacity; node = node->pnext) {
+        const struct dhcps_pool *pool = node->pnode;
+        if (pool) {
+            dhcp_lease_info_t *lease = &snapshot->leases[snapshot->count++];
+            memcpy(lease->mac, pool->mac, sizeof lease->mac);
+            lease->ip = pool->ip.addr;
+            lease->lease_timer = pool->lease_timer;
+            strncpy(lease->hostname, pool->hostname, sizeof lease->hostname - 1);
+            lease->hostname[sizeof lease->hostname - 1] = '\0';
         }
     }
+}
 
-    return count;
+int dhcps_get_active_leases(dhcp_lease_info_t *leases, int max_leases)
+{
+    if (!leases || max_leases <= 0) return 0;
+    dhcps_lease_snapshot_t snapshot = {.leases = leases, .capacity = max_leases};
+    if (tcpip_callback_wait(dhcps_copy_active_leases, &snapshot) != ERR_OK) return -1;
+    return snapshot.count;
 }
 
 #endif // ESP_DHCPS

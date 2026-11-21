@@ -17,6 +17,11 @@ start = source.index('        case COORD_FETCH_PEERS:')
 initial = source[start:source.index('                /* Signal registration only now', start)]
 start = source.index('static void note_ctrl_loss(')
 notes = source[start:source.index('ml->ctrl_retry_failures++;', start)] + 'ml->ctrl_retry_failures++;\n}\n'
+start = source.index('static cJSON *build_hostinfo(')
+hostinfo = source[start:source.index('\n}', start) + 3]
+microlink = (ML / 'src/microlink.c').read_text(encoding='utf-8')
+start = microlink.index('void microlink_set_peer_api_port(')
+peer_set = microlink[start:microlink.index('\n}', start) + 3]
 
 PROGRAM = r'''
 #include <assert.h>
@@ -30,7 +35,10 @@ typedef struct {uint8_t wg_public_key[32],disco_public_key[32];
     const char *ctrl_loss_reason;const char *ctrl_close_detail;int32_t ctrl_close_code,ctrl_loss_code;
     uint32_t ctrl_loss_count;const char *ctrl_retry_reason;uint32_t ctrl_retry_failures;
     uint64_t rt_loss_ms,rt_backoff_ms,rt_tcp_ms,rt_noise_ms,rt_register_ms,rt_fetch_ms,rt_stream_ms,rt_derp_ms;
-    uint32_t ctrl_last_reconnect_ms;char ctrl_reconnect_stages[112];bool force_register;} microlink_t;
+    uint32_t ctrl_last_reconnect_ms;char ctrl_reconnect_stages[112];bool force_register;
+    struct {const char *device_name,*ipn_version;uint16_t peer_api_port;} config;
+    char advertise_routes[10];int derp_home_region,derp_region_default;
+    bool stun_nat_checked,nat_mapping_varies;} microlink_t;
 static uint64_t ml_get_time_ms(void){return 1234;}
 static size_t strlcpy_(char *d,const char *s,size_t n){size_t l=strlen(s);if(n){size_t c=l<n-1?l:n-1;memcpy(d,s,c);d[c]=0;}return l;}
 #define strlcpy strlcpy_
@@ -49,7 +57,9 @@ static void ml_policy_suspend(void){authority=false;suspended++;}
 static unsigned expect_full;static void ml_policy_expect_full_map(void){expect_full++;}
 static void ml_conn_close(microlink_t *ml){(void)ml;closed++;ml_policy_suspend();}
 static void bytes_to_hex(const uint8_t *p,int n,char *s){(void)p;memset(s,'0',n*2);s[n*2]=0;}
-static cJSON *build_hostinfo(microlink_t *ml){(void)ml;return cJSON_CreateObject();}
+static const char *microlink_default_device_name(void){return "fixture";}
+static cJSON *build_routable_ips_array(const char *list){assert(list);return cJSON_CreateArray();}
+''' + hostinfo + peer_set + r'''
 static void *ml_psram_malloc(size_t n){return malloc(n);}
 static int ml_h2_build_headers_frame(uint8_t *p,size_t n,const char *m,const char *path,const char *h,const char *t,unsigned sid,bool end){
     (void)p;(void)n;(void)m;(void)path;(void)h;(void)t;assert(sid==5&&!end);return 0;
@@ -86,13 +96,24 @@ static void check_request(microlink_t *ml,bool ready){
     assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r,"Stream")));
     assert(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(r,"KeepAlive")));
     cJSON *omit=cJSON_GetObjectItemCaseSensitive(r,"OmitPeers");
-    assert(cJSON_IsBool(omit)&&cJSON_IsTrue(omit)==ready);cJSON_Delete(r);
+    assert(cJSON_IsBool(omit)&&cJSON_IsTrue(omit)==ready);
+    const cJSON *host=cJSON_GetObjectItemCaseSensitive(r,"Hostinfo");
+    const cJSON *services=cJSON_GetObjectItemCaseSensitive(host,"Services");
+    if(ml->config.peer_api_port){
+        assert(cJSON_IsArray(services)&&cJSON_GetArraySize(services)==2);
+        assert(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(services,0),"Port")->valueint==ml->config.peer_api_port);
+        assert(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(services,1),"Proto")),"peerapi-dns-proxy"));
+    }else assert(!services);
+    cJSON_Delete(r);
     assert(authority==ready);
 }
 int main(void){
     microlink_t ml={0};
     (void)note_reconnected;   /* covered by test_coord_session_end.py */
     reset();check_request(&ml,true);assert(suspended==0);
+    microlink_set_peer_api_port(&ml,41181);
+    reset();check_request(&ml,true);assert(suspended==0);
+    microlink_set_peer_api_port(&ml,0);
     reset();check_request(&ml,false);assert(suspended==1);
     reset();fetch_authority=true;assert(initial_branch(&ml)==TEST_REGISTERED&&stream_calls==0&&closed==0);
     reset();fetch_rc=1;stream_authority=true;assert(initial_branch(&ml)==TEST_REGISTERED&&stream_calls==1&&closed==0);

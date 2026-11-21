@@ -44,6 +44,19 @@ typedef struct {
     int64_t last_seen_us;
 } fourvia6_flow_t;
 
+static bool flow_active(const fourvia6_flow_t *flow, int64_t now)
+{
+    int64_t timeout = flow->protocol == 6 ? FOURVIA6_TCP_TIMEOUT_US
+                    : flow->protocol == 17 ? FOURVIA6_UDP_TIMEOUT_US
+                    : FOURVIA6_ICMP_TIMEOUT_US;
+    return flow->valid && now - flow->last_seen_us <= timeout;
+}
+
+static size_t transport_header_size(uint8_t protocol)
+{
+    return protocol == 6 ? 20 : 8;
+}
+
 static bool s_enabled;
 static uint32_t s_network;
 static uint8_t s_prefix_len;
@@ -166,10 +179,7 @@ void fourvia6_get_status(fourvia6_status_t *out)
     out->translated_packets = s_translated;
     out->dropped_packets = s_dropped;
     for (int i = 0; i < FOURVIA6_FLOW_COUNT; i++) {
-        int64_t timeout = s_flows[i].protocol == 6 ? FOURVIA6_TCP_TIMEOUT_US
-                        : s_flows[i].protocol == 17 ? FOURVIA6_UDP_TIMEOUT_US
-                        : FOURVIA6_ICMP_TIMEOUT_US;
-        if (s_flows[i].valid && now - s_flows[i].last_seen_us <= timeout) out->active_flows++;
+        if (flow_active(&s_flows[i], now)) out->active_flows++;
     }
     taskEXIT_CRITICAL(&s_lock);
 }
@@ -249,23 +259,21 @@ static void flow_remember(const uint8_t client_v6[16], uint32_t peer_v4,
     int64_t now = esp_timer_get_time();
     taskENTER_CRITICAL(&s_lock);
     int slot = -1;
-    int64_t oldest = INT64_MAX;
+    int oldest = 0;
     for (int i = 0; i < FOURVIA6_FLOW_COUNT; i++) {
-        if (s_flows[i].valid && s_flows[i].protocol == protocol
-            && s_flows[i].peer_v4 == peer_v4 && s_flows[i].target_v4 == target_v4
-            && s_flows[i].client_port == client_port && s_flows[i].target_port == target_port
-            && memcmp(s_flows[i].client_v6, client_v6, 16) == 0) { slot = i; break; }
-        if (!s_flows[i].valid) slot = i;
-        else if (slot < 0 && s_flows[i].last_seen_us < oldest) {
-            oldest = s_flows[i].last_seen_us; slot = i;
-        }
+        const fourvia6_flow_t *flow = &s_flows[i];
+        if (flow->valid && flow->protocol == protocol
+            && flow->peer_v4 == peer_v4 && flow->target_v4 == target_v4
+            && flow->client_port == client_port && flow->target_port == target_port
+            && memcmp(flow->client_v6, client_v6, 16) == 0) { slot = i; break; }
+        if (slot < 0 && !flow_active(flow, now)) slot = i;
+        if (flow->last_seen_us < s_flows[oldest].last_seen_us) oldest = i;
     }
-    if (slot >= 0) {
-        s_flows[slot] = (fourvia6_flow_t){.valid=true,.protocol=protocol,
-            .peer_v4=peer_v4,.target_v4=target_v4,.client_port=client_port,
-            .target_port=target_port,.last_seen_us=now};
-        memcpy(s_flows[slot].client_v6, client_v6, 16);
-    }
+    if (slot < 0) slot = oldest;
+    s_flows[slot] = (fourvia6_flow_t){.valid=true,.protocol=protocol,
+        .peer_v4=peer_v4,.target_v4=target_v4,.client_port=client_port,
+        .target_port=target_port,.last_seen_us=now};
+    memcpy(s_flows[slot].client_v6, client_v6, 16);
     taskEXIT_CRITICAL(&s_lock);
 }
 
@@ -278,10 +286,7 @@ static bool flow_lookup(uint32_t peer_v4, uint32_t target_v4, uint8_t protocol,
     taskENTER_CRITICAL(&s_lock);
     for (int i = 0; i < FOURVIA6_FLOW_COUNT; i++) {
         if (!s_flows[i].valid) continue;
-        int64_t timeout = protocol == 6 ? FOURVIA6_TCP_TIMEOUT_US
-                        : protocol == 17 ? FOURVIA6_UDP_TIMEOUT_US
-                        : FOURVIA6_ICMP_TIMEOUT_US;
-        if (now - s_flows[i].last_seen_us > timeout) { s_flows[i].valid = false; continue; }
+        if (!flow_active(&s_flows[i], now)) { s_flows[i].valid = false; continue; }
         if (s_flows[i].protocol == protocol && s_flows[i].peer_v4 == peer_v4
             && s_flows[i].target_v4 == target_v4
             && s_flows[i].client_port == client_port && s_flows[i].target_port == target_port) {
@@ -312,7 +317,8 @@ bool fourvia6_translate_wg_input(struct pbuf *packet, struct netif *wg_netif,
     if (peer_tailscale_ip && IP_IS_V4(peer_tailscale_ip))
         peer_v4 = lwip_ntohl(ip4_addr_get_u32(ip_2_ip4(peer_tailscale_ip)));
     if (!target_allowed(target) || peer_v4 == 0 || packet->tot_len < 40 + payload_len
-        || header[7] <= 1 || (protocol != 6 && protocol != 17 && protocol != 58)) {
+        || header[7] <= 1 || (protocol != 6 && protocol != 17 && protocol != 58)
+        || payload_len < transport_header_size(protocol)) {
         taskENTER_CRITICAL(&s_lock); s_dropped++; taskEXIT_CRITICAL(&s_lock);
         pbuf_free(packet);
         return true;
@@ -329,9 +335,6 @@ bool fourvia6_translate_wg_input(struct pbuf *packet, struct netif *wg_netif,
     uint16_t client_port = 0, target_port = 0;
     uint8_t v4_protocol = protocol;
     if (protocol == 6 || protocol == 17) {
-        if (payload_len < 8 || (protocol == 6 && payload_len < 20)) {
-            pbuf_free(out); pbuf_free(packet); return true;
-        }
         client_port = read16(bytes + 20);
         target_port = read16(bytes + 22);
         size_t checksum_offset = protocol == 6 ? 16 : 6;
@@ -340,7 +343,7 @@ bool fourvia6_translate_wg_input(struct pbuf *packet, struct netif *wg_netif,
         if (protocol == 17 && check == 0) check = 0xffff;
         write16(bytes + 20 + checksum_offset, check);
     } else {
-        if (payload_len < 8 || (bytes[20] != 128 && bytes[20] != 129)) {
+        if (bytes[20] != 128 && bytes[20] != 129) {
             pbuf_free(out); pbuf_free(packet); return true;
         }
         bytes[20] = bytes[20] == 128 ? 8 : 0;
@@ -383,7 +386,7 @@ struct pbuf *fourvia6_translate_wg_output(struct pbuf *packet)
                     | ((uint32_t)h[14] << 8) | h[15];
     uint32_t peer = ((uint32_t)h[16] << 24) | ((uint32_t)h[17] << 16)
                   | ((uint32_t)h[18] << 8) | h[19];
-    if (total < ihl + 8) return NULL;
+    if (total < ihl + transport_header_size(protocol)) return NULL;
     uint8_t ports[8];
     if (pbuf_copy_partial(packet, ports, sizeof ports, ihl) != sizeof ports) return NULL;
     uint16_t target_port = 0, client_port = 0;

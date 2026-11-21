@@ -61,6 +61,7 @@ typedef int esp_err_t;
 static size_t heap_caps_get_free_size(int caps) {(void)caps; return 200000;}
 static size_t heap_caps_get_minimum_free_size(int caps) {(void)caps; return 150000;}
 static void *heap_caps_malloc(size_t n, int caps) {(void)caps; return malloc(n);}
+static void heap_caps_free(void *p) {free(p);}
 #define ESP_MAC_ETH 3
 static esp_err_t esp_read_mac(uint8_t *mac, int type) {(void)type; memset(mac, 0x24, 6); return ESP_OK;}
 /* netif */
@@ -94,10 +95,17 @@ static void (*g_other_task)(void);
 static TickType_t xTaskGetTickCount(void) {return g_ticks;}
 static void vTaskDelay(TickType_t t) {g_delays++; g_ticks += t ? t : 1; if (g_other_task) g_other_task();}
 typedef void *SemaphoreHandle_t;
+typedef void *TaskHandle_t;
 static SemaphoreHandle_t xSemaphoreCreateMutex(void) {return malloc(1);}
 static SemaphoreHandle_t xSemaphoreCreateBinary(void) {return malloc(1);}
 static BaseType_t xSemaphoreTake(SemaphoreHandle_t s, TickType_t t) {(void)s; (void)t; return pdTRUE;}
 static BaseType_t xSemaphoreGive(SemaphoreHandle_t s) {(void)s; return pdTRUE;}
+static void vSemaphoreDelete(SemaphoreHandle_t s) {free(s);}
+#define eSetValueWithOverwrite 0
+static void xTaskNotify(TaskHandle_t h, uint32_t value, int action) {(void)h; (void)value; (void)action;}
+static void xTaskNotifyWait(uint32_t enter, uint32_t leave, uint32_t *value, TickType_t wait)
+{(void)enter; (void)leave; (void)value; (void)wait;}
+static void task_reaper_self_delete(void) {abort();}
 typedef void (*TaskFunction_t)(void *);
 static BaseType_t xTaskCreatePinnedToCoreWithCaps(TaskFunction_t f, const char *n, uint32_t st, void *a, UBaseType_t p, void *h, BaseType_t c, int caps)
 {(void)f; (void)n; (void)st; (void)a; (void)p; (void)h; (void)c; (void)caps; return pdPASS;}
@@ -146,11 +154,12 @@ typedef struct {uint8_t bmRequestType, bRequest; uint16_t wValue, wIndex, wLengt
 typedef struct {uint16_t idVendor, idProduct; uint8_t bNumConfigurations;} usb_device_desc_t;
 typedef struct {uint16_t wTotalLength;} usb_config_desc_t;
 typedef struct {uint8_t bConfigurationValue;} usb_device_info_t;
-typedef struct {bool skip_phy_setup; int intr_flags; void *enum_filter_cb;} usb_host_config_t;
+typedef struct {bool skip_phy_setup, root_port_unpowered; int intr_flags; void *enum_filter_cb;} usb_host_config_t;
 enum {USB_HOST_CLIENT_EVENT_NEW_DEV = 1, USB_HOST_CLIENT_EVENT_DEV_GONE, USB_HOST_CLIENT_EVENT_DEV_REMOVED};
 typedef struct {int event; union {struct {uint8_t address;} new_dev; struct {usb_device_handle_t dev_hdl;} dev_gone; struct {uint8_t address;} dev_removed;};} usb_host_client_event_msg_t;
 typedef void (*usb_host_client_event_cb_t)(const usb_host_client_event_msg_t *m, void *arg);
-typedef struct {bool is_synchronous; int max_num_event_msg; struct {usb_host_client_event_cb_t client_event_callback; void *callback_arg;} async;} usb_host_client_config_t;
+typedef struct {bool is_synchronous; int max_num_event_msg; struct {bool notify_dev_removed;} flags;
+    struct {usb_host_client_event_cb_t client_event_callback; void *callback_arg;} async;} usb_host_client_config_t;
 #define USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS 1
 static int g_submits, g_frees, g_freed_while_held;
 static usb_transfer_t *g_last_submit;
@@ -252,12 +261,18 @@ int main(void)
 
     /* a slot never given back: nothing freed, port unusable, bounded wait */
     net_session();
+    usb_transfer_t *retained[] = {s_net.in[0], s_net.out[0], s_net.out[1]};
     CHECK(slot_claim(0));
     g_sender_slot = 0; g_release_after = -1;
     frees = g_frees; t0 = g_ticks;
     usb_port_net_close();
     CHECK(g_frees == frees && s_poisoned && g_ticks - t0 <= USBP_CLOSE_CLAIM_MS + 100);
+    CHECK(!s_net.in[0] && !s_net.out[0] && !s_net.out[1]);
     g_sender_slot = -1; g_other_task = NULL;
+    /* A reboot would reclaim the parked transfers. The fixture has asserted
+     * that firmware did not free them while a sender still held one. */
+    for (unsigned i = 0; i < sizeof retained / sizeof retained[0]; i++)
+        usb_host_transfer_free(retained[i]);
 
     /* --- serial session: queue --- */
     memset(&s_net, 0, sizeof s_net);
@@ -305,7 +320,8 @@ def run(source_text):
         (tmp / 'freertos').mkdir()
         (tmp / 'esp_err.h').write_text(STUBS, encoding='utf-8')
         for name in ('esp_netif.h', 'esp_heap_caps.h', 'esp_attr.h', 'esp_log.h', 'esp_mac.h', 'esp_netif_net_stack.h',
-                     'freertos/FreeRTOS.h', 'freertos/semphr.h', 'freertos/ringbuf.h', 'freertos/task.h', 'usb/usb_host.h'):
+                     'freertos/FreeRTOS.h', 'freertos/semphr.h', 'freertos/ringbuf.h', 'freertos/task.h', 'usb/usb_host.h',
+                     'task_reaper.h'):
             (tmp / name).write_text('#pragma once\n#include "esp_err.h"\n', encoding='utf-8')
         (tmp / 'sdkconfig.h').write_text('#pragma once\n#define CONFIG_SOC_USB_OTG_SUPPORTED 1\n', encoding='utf-8')
         (tmp / 'usb_port.h').write_text((ROOT / 'main/usb_port.h').read_text(encoding='utf-8'), encoding='utf-8')

@@ -15,6 +15,7 @@ source = '\n'.join(line for line in source.splitlines() if not line.startswith('
 fixture = r'''
 #include <assert.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -41,7 +42,12 @@ typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
 static int critical_depth;
 static int transaction_depth;
+static bool transaction_busy;
 static void forwarding_config_lock(void) { assert(!critical_depth && !transaction_depth); transaction_depth=1; }
+static bool forwarding_config_try_lock(void) {
+    if(transaction_busy)return false;
+    forwarding_config_lock();return true;
+}
 static void forwarding_config_unlock(void) { assert(!critical_depth && transaction_depth==1); transaction_depth=0; }
 #define portENTER_CRITICAL(m) do { (void)(m); assert(critical_depth==0); critical_depth=1; } while(0)
 #define portEXIT_CRITICAL(m) do { (void)(m); assert(critical_depth==1); critical_depth=0; } while(0)
@@ -110,8 +116,8 @@ int tailnet_forward_snapshot_mappings(tailnet_forward_mapping_t *out,int capacit
     out[0]=(tailnet_forward_mapping_t){.rule={.valid=1,.enabled=1,.proto=6,.listen_port=4444,.destination_port=22},.destination_nbo=0x64500001,.slot=0};return 1;
 }
 void tailnet_forward_mark_installed(const tailnet_forward_mapping_t *m,bool ok,const char *err) { assert(m->slot==0 && m->binding_ip_nbo==0xc0000201 && !err); tailnet_installed=ok; }
-static err_t tcpip_callback_with_block(void (*cb)(void *),void *arg,int block) {
-    assert(!critical_depth && !transaction_depth && !arg && block==1); if(queue_failure) return ESP_FAIL;
+static err_t tcpip_try_callback(void (*cb)(void *),void *arg) {
+    assert(!critical_depth && !transaction_depth && !arg && !queued_callback); if(queue_failure) return ESP_FAIL;
     queued_callback=cb; return ERR_OK;
 }
 static void drain(void) { if(queued_callback) { void (*cb)(void*)=queued_callback; queued_callback=NULL; cb(NULL); } }
@@ -165,9 +171,15 @@ int main(void) {
     changed.ext_port=4444; tailnet_conflict=4444; assert(portmap_set_all(&changed,1)==ESP_ERR_INVALID_STATE);
     tailnet_conflict=0; assert(writes==before_writes); assert_visible();
     changed.ext_port=3333;
+    queue_failure=true;
     assert(portmap_set_all(&changed,1)==ESP_OK); expected_visible=3333; assert_visible();
-    assert(persisted[0].ext_port==3333); drain();
-    assert(binding_count==1 && bindings[0].port==3333 && bindings[0].dest==changed.int_ip);
+    assert(persisted[0].ext_port==3333 && portmap_refresh_pending() && !queued_callback && bindings[0].port==2222);
+    queue_failure=false;
+    portmap_retry_pending(); portmap_retry_pending(); portmap_install_all();
+    transaction_busy=true; drain();
+    assert(portmap_refresh_pending() && bindings[0].port==2222);
+    transaction_busy=false; portmap_retry_pending(); drain();
+    assert(!portmap_refresh_pending() && binding_count==1 && bindings[0].port==3333 && bindings[0].dest==changed.int_ip);
     tailnet_available=true; portmap_install_all(); drain();
     assert(binding_count==2 && tailnet_installed);
     sta_down=true; portmap_install_all(); drain();

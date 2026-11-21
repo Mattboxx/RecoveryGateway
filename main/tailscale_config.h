@@ -74,6 +74,7 @@ bool tailscale_manual_exit_configured(void);
 bool tailscale_exit_server_configured(void);
 #define TAILSCALE_PEERAPI_PORT 41180
 uint16_t tailscale_peerapi_port(void);
+void tailscale_retry_peer_dns(void);
 
 // Lifecycle
 void init_sntp_if_needed(void);          // Start SNTP once (idempotent); defined in tailscale_manager.c

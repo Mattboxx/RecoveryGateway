@@ -1,13 +1,14 @@
 """Execute the real pinned lwIP input/NAPT/pbuf path with synthetic interfaces.
 
-LWIP_SOURCE points to the ESP-IDF 5.5.3 lwIP checkout (src/include exists).
-Transport endpoints, route selection and timers are fixtures, not a real VPN.
+LWIP_SOURCE points to the pinned ESP-IDF 6.1.0 lwIP tree.
+Transport endpoints, route selection and clock are fixtures, not a real VPN.
 Packets reach the SDK's actual IPv4 input and receive-DNAT implementation.
 """
 from pathlib import Path
 import os
 import subprocess
 import tempfile
+from prepare_lwip_napt import prepare
 
 ROOT=Path(__file__).resolve().parents[1]
 sdk=Path(os.environ['LWIP_SOURCE'])
@@ -22,6 +23,7 @@ service_napt=napt_marker+route_source.split(napt_marker,1)[1]
 
 options=r'''
 #define NO_SYS 1
+#define LWIP_TESTMODE 1
 #define SYS_LIGHTWEIGHT_PROT 0
 #define MEM_LIBC_MALLOC 1
 #define MEMP_MEM_MALLOC 1
@@ -73,10 +75,13 @@ fixture=r'''
 #include "lwip/ip4.h"
 #include "lwip/ip4_frag.h"
 #include "lwip/inet_chksum.h"
+#include "lwip/mem.h"
+#include "lwip/memp.h"
 #include "lwip/lwip_napt.h"
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/udp.h"
 #include "lwip/timeouts.h"
+#include "lwip_owned_timeout.h"
 #include "lwip/tcpip.h"
 #include "tailnet_reassembly.h"
 typedef int esp_err_t;
@@ -97,6 +102,8 @@ static active_mapping_t s_active[TAILNET_FORWARD_MAX];
 static size_t strlcpy(char *d,const char *s,size_t z) { size_t n=strlen(s);if(z){size_t c=n<z-1?n:z-1;memcpy(d,s,c);d[c]=0;}return n; }
 struct netif *netif_list,*netif_default;
 union tcp_listen_pcbs_t tcp_listen_pcbs;
+struct tcp_pcb *tcp_active_pcbs,*tcp_tw_pcbs;
+void tcp_tmr(void) {}
 struct udp_pcb *udp_pcbs;
 static struct netif sta,ap,wg;
 static bool ethernet_case;
@@ -117,28 +124,43 @@ struct pbuf *__real_pbuf_coalesce(struct pbuf *p,pbuf_layer layer);
 struct pbuf *__wrap_pbuf_coalesce(struct pbuf *p,pbuf_layer layer) {
     return coalesce_failure?p:__real_pbuf_coalesce(p,layer);
 }
-typedef struct { sys_timeout_handler fn;void *arg; } fixture_timer_t;
-static fixture_timer_t timers[16];
 static uint32_t clock_ms=1000;
 static bool queue_failure;
+static unsigned fail_table_at, table_calls, table_frees, timer_allocations, other_timer_runs;
+static bool watch_tables, fail_timer_allocation;
+static void *table_memory[2];
+void *__real_mem_calloc(mem_size_t count,mem_size_t size);
+void *__wrap_mem_calloc(mem_size_t count,mem_size_t size) {
+    if (!watch_tables) return __real_mem_calloc(count,size);
+    assert(table_calls<2);
+    if (++table_calls==fail_table_at) return NULL;
+    return table_memory[table_calls-1]=__real_mem_calloc(count,size);
+}
+void __real_mem_free(void *ptr);
+void __wrap_mem_free(void *ptr) {
+    if (ptr) for (unsigned i=0;i<2;i++) {
+        if (table_memory[i]==ptr) { table_memory[i]=NULL; table_frees++; break; }
+    }
+    __real_mem_free(ptr);
+}
+void *__real_memp_malloc(memp_t type);
+void *__wrap_memp_malloc(memp_t type) {
+    if (type==MEMP_SYS_TIMEOUT) {
+        timer_allocations++;
+        if (fail_timer_allocation) return NULL;
+    }
+    return __real_memp_malloc(type);
+}
+static void other_timer(void *arg) {assert(arg==&clock_ms); other_timer_runs++;}
+static void count_tick(void *arg) {++*(unsigned *)arg;}
 u32_t sys_now(void) { return clock_ms; }
 err_t tcpip_try_callback(tcpip_callback_fn fn,void *arg) {
     if(queue_failure)return ERR_MEM;
     fn(arg);return ERR_OK;
 }
-void sys_timeout(u32_t ms,sys_timeout_handler fn,void *arg) {
-    (void)ms;
-    for(unsigned i=0;i<16;i++)assert(timers[i].fn!=fn||timers[i].arg!=arg);
-    for(unsigned i=0;i<16;i++)if(!timers[i].fn){timers[i]=(fixture_timer_t){fn,arg};return;}
-    assert(false);
-}
-void sys_untimeout(sys_timeout_handler fn,void *arg) {
-    for(unsigned i=0;i<16;i++)if(timers[i].fn==fn&&timers[i].arg==arg)timers[i]=(fixture_timer_t){0};
-}
 static void advance_timers(void) {
     clock_ms+=1000;tailnet_reassembly_refresh();
-    fixture_timer_t ready[16];memcpy(ready,timers,sizeof ready);memset(timers,0,sizeof timers);
-    for(unsigned i=0;i<16;i++)if(ready[i].fn)ready[i].fn(ready[i].arg);
+    sys_check_timeouts();
 }
 void tcp_input(struct pbuf *p,struct netif *n) { (void)n;++local_packets;pbuf_free(p); }
 void udp_input(struct pbuf *p,struct netif *n) { (void)n;++local_packets;pbuf_free(p); }
@@ -264,6 +286,54 @@ int main(int argc,char **argv) {
     addr.addr=lwip_htonl(0xc0000301);ip_addr_copy_from_ip4(ap.ip_addr,addr);ip_addr_copy_from_ip4(ap.netmask,mask);
     addr.addr=lwip_htonl(0x64400001);ip_addr_copy_from_ip4(wg.ip_addr,addr);ip_addr_copy_from_ip4(wg.netmask,mask);
     sta.next=&ap;ap.next=&wg;netif_list=netif_default=&sta;wg.output=output;
+    if(!strcmp(argv[1],"napt-startup-faults")) {
+        struct sys_timeo **timers=sys_timeouts_get_next_timeout();
+        watch_tables=true;
+        fail_table_at=1;
+        assert(!ip_napt_enable_netif(&ap,1) && !ap.napt && table_calls==1 && !table_frees && !*timers);
+        table_calls=0;fail_table_at=2;
+        assert(!ip_napt_enable_netif(&ap,1) && !ap.napt && table_calls==2 && table_frees==1 && !*timers);
+        assert(!table_memory[0] && !table_memory[1]);
+        assert(!ip_portmap_add(proto,netif_ip4_addr(&sta)->addr,2222,netif_ip4_addr(&wg)->addr,22));
+        table_calls=0;fail_table_at=0;fail_timer_allocation=true;
+        assert(ip_napt_enable_netif(&ap,1) && ap.napt && table_calls==2);
+        watch_tables=false;
+        struct sys_timeo *napt_timer=*timers;
+        assert(napt_timer && !napt_timer->next && !timer_allocations);
+        for(unsigned i=0;i<5;i++){
+            clock_ms=napt_timer->time;
+            sys_check_timeouts();
+            assert(*timers==napt_timer && !napt_timer->next && !timer_allocations);
+        }
+        lwip_owned_timeout_t first={0}, second={0};
+        unsigned first_ticks=0, second_ticks=0;
+        lwip_owned_timeout_schedule(&first,1,count_tick,&first_ticks,"first");
+        lwip_owned_timeout_schedule(&second,2,count_tick,&second_ticks,"second");
+        lwip_owned_timeout_schedule(&first,3,count_tick,&first_ticks,"first");
+        assert(*timers==&second.node && second.node.next==&first.node && first.node.next==napt_timer);
+        lwip_owned_timeout_cancel(&second);
+        assert(!second.pending && *timers==&first.node);
+        clock_ms+=3;
+        sys_check_timeouts();
+        assert(first_ticks==1 && !first.pending && !second_ticks && *timers==napt_timer && !timer_allocations);
+        fail_timer_allocation=false;
+        sys_timeout(1,other_timer,&clock_ms);
+        assert(timer_allocations==1 && *timers!=napt_timer && (*timers)->next==napt_timer);
+        sys_untimeout(other_timer,&clock_ms);
+        assert(*timers==napt_timer);
+        sys_timeout(1,other_timer,&clock_ms);
+        clock_ms++;
+        sys_check_timeouts();
+        assert(other_timer_runs==1 && *timers==napt_timer);
+        assert(ip_napt_enable_netif(&sta,1) && sta.napt);
+        assert(ip_napt_enable_netif(&ap,0) && !ap.napt && *timers==napt_timer);
+        assert(ip_napt_enable_netif(&sta,0) && !sta.napt && !*timers && table_frees==3);
+        assert(!table_memory[0] && !table_memory[1]);
+        assert(ip_napt_enable_netif(&ap,1) && *timers==napt_timer);
+        assert(ip_napt_enable_netif(&ap,0) && !*timers);
+        puts("PASS: real SDK NAPT allocation rollback, timer without heap, coexistence, stop and restart");
+        return 0;
+    }
     ethernet_case=!strcmp(argv[1],"ethernet-ap-stopped");
     bool ap_stopped=ethernet_case||!strcmp(argv[1],"ap-stopped");
     if(ethernet_case) {
@@ -378,13 +448,17 @@ with tempfile.TemporaryDirectory(prefix='tailnet-sdk-') as directory:
     # No cellular PPP netif in this SDK fixture: every interface is allowed.
     ppp='bool netif_hooks_ppp_input_allowed(struct pbuf *p,struct netif *n){(void)p;(void)n;return true;}\n'
     (path/'test.c').write_text(fixture+policy+ppp+core+service_napt+tests,encoding='utf-8')
-    files=['core/ip.c','core/pbuf.c','core/mem.c','core/memp.c','core/inet_chksum.c','core/def.c','core/ipv4/ip4.c','core/ipv4/ip4_addr.c','core/ipv4/ip4_napt.c','core/ipv4/ip4_frag.c']
+    files=['core/ip.c','core/pbuf.c','core/mem.c','core/memp.c','core/inet_chksum.c','core/def.c','core/ipv4/ip4.c','core/ipv4/ip4_addr.c','core/ipv4/ip4_frag.c']
+    generated=path/'lwip-napt'
+    prepare(sdk,generated)
     binary=path/('test.exe' if os.name=='nt' else 'test')
-    flags=['-std=c11','-Wall','-Wextra','-I',str(path),'-I',str(sdk/'src/include'),'-I',str(ROOT/'main'),'-Wl,--wrap=ip4_input','-Wl,--wrap=pbuf_coalesce','-Wl,--wrap=ip_napt_forward']
+    flags=['-std=c11','-Wall','-Wextra','-I',str(path),'-I',str(sdk/'src/include'),'-I',str(ROOT/'main'),
+           '-I',str(ROOT/'components/dhcpserver/include'),'-Wl,--wrap=ip4_input','-Wl,--wrap=pbuf_coalesce','-Wl,--wrap=ip_napt_forward']
+    flags+=['-Wl,--wrap=mem_calloc','-Wl,--wrap=mem_free','-Wl,--wrap=memp_malloc']
     if os.environ.get('TAILNET_SANITIZE')=='1':flags+=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
-    implementation=[str(ROOT/'main/tailnet_reassembly.c')]
+    implementation=[str(ROOT/'main/tailnet_reassembly.c'), str(generated/'ip4_napt.c'), str(generated/'timeouts.c')]
     subprocess.run([os.environ.get('CC','gcc'),*flags,str(path/'test.c'),*implementation,*(str(sdk/'src'/f) for f in files),'-o',str(binary)],check=True)
-    for scenario in ('ap-stopped','ethernet-ap-stopped','plain','fragment','short','split','split-oom','complete','denied','oom','bad-checksum',
+    for scenario in ('napt-startup-faults','ap-stopped','ethernet-ap-stopped','plain','fragment','short','split','split-oom','complete','denied','oom','bad-checksum',
                      'interface-isolation','protocol-isolation','native-isolation','overlap','expiry','capacity',
                      'expiry-queue-failure','expiry-wrap','chain-capacity','mutations'):
         for proto in (6,17):

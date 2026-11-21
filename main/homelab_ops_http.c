@@ -266,7 +266,8 @@ static esp_err_t post_service_check(httpd_req_t *req) {
 }
 static cJSON *watch_json(void) {
     service_watch_config_t w;service_watch_get(&w);cJSON *o=cJSON_CreateObject();
-    if(o&&!(cJSON_AddBoolToObject(o,"enabled",w.enabled)&&cJSON_AddBoolToObject(o,"notify",w.notify)&&cJSON_AddNumberToObject(o,"interval_s",w.interval_s))){cJSON_Delete(o);o=NULL;}
+    if(o&&!(cJSON_AddBoolToObject(o,"enabled",w.enabled)&&cJSON_AddBoolToObject(o,"notify",w.notify)&&cJSON_AddNumberToObject(o,"interval_s",w.interval_s)&&
+           cJSON_AddBoolToObject(o,"waiting_for_worker",service_watch_waiting()))){cJSON_Delete(o);o=NULL;}
     return o;
 }
 static esp_err_t get_service_watch(httpd_req_t *req) {

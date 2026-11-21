@@ -106,13 +106,18 @@ esp_err_t ota_flash_bind_httpd(httpd_handle_t server)
      * replacement rather than invalidating an already queued callback. */
     httpd_handle_t expected = NULL;
     if (!__atomic_compare_exchange_n(&s_server, &expected, server, false,
-                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        return expected == server ? ESP_OK : ESP_ERR_INVALID_STATE;
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) &&
+        expected != server) return ESP_ERR_INVALID_STATE;
     /* Learn the server's identity before accepting requests. An early call
      * from the HTTP thread then fails instead of waiting on its own queue. */
-    esp_err_t result = httpd_queue_work(server, identify_httpd, NULL);
-    if (result != ESP_OK) __atomic_store_n(&s_server, NULL, __ATOMIC_RELEASE);
-    return result;
+    if (__atomic_load_n(&s_httpd_task, __ATOMIC_ACQUIRE)) return ESP_OK;
+    return httpd_queue_work(server, identify_httpd, NULL);
+}
+
+void ota_flash_retry_binding(void)
+{
+    httpd_handle_t server = __atomic_load_n(&s_server, __ATOMIC_ACQUIRE);
+    if (server) ota_flash_bind_httpd(server);
 }
 
 static esp_err_t execute(flash_job_t *job)
@@ -203,8 +208,8 @@ esp_err_t ota_flash_set_boot_partition(const esp_partition_t *partition)
     return execute(&job);
 }
 
-void ota_flash_restart(void)
+esp_err_t ota_flash_restart(void)
 {
     flash_job_t job = {.operation = RESTART};
-    (void)execute(&job);
+    return execute(&job);
 }

@@ -31,12 +31,30 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_CRC 0x109
 '''
 HTTPD = '#pragma once\ntypedef void *httpd_handle_t;\n'
+HISTORY = (ROOT / 'main/history.c').read_text(encoding='utf-8')
+
+
+def history_func(sig):
+    start = HISTORY.index(sig)
+    return HISTORY[start:HISTORY.index('\n}\n', start) + 3]
+
 
 FLASH = r'''
-typedef struct {uint8_t *mem; uint32_t size; int fail_write, fail_erase, cut; void (*on_read)(uint32_t); unsigned erases;} fake_t;
-static esp_err_t f_read(void *c, uint32_t at, void *out, size_t n){fake_t *f=c;assert(at+n<=f->size);memcpy(out,f->mem+at,n);if(f->on_read)f->on_read(at);return ESP_OK;}
+typedef struct {
+    uint8_t *mem;
+    uint32_t size;
+    int fail_write, fail_erase, cut;
+    uint32_t fail_read_at, fail_write_at;
+    void (*on_read)(uint32_t);
+    unsigned erases;
+} fake_t;
+static esp_err_t f_read(void *c, uint32_t at, void *out, size_t n){
+    fake_t *f=c;assert(at+n<=f->size);
+    if(f->fail_read_at && at==f->fail_read_at)return ESP_FAIL;
+    memcpy(out,f->mem+at,n);if(f->on_read)f->on_read(at);return ESP_OK;
+}
 static esp_err_t f_write(void *c, uint32_t at, const void *d, size_t n){
-    fake_t *f=c;assert(at+n<=f->size);if(f->fail_write)return ESP_FAIL;
+    fake_t *f=c;assert(at+n<=f->size);if(f->fail_write || (f->fail_write_at && at==f->fail_write_at))return ESP_FAIL;
     size_t keep=n;if(f->cut>0&&(size_t)f->cut<n)keep=(size_t)f->cut;
     for(size_t i=0;i<keep;i++)f->mem[at+i]&=((const uint8_t*)d)[i];
     if(keep<n){f->cut=-1;return ESP_FAIL;}
@@ -50,6 +68,7 @@ PROGRAM = r'''
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include "history.h"
 #include "settings_snapshot.h"
@@ -57,8 +76,57 @@ PROGRAM = r'''
 #define STORAGE_SIZE (STORE_CONTROL_BASE + STORE_SECTOR)
 #define NVS_SIZE 0x10000u
 static uint8_t storage_mem[STORAGE_SIZE], nvs_mem[NVS_SIZE], buffer[STORE_SECTOR];
-static fake_t fs = {storage_mem, STORAGE_SIZE, 0, 0, 0, NULL, 0}, fn = {nvs_mem, NVS_SIZE, 0, 0, 0, NULL, 0};
+static fake_t fs = {.mem=storage_mem,.size=STORAGE_SIZE}, fn = {.mem=nvs_mem,.size=NVS_SIZE};
 static const store_flash_t storage = {&fs, f_read, f_write, f_erase}, nvs = {&fn, f_read, f_write, f_erase};
+
+#define MX_TYPE 2
+typedef struct {uint8_t kind, level; uint32_t wall, uptime; char text[HIST_TEXT_MAX + 1];} queued_t;
+static store_ring_t s_events,s_metrics;
+static atomic_uint s_dropped;
+static unsigned s_limited;
+static uint16_t s_boot;
+static bool s_persist=true;
+static uint32_t wall_now(void){return 0;}
+void storage_store_lock(void){}
+void storage_store_unlock(void){}
+static bool fail_summary;
+static unsigned summaries;
+static esp_err_t write_event(const queued_t *event){
+    assert(event->kind==HIST_EV_STORAGE&&strstr(event->text,"12 events not recorded"));
+    if(fail_summary)return ESP_FAIL;
+    summaries++;return ESP_OK;
+}
+''' + ''.join(history_func(s) for s in (
+    'static bool find_event_boot(', 'static bool find_metrics_boot(',
+    'static void number_boot(', 'static void write_drop_summary('
+)) + r'''
+static void history_runtime_tests(void){
+    memset(storage_mem,0xff,sizeof storage_mem);
+    assert(store_ring_open(&s_events,&storage,STORE_EVENTS_BASE,STORE_EVENTS_SECTORS)==ESP_OK);
+    assert(store_ring_open(&s_metrics,&storage,STORE_METRICS_BASE,STORE_METRICS_SECTORS)==ESP_OK);
+    number_boot();assert(s_boot==1);
+    history_sample_t sample={.boot=s_boot,.uptime=70,.wall=1700000000};
+    uint8_t payload[HIST_SAMPLE_BYTES];history_sample_pack(&sample,payload);
+    assert(store_ring_append(&s_metrics,MX_TYPE,sample.wall,sample.uptime,payload,sizeof payload)==ESP_OK);
+    s_boot=0; /* reboot with metrics on and the event ring still empty */
+    number_boot();assert(s_boot==2);
+    uint32_t age;
+    assert(!history_point_age(0,100,s_boot,0,70,sample.boot,&age));
+    assert(history_point_age(1700000100,100,s_boot,sample.wall,sample.uptime,sample.boot,&age)&&age==100);
+    assert(!history_point_age(0,100,0,0,70,0,&age));
+    assert(history_point_age(0,100,s_boot,0,70,s_boot,&age)&&age==30);
+
+    history_rate_t limited={.started=true,.tokens=0,.last=10};
+    s_dropped=7;s_limited=5;
+    write_drop_summary(&limited,10,true);assert(s_dropped==7&&s_limited==5&&!summaries);
+    write_drop_summary(&limited,20,false);assert(s_dropped==7&&s_limited==5&&!summaries);
+    fail_summary=true;write_drop_summary(&limited,20,true);
+    assert(s_dropped==7&&s_limited==5&&!summaries);
+    fail_summary=false;write_drop_summary(&limited,23,true);
+    assert(!s_dropped&&!s_limited&&summaries==1);
+    write_drop_summary(&limited,30,true);assert(summaries==1);
+    memset(storage_mem,0xff,sizeof storage_mem);
+}
 
 static void fill_nvs(uint8_t seed){for(unsigned i=0;i<NVS_SIZE;i++)nvs_mem[i]=(uint8_t)(i*7+seed);}
 static int changes_left;
@@ -66,6 +134,7 @@ static void nvs_writer(uint32_t at){if(changes_left>0&&at==NVS_SIZE-STORE_SECTOR
 static uint32_t slot_data(unsigned s){return STORE_SNAPSHOT_BASE+s*STORE_SNAPSHOT_SLOT+0x1000u;}
 
 static void history_tests(void){
+    history_runtime_tests();
     /* Packing round trip, including negative and extreme values. */
     history_sample_t s={.uptime=600,.wall=1700000600,.boot=7,.int_free=45527,.int_largest=31744,.psram_free=7000000,
                         .rx=UINT32_MAX,.tx=12,.rssi=-67,.cpu=42,.peers=9,.flags=HIST_UP_UPLINK|HIST_UP_TAILNET,.temp=-123};
@@ -181,12 +250,42 @@ static void snapshot_tests(void){
     assert(snap_request_restore(&storage,2,buffer)==ESP_OK);
     fn.fail_write=1;
     for(int i=0;i<SNAP_RESTORE_ATTEMPTS;i++){assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_FAILED);assert(snap_restore_pending(&storage));}
-    assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_GAVE_UP&&!snap_restore_pending(&storage));
+    assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_GAVE_UP&&snap_restore_pending(&storage));
     fn.fail_write=0;
+    assert(snap_cancel_restore(&storage)==ESP_OK);
     /* A cut in the middle of the NVS copy, then success at the next start. */
     assert(snap_request_restore(&storage,2,buffer)==ESP_OK);
     fn.cut=3*STORE_SECTOR+5;assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_FAILED);fn.cut=0;
     assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_RESTORED&&!memcmp(nvs_mem,storage_mem+slot_data(2),NVS_SIZE));
+    /* A failed attempts read leaves both live settings and the request alone. */
+    fill_nvs(14); memcpy(want,nvs_mem,NVS_SIZE);
+    assert(snap_request_restore(&storage,2,buffer)==ESP_OK);
+    unsigned erases=fn.erases;
+    fs.fail_read_at=STORE_CONTROL_BASE+ATTEMPTS_AT;
+    assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_FAILED);
+    assert(snap_restore_pending(&storage)&&fn.erases==erases&&!memcmp(want,nvs_mem,NVS_SIZE));
+    fs.fail_read_at=0;
+
+    /* Erase failure after a verified copy must not replay it on the next boot. */
+    fs.fail_erase=1;
+    assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_RESTORED);
+    assert(!snap_restore_pending(&storage));
+    fill_nvs(31); memcpy(want,nvs_mem,NVS_SIZE);
+    assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_NONE);
+    assert(!memcmp(want,nvs_mem,NVS_SIZE));
+    fs.fail_erase=0;
+
+    /* If neither finalization write works, keep the request, then verify
+     * and retire the completed copy on the next boot without rewriting NVS. */
+    assert(snap_request_restore(&storage,2,buffer)==ESP_OK);
+    fs.fail_erase=1;fs.fail_write_at=STORE_CONTROL_BASE;
+    assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_FINALIZE_FAILED);
+    assert(snap_restore_pending(&storage));
+    erases=fn.erases;
+    fs.fail_erase=0;fs.fail_write_at=0;
+    assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_RESTORED);
+    assert(!snap_restore_pending(&storage)&&fn.erases==erases);
+
     /* A garbage control sector is dropped, never applied. */
     memset(storage_mem+STORE_CONTROL_BASE,0x5A,64);fill_nvs(3);memcpy(want,nvs_mem,NVS_SIZE);
     assert(snap_boot_restore(&storage,&nvs,NVS_SIZE,buffer,&which)==SNAP_BOOT_INVALID&&!memcmp(want,nvs_mem,NVS_SIZE));
@@ -194,7 +293,16 @@ static void snapshot_tests(void){
 
     /* Cancel and delete (the data, not only the header). */
     assert(snap_request_restore(&storage,0,buffer)==ESP_OK&&snap_cancel_restore(&storage)==ESP_OK&&!snap_restore_pending(&storage));
-    assert(snap_request_restore(&storage,0,buffer)==ESP_OK&&snap_delete(&storage,0)==ESP_OK&&!snap_restore_pending(&storage));
+    assert(snap_request_restore(&storage,0,buffer)==ESP_OK);
+    fs.fail_read_at=STORE_CONTROL_BASE;
+    unsigned storage_erases=fs.erases;
+    assert(snap_delete(&storage,0)==ESP_FAIL&&fs.erases==storage_erases);
+    fs.fail_read_at=0;
+    fs.fail_erase=1;
+    assert(snap_delete(&storage,0)==ESP_FAIL&&snap_restore_pending(&storage));
+    assert(snap_read_header(&storage,0,&h)&&fs.erases==storage_erases);
+    fs.fail_erase=0;
+    assert(snap_delete(&storage,0)==ESP_OK&&!snap_restore_pending(&storage));
     assert(!snap_read_header(&storage,0,&h));
     for(unsigned i=0;i<STORE_SNAPSHOT_SLOT;i++)assert(storage_mem[STORE_SNAPSHOT_BASE+i]==0xFF);
     assert(snap_read_header(&storage,1,&h)&&snap_read_header(&storage,2,&h));     /* the others stay */

@@ -46,3 +46,4 @@ esp_err_t ntfy_integration_set_config_recovery(const ntfy_integration_config_t *
 esp_err_t ntfy_integration_send_test(void);
 /* Bounded best-effort result event, handled by the existing worker. No I/O. */
 bool ntfy_integration_queue_event(const char *message);
+bool ntfy_integration_queue_reply(uint32_t destination, const char *message);

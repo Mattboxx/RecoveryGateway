@@ -45,6 +45,8 @@ typedef struct {bool enabled, notify; uint32_t interval_s;} service_watch_config
 #define SERVICE_WATCH_MIN_S 60u
 #define SERVICE_WATCH_MAX_S 86400u
 void service_check_init(void);
+void service_watch_retry_worker(void);
+bool service_watch_waiting(void);
 void service_watch_get(service_watch_config_t *out);
 esp_err_t service_watch_set(const service_watch_config_t *config);
 /* False when there is no result for the rule's current identity. */

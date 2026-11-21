@@ -117,5 +117,5 @@ Per rule: **source** / **destination** (`any` or CIDR), **protocol**
 | **Outbound telemetry** | Not compiled in. Logs and crash summaries remain local; MQTT publishes only when explicitly configured and enabled. |
 | **SD card logging** | Enable + per-sink (console / SD) log level; the on-device flight recorder. |
 | **Firmware update (OTA)** | Local binary upload plus Check now / Install latest update from this fork. Optional daily checks, automatic install, beta channel and local-time install window; all switches default OFF. Policy/actions require a password-backed session. See [UPDATES.md](UPDATES.md). |
-| **Encrypted backup / restore** | Export/import the full config, encrypted with a passphrase. |
+| **Portable backup / restore** | Export supported settings as JSON. Selected secrets are encrypted with a passphrase when you opt in. See [coverage and omissions](BACKUP-RESTORE.md#portable-json-coverage). |
 | **Danger zone** | Reboot, factory reset, reset Tailscale identity. |

@@ -358,13 +358,12 @@ bool verify_web_password(const char *plaintext)
     return ok;
 }
 
-esp_err_t set_web_password_hashed(const char *plaintext)
+esp_err_t web_password_store_for_reboot(const char *plaintext,
+                                       esp_err_t (*write_string)(const char *, const char *))
 {
-    if (!plaintext) return ESP_ERR_INVALID_ARG;
-    /* Never let a cached verifier survive a password change or clear. */
-    fast_cache_invalidate();
+    if (!plaintext || !write_string) return ESP_ERR_INVALID_ARG;
     if (plaintext[0] == '\0') {
-        return nvs_write_str(PW_NVS_KEY, "");
+        return write_string(PW_NVS_KEY, "");
     }
 
     uint8_t salt[PW_SALT_LEN], hash[PW_HASH_LEN];
@@ -380,7 +379,19 @@ esp_err_t set_web_password_hashed(const char *plaintext)
     snprintf(buf, sizeof buf, PW_PBKDF2_PREFIX "%u$%s$%s",
              (unsigned)PW_PBKDF2_ITERS, salt_hex, hash_hex);
 
-    esp_err_t err = nvs_write_str(PW_NVS_KEY, buf);
-    if (err == ESP_OK) fast_cache_store(plaintext);
+    esp_err_t err = write_string(PW_NVS_KEY, buf);
+    memset(hash, 0, sizeof hash);
+    memset(hash_hex, 0, sizeof hash_hex);
+    memset(buf, 0, sizeof buf);
+    return err;
+}
+
+esp_err_t set_web_password_hashed(const char *plaintext)
+{
+    if (!plaintext) return ESP_ERR_INVALID_ARG;
+    /* Never let a cached verifier survive a password change or clear. */
+    fast_cache_invalidate();
+    esp_err_t err = web_password_store_for_reboot(plaintext, nvs_write_str);
+    if (err == ESP_OK && plaintext[0]) fast_cache_store(plaintext);
     return err;
 }

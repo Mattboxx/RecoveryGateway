@@ -6,6 +6,40 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.1.0]
+
+### Changed
+
+- Telegram and ntfy share the recovery command set and help. Replies explain
+  why a command is rejected and report the final result to the requesting
+  channel. Disabling commands also cancels queued commands and replies in
+  that channel.
+
+### Fixed
+
+- Keep static Wi-Fi addressing when restoring a backup with encrypted
+  credentials. Wi-Fi scans recover after startup failures and timeouts.
+- Allow removing the last Wi-Fi uplink with confirmation. Keep an empty
+  network list across restart instead of restoring a cached profile.
+- Close temporary Service Gateway rules when the clock becomes invalid.
+  Save DNS relay settings together with the access point configuration.
+- Recover network workers after startup or allocation failures, and retry
+  pending forwarding updates. Keep 4via6 flows and uplink-specific DNS
+  handling consistent across reconnects.
+- Remove the USB modem's temporary DNS override on return to the LAN. Restore
+  the latest resolver supplied during a LAN lease renewal, including an
+  initially empty slot, and preserve an existing IPv6 resolver.
+- Keep the observed billing period when the clock moves backward, so returning
+  to the same month preserves mobile usage and a triggered data pause.
+- Save first-boot settings and profile rollbacks atomically, and preserve
+  full-length Wi-Fi credentials.
+- Restore MQTT command readiness after reconnect, and clean up tracked Home
+  Assistant discovery entities after broker acknowledgement.
+- Keep downloads off the main Web UI task. Stop stalled speed tests and
+  report incomplete transfers without presenting them as successful measurements.
+- Retry interrupted update checks and recover when an installed update cannot
+  restart the device immediately.
+
 ## [3.0.30] - 2026-11-19
 
 ### Fixed

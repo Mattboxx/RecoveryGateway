@@ -10,10 +10,18 @@
 # SPDX-License-Identifier: MIT
 import glob
 import os
+from pathlib import Path
+import runpy
 
 Import("env")  # noqa: F821 — provided by PlatformIO at script load time
 
 build_dir = env.subst("$BUILD_DIR")  # noqa: F821
+
+# PIO caches CMake compile flags across Git commits. Refresh the header before
+# dependency scanning, even when no other configure input changed.
+project = Path(env.subst("$PROJECT_DIR"))  # noqa: F821
+identity = runpy.run_path(str(project / "tools/build_identity.py"))
+identity["write_identity"](project, Path(build_dir) / "mtg_build_identity.h")
 
 # The object's exact path depends on ESP-IDF version / component layout —
 # walk the build tree for anything matching `esp_app_desc.c.obj`.

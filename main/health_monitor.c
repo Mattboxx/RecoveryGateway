@@ -78,6 +78,7 @@ static uint32_t saved_generation;
 static uint64_t saved_next, saved_manual_after;
 static int saved_pending = -1;
 static ops_recovery_origin_t saved_origin;
+static uint32_t saved_destination;
 static unsigned saved_cursor;
 static bool saved_running;
 
@@ -132,11 +133,16 @@ bool saved_tcp_schedule_enabled(void)
     HUNLOCK();
     return enabled;
 }
-static esp_err_t health_save_locked(const health_config_t *config){
+static esp_err_t health_store_locked(const health_config_t *config){
     health_store_t s={.magic=HEALTH_MAGIC,.version=1,.config=*config};s.checksum=health_checksum(&s);
-    nvs_handle_t nvs;esp_err_t err=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&nvs);
-    if(err==ESP_OK){err=nvs_set_blob(nvs,"ops_health",&s,sizeof s);if(err==ESP_OK)err=nvs_commit(nvs);nvs_close(nvs);}
-    if(err==ESP_OK){configuration=*config;memset(observations,0,sizeof observations);health_next=0;health_generation++;}
+    return nvs_param_set_blob("ops_health",&s,sizeof s);
+}
+static void health_publish_locked(const health_config_t *config){
+    configuration=*config;memset(observations,0,sizeof observations);health_next=0;health_generation++;
+}
+static esp_err_t health_save_locked(const health_config_t *config){
+    esp_err_t err=health_store_locked(config);
+    if(err==ESP_OK)health_publish_locked(config);
     return err;
 }
 esp_err_t health_monitor_set(const health_config_t *config){
@@ -150,6 +156,25 @@ esp_err_t health_monitor_set_enabled(bool enabled){
     if(enabled){esp_err_t e=homelab_ops_start_optional_worker();if(e!=ESP_OK)return e;}
     HLOCK();health_config_t c=configuration;c.enabled=enabled;
     esp_err_t err=health_save_locked(&c);HUNLOCK();return err;
+}
+esp_err_t health_monitor_stage_enabled(bool expected, bool enabled){
+    health_monitor_init();
+    if(enabled){esp_err_t e=homelab_ops_start_optional_worker();if(e!=ESP_OK)return e;}
+    HLOCK();
+    if ((configuration.enabled != 0) != expected) { HUNLOCK(); return ESP_ERR_INVALID_STATE; }
+    health_config_t next=configuration;
+    next.enabled=enabled;
+    esp_err_t err=health_store_locked(&next);
+    if (err!=ESP_OK) HUNLOCK();
+    return err;
+}
+void health_monitor_finish_staged(bool enabled, bool committed){
+    if (committed) {
+        health_config_t next=configuration;
+        next.enabled=enabled;
+        health_publish_locked(&next);
+    }
+    HUNLOCK();
 }
 esp_err_t saved_tcp_set(const saved_tcp_target_t targets[SAVED_TCP_MAX])
 {
@@ -180,10 +205,10 @@ esp_err_t saved_tcp_set(const saved_tcp_target_t targets[SAVED_TCP_MAX])
     return err;
 }
 
-esp_err_t saved_tcp_request(const char *name, ops_recovery_origin_t origin)
+esp_err_t saved_tcp_remote_request(const char *name, ops_recovery_origin_t origin, uint32_t destination)
 {
     if (!name || !*name || strlen(name)>=sizeof saved_targets[0].name) return ESP_ERR_INVALID_ARG;
-    if (!homelab_ops_recovery_allowed(origin)) return ESP_ERR_NOT_SUPPORTED;
+    if (!remote_command_active(origin,destination) || !homelab_ops_recovery_allowed(origin)) return ESP_ERR_NOT_SUPPORTED;
     health_monitor_init();
     HLOCK();
     bool exists=false;
@@ -202,6 +227,7 @@ esp_err_t saved_tcp_request(const char *name, ops_recovery_origin_t origin)
             if (!saved_targets[i].name[0] || strcasecmp(name,saved_targets[i].name)) continue;
             saved_pending=(int)i;
             saved_origin=origin;
+            saved_destination=destination;
             saved_manual_after=health_now()+5000;
             err=ESP_OK;
             break;
@@ -209,6 +235,11 @@ esp_err_t saved_tcp_request(const char *name, ops_recovery_origin_t origin)
     }
     HUNLOCK();
     return err;
+}
+
+esp_err_t saved_tcp_request(const char *name, ops_recovery_origin_t origin)
+{
+    return saved_tcp_remote_request(name, origin, 0);
 }
 
 static const char *saved_state(const health_result *r)
@@ -274,6 +305,7 @@ static void saved_tcp_poll(void)
     }
     if (index<0) { HUNLOCK(); return; }
     ops_recovery_origin_t origin=saved_origin;
+    uint32_t destination=manual ? saved_destination : 0;
     saved_pending=-1;
     saved_running=true;
     saved_next=now+5000;
@@ -284,7 +316,8 @@ static void saved_tcp_poll(void)
     struct in_addr a;
     esp_netif_ip_info_t uplink={0};
     int result=-1;
-    if ((!manual || homelab_ops_recovery_allowed(origin)) && inet_pton(AF_INET,t.address,&a)==1 && homelab_ops_admit()) {
+    if ((!manual || (remote_command_active(origin,destination) && homelab_ops_recovery_allowed(origin))) &&
+        inet_pton(AF_INET,t.address,&a)==1 && homelab_ops_admit()) {
         uint32_t ip=ntohl(a.s_addr);
         bool tailnet=(ip&0xffc00000u)==0x64400000u;
         if (tailnet) {
@@ -292,12 +325,14 @@ static void saved_tcp_poll(void)
             ml_policy_get_status(&policy);
             if (tailscale_is_connected() && policy.authority_ready)
                 result=health_tcp(a.s_addr,t.port);
-        } else if (uplink_address(uplink_internet_netif(),&uplink)) {
+        } else if (uplink_address(uplink_internet_netif(),&uplink) ||
+                   (uplink_address(uplink_local_netif(),&uplink) && uplink.netmask.addr &&
+                    (a.s_addr & uplink.netmask.addr) == (uplink.ip.addr & uplink.netmask.addr))) {
             result=health_tcp(a.s_addr,t.port);
         }
     }
     uint64_t finished=health_now();
-    bool allowed=!manual || homelab_ops_recovery_allowed(origin);
+    bool allowed=!manual || (remote_command_active(origin,destination) && homelab_ops_recovery_allowed(origin));
     bool notify=false;
     HLOCK();
     saved_running=false;
@@ -317,7 +352,8 @@ static void saved_tcp_poll(void)
     if (notify) {
         char message[100];
         snprintf(message,sizeof message,"TCP check %s: %s.",t.name,result>0?"reachable":result==0?"not reachable":"inconclusive");
-        (void)ntfy_integration_queue_event(message);
+        if (destination) (void)remote_command_reply(origin,destination,message);
+        else (void)ntfy_integration_queue_event(message);
     }
 }
 

@@ -181,24 +181,25 @@ int main(void) {
 run('Microlink startup allocation rollback and registration barrier', headers + ml_fixture + 'static int test_start(microlink_t *ml) {\n' + start + ml_tests)
 
 manager = (ROOT / 'main/tailscale_manager.c').read_text()
-retry = 'for (unsigned attempt = 0;' + manager.split('for (unsigned attempt = 0;', 1)[1].split(
-    '\n    taskENTER_CRITICAL(&s_connect_lock);\n    s_connect_in_flight = false;', 1)[0]
+start = manager.index('static void tailscale_start_attempts(void)')
+retry = manager[start:manager.index('\n}\n', start) + 3]
 retry_fixture = r'''
 static portMUX_TYPE s_connect_lock;
 static bool s_start_retrying;static unsigned attempts,delayed,shortages;static int terminal;
 static int tailscale_connect(void){assert(!locks);return attempts++<shortages?ESP_ERR_NO_MEM:terminal;}
 static void vTaskDelay(unsigned ms){assert(!locks);delayed+=ms;}
+static void tailscale_finish_start(int result){assert(!locks&&(result==terminal||result==ESP_ERR_NO_MEM));s_start_retrying=false;}
 '''
 retry_tests = r'''
 int main(void){
-    shortages=3;terminal=ESP_OK;test_retry();assert(attempts==4 && delayed==14000 && !s_start_retrying);
-    attempts=delayed=0;shortages=10;test_retry();assert(attempts==5 && delayed==30000 && !s_start_retrying);
-    attempts=delayed=shortages=0;terminal=ESP_ERR_INVALID_ARG;test_retry();assert(attempts==1 && !delayed);
-    attempts=0;terminal=ESP_ERR_INVALID_STATE;test_retry();assert(attempts==1 && !delayed);
+    shortages=3;terminal=ESP_OK;tailscale_start_attempts();assert(attempts==4 && delayed==14000 && !s_start_retrying);
+    attempts=delayed=0;shortages=10;tailscale_start_attempts();assert(attempts==5 && delayed==30000 && !s_start_retrying);
+    attempts=delayed=shortages=0;terminal=ESP_ERR_INVALID_ARG;tailscale_start_attempts();assert(attempts==1 && !delayed);
+    attempts=0;terminal=ESP_ERR_INVALID_STATE;tailscale_start_attempts();assert(attempts==1 && !delayed);
     puts("Tailscale startup: bounded transient retries, success recovery, no auth/config/incomplete-cleanup retries or reboot loop");
 }
 '''
-run('Tailscale transient retry limits', headers + retry_fixture + 'static void test_retry(void){' + retry + '}\n' + retry_tests)
+run('Tailscale transient retry limits', headers + retry_fixture + retry + retry_tests)
 
 for name in ('ml_coord.c', 'ml_wg_mgr.c'):
     source = (ROOT / 'external/microlink/components/microlink/src' / name).read_text()
@@ -322,10 +323,159 @@ int main(void){
     assert(request_authenticated(&req));assert(s_sessions[2].expires_us==clock_us+60000000);
     uint64_t order=s_sessions[2].last_used_order;req.token[0]='!';
     assert(!request_authenticated(&req)&&s_sessions[2].last_used_order==order);
-    s_session_timeout_s=0;session_extend_all_alive();assert(s_sessions[2].expires_us==UINT64_MAX);
-    assert(s_sessions[2].last_used_order==order);session_clear_all();
+    req.token[0]=s_sessions[2].token[0];
+    clock_us+=50000000;assert(request_authenticated(&req));
+    clock_us+=11000000;assert(request_authenticated(&req)); /* past the login's original deadline */
+    order=s_sessions[2].last_used_order;
+    s_session_timeout_s=120;session_extend_all_alive();
+    assert(s_sessions[2].last_used_order==order&&s_sessions[2].expires_us==clock_us+120000000);
+    s_session_timeout_s=15;session_extend_all_alive();
+    clock_us+=15000000;assert(!request_authenticated(&req));
+    int replacement=session_pick_new_slot();session_create(NULL);
+    s_session_timeout_s=0;session_extend_all_alive();assert(s_sessions[replacement].expires_us==UINT64_MAX);
+    session_clear_all();
     for(int i=0;i<4;i++)assert(!s_sessions[i].token[0]&&!s_sessions[i].expires_us&&!s_sessions[i].last_used_order);
     puts("Session eviction: no-timeout LRU, active-session preservation, 10000 creations, expired/cleared slots and timed-window changes");
 }
 '''
 run('Actual Web UI session eviction with disabled timeout', headers + session_fixture + sessions + auth + clear + session_tests)
+
+ops = (ROOT / 'main/homelab_ops.c').read_text()
+retry_start = ops.index('void homelab_ops_retry_worker(void)')
+retry = ops[retry_start:ops.index('\n}\n', retry_start) + 3]
+ops_fixture = r'''
+#define LOCK() taskENTER_CRITICAL(&ops_lock)
+#define UNLOCK() taskEXIT_CRITICAL(&ops_lock)
+static int ops_lock;
+static int64_t now;
+static bool initialized,starting,task,health,saved,fail_worker;
+static struct {struct {bool monitoring;} settings;} store;
+static unsigned attempts;
+static int64_t esp_timer_get_time(void){return now;}
+static bool health_monitor_enabled(void){assert(!locks);return health;}
+static bool saved_tcp_schedule_enabled(void){assert(!locks);return saved;}
+static esp_err_t ensure_worker(void){assert(!locks);attempts++;task=!fail_worker;return task?ESP_OK:ESP_ERR_NO_MEM;}
+'''
+ops_tests = r'''
+int main(void){
+    store.settings.monitoring=true;
+    homelab_ops_retry_worker();assert(!attempts);
+    initialized=true;starting=true;
+    homelab_ops_retry_worker();assert(!attempts);
+    starting=false;
+    for(unsigned mode=0;mode<3;mode++){
+        store.settings.monitoring=mode==0;health=mode==1;saved=mode==2;
+        fail_worker=true;homelab_ops_retry_worker();assert(attempts==2*mode+1&&!task);
+        now+=29999999;homelab_ops_retry_worker();assert(attempts==2*mode+1);
+        now++;fail_worker=false;homelab_ops_retry_worker();assert(attempts==2*mode+2&&task);
+        now+=30000000;homelab_ops_retry_worker();assert(attempts==2*mode+2);
+        task=false;
+    }
+    store.settings.monitoring=health=saved=false;homelab_ops_retry_worker();assert(attempts==6);
+}
+'''
+run('Shared operations worker retries each configured scheduler after allocation failure',
+    headers + ops_fixture + retry + ops_tests)
+
+direct_start = ml.index('bool ml_open_direct_udp(')
+direct_start = ml[direct_start:ml.index('\n}\n', direct_start) + 3]
+net_io = (ROOT / 'external/microlink/components/microlink/src/ml_net_io.c').read_text()
+start = net_io.index('static int direct_udp_fd(')
+direct_retry = net_io[start:net_io.index('\n}\n', start) + 3]
+direct_fixture = r'''
+#include <stdatomic.h>
+#define CONFIG_ML_ZERO_COPY_WG 1
+#define AF_INET 2
+#define SOCK_DGRAM 2
+#define IPPROTO_UDP 17
+#define IPPROTO_IP 0
+#define IP_TOS 1
+#define F_GETFL 1
+#define F_SETFL 2
+#define O_NONBLOCK 4
+#define INADDR_ANY 0
+typedef unsigned socklen_t;
+struct sockaddr {int unused;};
+struct sockaddr_in {int sin_family;uint16_t sin_port;struct {uint32_t s_addr;} sin_addr;};
+#define htons(x) (x)
+#define ntohs(x) (x)
+typedef struct {_Atomic int disco_sock4;_Atomic uint16_t disco_local_port;struct {void *pcb;} zc;} microlink_t;
+static int64_t now;
+static unsigned calls,closes,fail,bind_fail;
+static microlink_t instance={.disco_sock4=-1};
+static int64_t esp_timer_get_time(void){return now;}
+static int ml_socket(int domain,int type,int proto){
+ assert(domain==AF_INET&&type==SOCK_DGRAM&&proto==IPPROTO_UDP);calls++;return fail==1?-1:10;
+}
+static int ml_bind(int fd,struct sockaddr *addr,socklen_t size){
+ const struct sockaddr_in *a=(const void *)addr;
+ assert(fd==10&&size==sizeof *a&&a->sin_family==AF_INET);
+ return fail==2||(bind_fail&&a->sin_port==51820)?-1:0;
+}
+static int setsockopt(int fd,int level,int op,const void *value,socklen_t size){
+ assert(fd==10&&level==IPPROTO_IP&&op==IP_TOS&&size==sizeof(int)&&*(const int *)value==0xb8);return 0;
+}
+static int ml_fcntl(int fd,int cmd,int arg){
+ assert(fd==10&&instance.disco_sock4<0);
+ if(cmd==F_SETFL){assert(arg==O_NONBLOCK);return fail==3?-1:0;}
+ assert(cmd==F_GETFL&&!arg);return 0;
+}
+static int getsockname(int fd,struct sockaddr *addr,socklen_t *size){
+ assert(fd==10&&*size==sizeof(struct sockaddr_in));
+ struct sockaddr_in *a=(void *)addr;
+ if(!a->sin_port)a->sin_port=49153;
+ return fail==4?-1:0;
+}
+static int ml_close_sock(int fd){assert(fd==10);closes++;return 0;}
+'''
+direct_tests = r'''
+int main(void){
+    for(fail=1;fail<=4;fail++){
+        assert(!ml_open_direct_udp(&instance)&&instance.disco_sock4==-1&&!instance.disco_local_port);
+        assert(closes==fail-1);
+    }
+    int64_t retry_at=5000000;fail=1;
+    now=4999999;assert(direct_udp_fd(&instance,&retry_at)==-1&&calls==4);
+    now++;assert(direct_udp_fd(&instance,&retry_at)==-1&&calls==5);
+    now+=4999999;fail=0;bind_fail=1;
+    assert(direct_udp_fd(&instance,&retry_at)==-1&&calls==5);
+    now++;assert(direct_udp_fd(&instance,&retry_at)==10&&instance.disco_local_port==49153&&calls==6);
+    assert(direct_udp_fd(&instance,&retry_at)==10&&calls==6);
+    instance.disco_sock4=-1;instance.zc.pcb=&instance;
+    now+=5000000;assert(direct_udp_fd(&instance,&retry_at)==-1&&calls==6);
+}
+'''
+run('Direct UDP retries after socket pressure without replacing a live descriptor or raw PCB',
+    headers + direct_fixture + direct_start + direct_retry + direct_tests)
+
+start = manager.index('void tailscale_retry_peer_dns(')
+peer_dns_retry = manager[start:manager.index('\n}\n', start) + 3]
+peer_dns_fixture = r'''
+typedef struct {uint16_t port;} microlink_t;
+static microlink_t instance,*s_microlink;
+static bool serving,running,locked,lock_busy,fail;
+static unsigned starts,announcements;
+static int64_t now;
+static int64_t esp_timer_get_time(void){return now;}
+static bool tailscale_exit_server_active(void){return serving;}
+static bool peer_dns_is_running(void){return running;}
+static bool tailscale_lifecycle_try_acquire(void){assert(!locked);return !lock_busy&&(locked=true);}
+static void tailscale_lifecycle_release(void){assert(locked);locked=false;}
+static void peer_dns_start(void){assert(locked&&!running);starts++;running=!fail;}
+static uint16_t tailscale_peerapi_port(void){return 41181;}
+static void microlink_set_peer_api_port(microlink_t *ml,uint16_t port){
+    assert(locked&&running&&ml==&instance);ml->port=port;announcements++;
+}
+'''
+peer_dns_tests = r'''
+int main(void){
+    s_microlink=&instance;tailscale_retry_peer_dns();assert(!starts);
+    serving=true;s_microlink=NULL;tailscale_retry_peer_dns();assert(!starts&&!locked);
+    s_microlink=&instance;lock_busy=true;tailscale_retry_peer_dns();assert(!starts&&!locked);
+    lock_busy=false;fail=true;tailscale_retry_peer_dns();assert(starts==1&&!announcements&&!locked);
+    now=29999999;fail=false;tailscale_retry_peer_dns();assert(starts==1&&!announcements);
+    now++;tailscale_retry_peer_dns();assert(starts==2&&running&&announcements==1&&instance.port==41181&&!locked);
+    now+=30000000;tailscale_retry_peer_dns();assert(starts==2&&announcements==1);
+}
+'''
+run('Exit-node DNS listener retries without replacing the active tunnel', headers + peer_dns_fixture + peer_dns_retry + peer_dns_tests)

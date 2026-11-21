@@ -82,6 +82,9 @@ bool history_snapshots_before_update(void);   /* setting: settings copy before u
 void history_get_config(bool *events, bool *metrics, bool *snapshots);
 /* Persist, then apply (same path as POST /api/history/config). */
 esp_err_t history_set_config(bool events, bool metrics, bool snapshots);
+/* On success, holds the history lock until the caller publishes or aborts. */
+esp_err_t history_stage_config(bool events, bool metrics, bool snapshots);
+void history_finish_staged(bool events, bool metrics, bool snapshots, bool committed);
 /* NVS record of the three switches (events bit 0, metrics 1, snapshots 2). */
 #include "nvs_flags.h"
 extern const nvs_flags_t history_flags;
@@ -98,5 +101,5 @@ void history_set_sink(history_sink_t sink);
 /* Optional bounded housekeeping on the existing history task, after queued
  * events are drained. No additional task/timer is created. */
 typedef void (*history_sink_poll_t)(void);
-void history_set_sink_poller(history_sink_t sink, history_sink_poll_t poll);
+esp_err_t history_set_sink_poller(history_sink_t sink, history_sink_poll_t poll);
 esp_err_t history_register_http(httpd_handle_t server);

@@ -11,15 +11,18 @@ class UpstreamIntegrationTests(unittest.TestCase):
 
     def test_accepted_routes_are_published_atomically(self):
         source = self.text('main/lwip_route_hook.c')
-        supervisor = source.split('static void route_supervisor_task', 1)[1].split('void lwip_route_hook_init', 1)[0]
+        supervisor = source.split('static void route_supervisor_poll', 1)[1].split('static void route_supervisor_task', 1)[0]
+        callback = source.split('static void route_supervisor_cb', 1)[1].split('static struct tcpip_callback_msg', 1)[0]
         self.assertNotIn('tailscale_accepted_routes[new_count]', supervisor)
-        self.assertIn('tcpip_callback_wait(publish_routes_cb, &new_routes)', supervisor)
-        self.assertIn('publish_accepted_routes(state->routes, state->count)', source)
+        self.assertLess(supervisor.index('tailscale_lifecycle_release()'), supervisor.index('tcpip_callbackmsg_trycallback(msg)'))
+        self.assertIn('request->generation == tailscale_lifecycle_generation()', callback)
+        self.assertIn('applied = route_supervisor_apply(request)', callback)
+        self.assertIn('publish_accepted_routes(request->routes, tailscale_accept_routes ? request->count : 0)', source)
         publisher = source.split('static void publish_accepted_routes', 1)[1].split('int tailscale_accepted_routes_snapshot', 1)[0]
         self.assertLess(publisher.index('portENTER_CRITICAL('), publisher.index('memcpy('))
         self.assertLess(publisher.index('tailscale_accepted_routes_count = count'), publisher.index('portEXIT_CRITICAL('))
         self.assertNotIn('LOCK_TCPIP_CORE()', publisher)
-        self.assertIn('tcpip_callback_wait(set_default_callback, target)', source)
+        self.assertIn('netif_set_default(wg)', source)
         self.assertIn('tailscale_lifecycle_try_acquire()', supervisor)
         self.assertIn('tailscale_lifecycle_release()', supervisor)
         web = self.text('main/web_ui.c')
@@ -45,7 +48,7 @@ class UpstreamIntegrationTests(unittest.TestCase):
 
     def test_channel_roam_never_reboots_or_reconfigures_ap(self):
         main = self.text("main/main.c")
-        block = main.split("/* Single radio: the softAP", 1)[1].split("xEventGroupSetBits(s_wifi_event_group", 1)[0]
+        block = main.split("/* Single radio: the softAP", 1)[1].split("/* Copy the upstream DNS", 1)[0]
         self.assertNotIn("esp_restart();", block)
         self.assertNotIn("esp_wifi_set_config(", block.replace("esp_wifi_set_config(WIFI_IF_AP)", ""))
         self.assertIn('nvs_param_set_int("ap_chan_learned"', block)

@@ -1,6 +1,6 @@
 /* Non-destructive configuration profiles over the existing setting owners.
- * Persist the backup record before touching any setting; undo a failed
- * apply; rollback never overrides a setting the operator changed since.
+ * Commit the settings and backup record together, then publish them.
+ * Rollback preserves settings the operator has since changed.
  * Original implementation, Mattboxx Edition. SPDX-License-Identifier: GPL-3.0-only */
 #include "config_profiles.h"
 #include "homelab_ops.h"
@@ -28,8 +28,9 @@ typedef struct {
 } profile_record_t;
 /* Platform hooks; the core below is also compiled against host fixtures. */
 static bool values_read(profile_values_t *out);
-static esp_err_t value_write(profile_key_t key, uint8_t value);
 static esp_err_t record_save(const profile_record_t *r);
+static esp_err_t commit_profile(const profile_values_t *current, const profile_values_t *desired,
+                                uint8_t mask, profile_record_t *next);
 
 /* --- profile core (begin) --- */
 
@@ -154,34 +155,15 @@ static esp_err_t apply_locked(profile_id_t profile, uint32_t token, profile_resu
     next.applied_mask = plan.change_mask;
     memcpy(next.previous_values, current.value, sizeof current.value);
     next.generation = record.generation + 1;
-    esp_err_t err = save_record(&next);
-    if (err != ESP_OK) return err;               /* nothing changed yet */
-    uint8_t done = 0;
-    for (unsigned k = 0; k < PK_COUNT && err == ESP_OK; k++)
-        if (plan.change_mask >> k & 1) {
-            err = value_write((profile_key_t)k, 1);
-            if (err == ESP_OK) done |= 1u << k;
-        }
-    if (err == ESP_OK) {
-        record = next;
-        out->applied = true;
-        out->changed_mask = done;
-        return ESP_OK;
-    }
-    uint8_t stuck = 0;
+    profile_values_t desired = current;
     for (unsigned k = 0; k < PK_COUNT; k++)
-        if (done >> k & 1 && value_write((profile_key_t)k, current.value[k]) != ESP_OK)
-            stuck |= 1u << k;
-    out->rolled_back = true;
-    profile_record_t restore = record;
-    if (!stuck && save_record(&restore) == ESP_OK) return err;
-    /* Keep a truthful backup for whatever could not be undone. */
-    next.applied_mask = stuck;
-    (void)save_record(&next);
+        if (plan.change_mask >> k & 1) desired.value[k] = 1;
+    esp_err_t err = commit_profile(&current, &desired, plan.change_mask, &next);
+    if (err != ESP_OK) return err;
     record = next;
-    out->partial = true;
-    out->changed_mask = stuck;
-    return err;
+    out->applied = true;
+    out->changed_mask = plan.change_mask;
+    return ESP_OK;
 }
 
 static esp_err_t rollback_locked(profile_result_t *out)
@@ -190,25 +172,14 @@ static esp_err_t rollback_locked(profile_result_t *out)
     if (!record.has_backup) return ESP_ERR_NOT_FOUND;
     profile_values_t current;
     if (!values_read(&current)) return ESP_FAIL;
-    uint8_t restore = 0, kept = 0, done = 0;
+    profile_values_t desired = current;
+    uint8_t restore = 0, kept = 0;
     for (unsigned k = 0; k < PK_COUNT; k++) {
         if (!(record.applied_mask >> k & 1)) continue;
-        if (current.value[k] == 1) restore |= 1u << k;
-        else kept |= 1u << k;                     /* operator already changed it */
-    }
-    esp_err_t err = ESP_OK;
-    for (unsigned k = 0; k < PK_COUNT && err == ESP_OK; k++)
-        if (restore >> k & 1) {
-            err = value_write((profile_key_t)k, record.previous_values[k]);
-            if (err == ESP_OK) done |= 1u << k;
-        }
-    if (err != ESP_OK) {
-        uint8_t stuck = 0;
-        for (unsigned k = 0; k < PK_COUNT; k++)
-            if (done >> k & 1 && value_write((profile_key_t)k, 1) != ESP_OK) stuck |= 1u << k;
-        out->partial = stuck != 0;
-        out->changed_mask = stuck;
-        return err;
+        if (current.value[k] == 1) {
+            restore |= 1u << k;
+            desired.value[k] = record.previous_values[k];
+        } else kept |= 1u << k;                   /* operator already changed it */
     }
     profile_record_t next = record;
     next.active = record.previous;
@@ -217,12 +188,12 @@ static esp_err_t rollback_locked(profile_result_t *out)
     next.applied_mask = 0;
     memset(next.previous_values, 0, sizeof next.previous_values);
     next.generation = record.generation + 1;
-    err = save_record(&next);
-    out->changed_mask = done;
-    out->kept_mask = kept;
-    if (err != ESP_OK) {out->partial = done != 0; return err;}  /* retry finds them kept */
+    esp_err_t err = commit_profile(&current, &desired, restore, &next);
+    if (err != ESP_OK) return err;
     record = next;
     out->rolled_back = true;
+    out->changed_mask = restore;
+    out->kept_mask = kept;
     return ESP_OK;
 }
 /* --- profile core (end) --- */
@@ -249,38 +220,57 @@ static bool values_read(profile_values_t *out)
     return true;
 }
 
-static esp_err_t value_write(profile_key_t key, uint8_t value)
+static esp_err_t commit_profile(const profile_values_t *current, const profile_values_t *desired,
+                                uint8_t mask, profile_record_t *next)
 {
-    if (key == PK_HEALTH) return health_monitor_set_enabled(value != 0);
-    if (key == PK_HIST_EVENTS || key == PK_HIST_TRENDS || key == PK_SNAPSHOTS) {
-        bool v[3];
-        history_get_config(&v[0], &v[1], &v[2]);
-        v[key - PK_HIST_EVENTS] = value != 0;
-        return history_set_config(v[0], v[1], v[2]);
-    }
-    if (key == PK_TAILNET_NAMES) {
-        bool names, lan;
-        tailnet_names_get(&names, &lan);
-        return tailnet_names_set(value != 0, lan);       /* the LAN listener keeps its own choice */
-    }
-    if (key == PK_AP_TRAFFIC) return ap_traffic_set(value != 0);
+    esp_err_t err = nvs_param_txn_begin();
+    if (err != ESP_OK) return err;
+
+    const uint8_t *v = desired->value;
+    bool ops_changed = mask & ((1u << PK_OPS_MONITORING) | (1u << PK_LEASE_NOTIFY));
+    bool history_changed = mask & ((1u << PK_HIST_EVENTS) | (1u << PK_HIST_TRENDS) | (1u << PK_SNAPSHOTS));
+    bool names_changed = mask & (1u << PK_TAILNET_NAMES);
+    bool traffic_changed = mask & (1u << PK_AP_TRAFFIC);
+    bool lan_names = false, history_staged = false, health_staged = false;
     ops_settings_t settings;
-    homelab_ops_settings(&settings);
-    if (key == PK_OPS_MONITORING) settings.monitoring = value;
-    else if (key == PK_LEASE_NOTIFY) settings.lease_notifications = value;
-    else return ESP_ERR_INVALID_ARG;
-    return homelab_ops_set_settings(&settings);
+    if (ops_changed) {
+        homelab_ops_settings(&settings);
+        if (mask & (1u << PK_OPS_MONITORING)) settings.monitoring = v[PK_OPS_MONITORING];
+        if (mask & (1u << PK_LEASE_NOTIFY)) settings.lease_notifications = v[PK_LEASE_NOTIFY];
+        err = homelab_ops_stage_settings(&settings);
+    }
+    if (err == ESP_OK && names_changed) {
+        bool enabled;
+        tailnet_names_get(&enabled, &lan_names);  /* keep the LAN listener's choice */
+        err = nvs_flags_save(&tailnet_names_flags, (uint8_t)(v[PK_TAILNET_NAMES] | lan_names << 1));
+    }
+    if (err == ESP_OK && traffic_changed) err = ap_traffic_stage(v[PK_AP_TRAFFIC]);
+    if (err == ESP_OK && history_changed) {
+        err = history_stage_config(v[PK_HIST_EVENTS], v[PK_HIST_TRENDS], v[PK_SNAPSHOTS]);
+        history_staged = err == ESP_OK;
+    }
+    if (err == ESP_OK && (mask & (1u << PK_HEALTH))) {
+        err = health_monitor_stage_enabled(current->value[PK_HEALTH], v[PK_HEALTH]);
+        health_staged = err == ESP_OK;
+    }
+    if (err == ESP_OK) err = save_record(next);
+    esp_err_t end = nvs_param_txn_end(err == ESP_OK);
+    if (err == ESP_OK) err = end == ESP_ERR_INVALID_STATE ? ESP_FAIL : end;
+
+    bool committed = err == ESP_OK;
+    if (health_staged) health_monitor_finish_staged(v[PK_HEALTH], committed);
+    if (history_staged) history_finish_staged(v[PK_HIST_EVENTS], v[PK_HIST_TRENDS], v[PK_SNAPSHOTS], committed);
+    if (committed) {
+        if (ops_changed) homelab_ops_publish_settings(&settings);
+        if (names_changed) tailnet_names_publish(v[PK_TAILNET_NAMES], lan_names);
+        if (traffic_changed) ap_traffic_publish(v[PK_AP_TRAFFIC]);
+    }
+    return err;
 }
 
 static esp_err_t record_save(const profile_record_t *r)
 {
-    nvs_handle_t nvs;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
-    if (err != ESP_OK) return err;
-    err = nvs_set_blob(nvs, "cfg_profile", r, sizeof *r);
-    if (err == ESP_OK) err = nvs_commit(nvs);
-    nvs_close(nvs);
-    return err;
+    return nvs_param_set_blob("cfg_profile", r, sizeof *r);
 }
 
 void config_profiles_init(void)

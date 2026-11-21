@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include <string.h>
+#include <stdatomic.h>
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "nvs.h"
@@ -33,6 +34,8 @@ static portMUX_TYPE s_table_lock = portMUX_INITIALIZER_UNLOCKED;
 typedef struct { uint8_t proto; uint16_t port; } installed_t;
 static installed_t s_installed[PORTMAP_MAX + TAILNET_FORWARD_MAX];
 static int s_installed_count;
+static atomic_uint s_refresh_requested, s_refresh_applied;
+static atomic_bool s_refresh_queued;
 static bool entry_is_filled(const portmap_entry_t *entry);
 
 static bool cache_loaded(void)
@@ -43,12 +46,14 @@ static bool cache_loaded(void)
     return loaded;
 }
 
-static void publish_table(const portmap_entry_t *table, int count)
+static void publish_table(const portmap_entry_t *table, int count, bool initializing)
 {
     portENTER_CRITICAL(&s_table_lock);
-    memcpy(s_table, table, sizeof s_table);
-    s_count = count;
-    s_loaded = true;
+    if (!initializing || !s_loaded) {
+        memcpy(s_table, table, sizeof s_table);
+        s_count = count;
+        s_loaded = true;
+    }
     portEXIT_CRITICAL(&s_table_lock);
 }
 
@@ -94,7 +99,7 @@ void portmap_init(void)
         nvs_close(nvs);
     }
 
-    publish_table(table, count);
+    publish_table(table, count, true);
 }
 
 int portmap_count(void)
@@ -176,7 +181,7 @@ static esp_err_t set_all_locked(const portmap_entry_t *arr, int count)
         /* Do not expose or install the new policy until it is durable.
          * A failed save must leave the old cache and bindings unchanged,
          * including on a later DHCP-triggered refresh. */
-        publish_table(candidate, candidate_count);
+        publish_table(candidate, candidate_count, false);
         ESP_LOGI(TAG, "saved %d portmap(s) to NVS", candidate_count);
     } else {
         ESP_LOGE(TAG, "save failed: %s", esp_err_to_name(err));
@@ -195,15 +200,13 @@ esp_err_t portmap_set_all(const portmap_entry_t *arr, int count)
     return err;
 }
 
-static void portmap_install_cb(void *arg)
+static __attribute__((noinline)) bool portmap_install_cb(void)
 {
-    (void)arg;
-    if (!cache_loaded()) portmap_init();
+    if (!cache_loaded() || !forwarding_config_try_lock()) return false;
     portmap_entry_t table[PORTMAP_MAX];
     tailnet_forward_mapping_t mappings[TAILNET_FORWARD_MAX];
     /* Do not combine an AP table from before a save with a Tailnet table
      * from after it. Release before any lwIP mutation or install reporting. */
-    forwarding_config_lock();
     portENTER_CRITICAL(&s_table_lock);
     memcpy(table, s_table, sizeof table);
     portEXIT_CRITICAL(&s_table_lock);
@@ -225,7 +228,7 @@ static void portmap_install_cb(void *arg)
     esp_netif_ip_info_t ip_info = {0};
     if (!sta || !esp_netif_is_netif_up(sta) || esp_netif_get_ip_info(sta, &ip_info) != ESP_OK || !ip_info.ip.addr) {
         ESP_LOGI(TAG, "uplink has no IP yet; deferring portmap install");
-        return;
+        return true;
     }
     uint32_t bind_ip = ip_info.ip.addr;
 
@@ -255,17 +258,47 @@ static void portmap_install_cb(void *arg)
     }
     ESP_LOGI(TAG, "installed %d AP-side + %d LAN-to-Tailnet mapping(s) on uplink " IPSTR,
              ap_installed, tailnet_installed, IP2STR(&ip_info.ip));
+    return true;
+}
+
+static void portmap_apply_pending(void)
+{
+    unsigned requested = atomic_load(&s_refresh_requested);
+    if (requested != atomic_load(&s_refresh_applied) && portmap_install_cb())
+        atomic_store(&s_refresh_applied, requested);
+}
+
+static void portmap_dispatch(void *arg)
+{
+    (void)arg;
+    portmap_apply_pending();
+    atomic_store(&s_refresh_queued, false);
+}
+
+bool portmap_refresh_pending(void)
+{
+    unsigned applied = atomic_load(&s_refresh_applied);
+    return applied != atomic_load(&s_refresh_requested);
 }
 
 void portmap_install_now(void)
 {
-    portmap_install_cb(NULL);  /* caller is already on the TCP/IP thread */
+    atomic_fetch_add(&s_refresh_requested, 1);
+    portmap_apply_pending();  /* caller is already on the TCP/IP thread */
+}
+
+void portmap_retry_pending(void)
+{
+    if (!portmap_refresh_pending() || !cache_loaded() ||
+        atomic_exchange(&s_refresh_queued, true)) return;
+    if (tcpip_try_callback(portmap_dispatch, NULL) != ERR_OK)
+        atomic_store(&s_refresh_queued, false);
 }
 
 void portmap_install_all(void)
 {
     /* ip_portmap_* mutates lwIP-global tables. Serialize it on tcpip_thread
      * instead of racing packet input from the HTTP/event/manager tasks. */
-    err_t err = tcpip_callback_with_block(portmap_install_cb, NULL, 1);
-    if (err != ERR_OK) ESP_LOGE(TAG, "portmap refresh scheduling failed: %d", err);
+    atomic_fetch_add(&s_refresh_requested, 1);
+    portmap_retry_pending();
 }

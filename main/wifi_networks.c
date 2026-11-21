@@ -7,11 +7,14 @@
  */
 #include <string.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_params.h"
 #include "wifi_networks.h"
 #include "esp_attr.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "wifi_nets";
 
@@ -25,7 +28,12 @@ static const char *TAG = "wifi_nets";
 EXT_RAM_BSS_ATTR static wifi_network_t s_nets[WIFI_NETWORKS_MAX];
 EXT_RAM_BSS_ATTR static wifi_network_t s_next[WIFI_NETWORKS_MAX];   /* staging for set_all */
 static int            s_count = 0;
-static bool           s_loaded = false;
+static int            s_next_count;
+static atomic_bool    s_loaded;
+static atomic_bool    s_has_saved_table;
+static portMUX_TYPE   s_cache_mux = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_writer;
+static StaticSemaphore_t s_writer_storage;
 
 /* On-flash layout used before the dns[16] field was added. Kept around so
  * boards that already had a saved blob from the older firmware can read
@@ -91,6 +99,8 @@ static int migrate_legacy_into(wifi_network_t *n)
 
 void wifi_networks_init(void)
 {
+    if (s_loaded) return;
+    /* Boot loads the initial table before the station event handler starts. */
     clear_cache();
 
     nvs_handle_t nvs;
@@ -105,6 +115,7 @@ void wifi_networks_init(void)
                         if (s_nets[i].valid && s_nets[i].ssid[0]) s_count++;
                     }
                     nvs_close(nvs);
+                    s_has_saved_table = true;
                     s_loaded = true;
                     ESP_LOGI(TAG, "loaded %d network(s) from NVS", s_count);
                     return;
@@ -131,6 +142,7 @@ void wifi_networks_init(void)
                     wifi_network_t snapshot[WIFI_NETWORKS_MAX];
                     memcpy(snapshot, s_nets, sizeof snapshot);
                     wifi_networks_set_all(snapshot, WIFI_NETWORKS_MAX);
+                    s_has_saved_table = true;
                     s_loaded = true;
                     return;
                 }
@@ -159,6 +171,7 @@ void wifi_networks_init(void)
                     wifi_network_t snapshot[WIFI_NETWORKS_MAX];
                     memcpy(snapshot, s_nets, sizeof snapshot);
                     wifi_networks_set_all(snapshot, WIFI_NETWORKS_MAX);
+                    s_has_saved_table = true;
                     s_loaded = true;
                     return;
                 }
@@ -181,45 +194,85 @@ void wifi_networks_init(void)
 int wifi_networks_count(void)
 {
     if (!s_loaded) wifi_networks_init();
-    return s_count;
+    portENTER_CRITICAL(&s_cache_mux);
+    int count = s_count;
+    portEXIT_CRITICAL(&s_cache_mux);
+    return count;
+}
+
+bool wifi_networks_has_saved_table(void)
+{
+    if (!s_loaded) wifi_networks_init();
+    return s_has_saved_table;
 }
 
 bool wifi_networks_get(int i, wifi_network_t *out)
 {
     if (!s_loaded) wifi_networks_init();
     if (!out || i < 0 || i >= WIFI_NETWORKS_MAX) return false;
-    if (!s_nets[i].valid || !s_nets[i].ssid[0])  return false;
-    memcpy(out, &s_nets[i], sizeof *out);
-    return true;
+    portENTER_CRITICAL(&s_cache_mux);
+    bool present = s_nets[i].valid && s_nets[i].ssid[0];
+    if (present) memcpy(out, &s_nets[i], sizeof *out);
+    portEXIT_CRITICAL(&s_cache_mux);
+    return present;
 }
 
-esp_err_t wifi_networks_set_all(const wifi_network_t *arr, int count)
+esp_err_t wifi_networks_stage(const wifi_network_t *arr, int count)
 {
     if (!arr) return ESP_ERR_INVALID_ARG;
     if (count < 0) count = 0;
     if (count > WIFI_NETWORKS_MAX) count = WIFI_NETWORKS_MAX;
 
-    /* Build the new table (valid entries with a non-empty SSID, zero
-     * padded) and publish it to the cache only once NVS holds it, so a
-     * failed save leaves the running list unchanged. */
+    portENTER_CRITICAL(&s_cache_mux);
+    if (!s_writer) s_writer = xSemaphoreCreateMutexStatic(&s_writer_storage);
+    portEXIT_CRITICAL(&s_cache_mux);
+    if (!s_writer) return ESP_ERR_NO_MEM;
+    if (xSemaphoreTake(s_writer, portMAX_DELAY) != pdTRUE) return ESP_ERR_TIMEOUT;
+
+    /* Build the table privately. The caller publishes it only after commit. */
     memset(s_next, 0, sizeof s_next);
-    int next_count = 0;
+    s_next_count = 0;
     for (int i = 0; i < count; i++) {
         if (!arr[i].ssid[0]) continue;
-        memcpy(&s_next[next_count], &arr[i], sizeof s_next[0]);
-        s_next[next_count].valid = 1;
-        next_count++;
+        memcpy(&s_next[s_next_count], &arr[i], sizeof s_next[0]);
+        s_next[s_next_count].valid = 1;
+        s_next_count++;
     }
 
     /* Through nvs_params so a settings transaction covers the table. */
     esp_err_t err = nvs_param_set_blob(NVS_KEY, s_next, sizeof s_next);
-    if (err == ESP_OK) {
-        memcpy(s_nets, s_next, sizeof s_nets);
-        s_count = next_count;
-        s_loaded = true;
-        ESP_LOGI(TAG, "saved %d network(s) to NVS", s_count);
-    } else {
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "save failed: %s", esp_err_to_name(err));
+        wifi_networks_finish_staged(false);
     }
+    return err;
+}
+
+void wifi_networks_finish_staged(bool publish)
+{
+    if (publish) {
+        portENTER_CRITICAL(&s_cache_mux);
+        memcpy(s_nets, s_next, sizeof s_nets);
+        s_count = s_next_count;
+        s_has_saved_table = true;
+        s_loaded = true;
+        portEXIT_CRITICAL(&s_cache_mux);
+        ESP_LOGI(TAG, "published %d saved network(s)", s_next_count);
+    }
+    memset(s_next, 0, sizeof s_next);
+    xSemaphoreGive(s_writer);
+}
+
+esp_err_t wifi_networks_set_all(const wifi_network_t *arr, int count)
+{
+    esp_err_t err = wifi_networks_stage(arr, count);
+    if (err == ESP_OK) wifi_networks_finish_staged(true);
+    return err;
+}
+
+esp_err_t wifi_networks_store_for_reboot(const wifi_network_t *arr, int count)
+{
+    esp_err_t err = wifi_networks_stage(arr, count);
+    if (err == ESP_OK) wifi_networks_finish_staged(false);
     return err;
 }

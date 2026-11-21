@@ -35,6 +35,7 @@
 typedef struct { uint32_t magic; tailnet_forward_rule_t rules[TAILNET_FORWARD_MAX]; } store_t;
 EXT_RAM_BSS_ATTR static tailnet_forward_rule_t s_rules[TAILNET_FORWARD_MAX];
 EXT_RAM_BSS_ATTR static tailnet_forward_runtime_t s_runtime[TAILNET_FORWARD_MAX];
+EXT_RAM_BSS_ATTR static uint32_t s_rule_revision[TAILNET_FORWARD_MAX];
 static int s_count;
 static bool s_loaded;
 static SemaphoreHandle_t s_lock;
@@ -177,6 +178,7 @@ void tailnet_forward_init(void) {
     service_lease_init();
     if(!s_lock)s_lock=xSemaphoreCreateMutexStatic(&s_lock_storage);
     memset(s_rules,0,sizeof s_rules);memset(s_runtime,0,sizeof s_runtime);
+    for (int i = 0; i < TAILNET_FORWARD_MAX; i++) s_rule_revision[i] = 1;
     memset(s_active,0,sizeof s_active);s_generation++;
     s_count=0;
     store_t st={0};size_t len=sizeof st;nvs_handle_t nvs;
@@ -207,7 +209,24 @@ void tailnet_forward_init(void) {
         ESP_LOGE("tn_forward","Forwarding manager could not start");
 }
 int tailnet_forward_count(void){if(!s_loaded)tailnet_forward_init();LOCK();int n=s_count;UNLOCK();return n;}
-bool tailnet_forward_get(int i,tailnet_forward_rule_t *r,tailnet_forward_runtime_t *rt){if(!s_loaded)tailnet_forward_init();LOCK();bool ok=i>=0&&i<s_count&&s_rules[i].valid;if(ok){if(r)*r=s_rules[i];if(rt)*rt=s_runtime[i];}UNLOCK();return ok;}
+bool tailnet_forward_get_revisioned(int i, tailnet_forward_rule_t *r,
+                                   tailnet_forward_runtime_t *rt, uint32_t *revision)
+{
+    if (!s_loaded) tailnet_forward_init();
+    LOCK();
+    bool ok = i >= 0 && i < s_count && s_rules[i].valid;
+    if (ok) {
+        if (r) *r = s_rules[i];
+        if (rt) *rt = s_runtime[i];
+        if (revision) *revision = s_rule_revision[i];
+    }
+    UNLOCK();
+    return ok;
+}
+bool tailnet_forward_get(int i,tailnet_forward_rule_t *r,tailnet_forward_runtime_t *rt)
+{
+    return tailnet_forward_get_revisioned(i, r, rt, NULL);
+}
 static esp_err_t set_all_locked(const tailnet_forward_rule_t *rules,int count,char *error,size_t en);
 bool tailnet_forward_listen_conflicts(uint8_t proto,uint16_t port){LOCK();bool found=false;for(int i=0;i<s_count;i++)if(s_rules[i].valid&&s_rules[i].enabled&&s_rules[i].proto==proto&&s_rules[i].listen_port==port){found=true;break;}UNLOCK();return found;}
 
@@ -256,9 +275,34 @@ static esp_err_t set_all_locked(const tailnet_forward_rule_t *rules,int count,ch
     store_t st={.magic=STORE_MAGIC};memcpy(st.rules,rules,count*sizeof rules[0]);nvs_handle_t nvs;esp_err_t err=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&nvs);
     if(err==ESP_OK){err=nvs_set_blob(nvs,NVS_KEY,&st,sizeof st);if(err==ESP_OK)err=nvs_commit(nvs);nvs_close(nvs);}if(err!=ESP_OK)return err;
     LOCK();
+    struct {uint32_t accepted, blocked, last_accepted, last_blocked;} counters[TAILNET_FORWARD_MAX] = {0};
+    unsigned matched = 0;
+    for (int i = 0; i < count; i++) {
+        for (int j = 0; j < s_count; j++) {
+            if ((matched & (1u << j)) || memcmp(&rules[i], &s_rules[j], sizeof rules[i])) continue;
+            counters[i].accepted = s_runtime[j].accepted_packets;
+            counters[i].blocked = s_runtime[j].blocked_packets;
+            counters[i].last_accepted = s_runtime[j].last_accepted_s;
+            counters[i].last_blocked = s_runtime[j].last_blocked_s;
+            matched |= 1u << j;
+            break;
+        }
+    }
+    for (int i = 0; i < TAILNET_FORWARD_MAX; i++) {
+        if ((i < s_count) != (i < count) ||
+            (i < count && memcmp(&s_rules[i], &rules[i], sizeof rules[i]) != 0)) {
+            if (++s_rule_revision[i] == 0) s_rule_revision[i] = 1;
+        }
+    }
     memset(s_rules,0,sizeof s_rules);memset(s_runtime,0,sizeof s_runtime);memcpy(s_rules,rules,count*sizeof rules[0]);s_count=count;
     s_generation++;
-    for(int i=0;i<count;i++)resolve_rule(i);
+    for (int i = 0; i < count; i++) {
+        s_runtime[i].accepted_packets = counters[i].accepted;
+        s_runtime[i].blocked_packets = counters[i].blocked;
+        s_runtime[i].last_accepted_s = counters[i].last_accepted;
+        s_runtime[i].last_blocked_s = counters[i].last_blocked;
+        resolve_rule(i);
+    }
     UNLOCK();
     service_lease_rules_changed(rules,count);
     return ESP_OK;

@@ -15,6 +15,7 @@ extern "C" {
 /* Stream an authenticated HTTP request into the inactive OTA partition and
  * mark it bootable. Outbound updates are handled by the opt-in remote module. */
 esp_err_t ota_upload_handler(httpd_req_t *req);
+bool ota_upload_restart_pending(void);
 bool ota_writer_try_acquire(void);
 void ota_writer_release(void);
 #ifdef __cplusplus

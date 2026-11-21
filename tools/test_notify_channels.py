@@ -87,6 +87,10 @@ static void encoding_tests(void){
     size_t n=notify_telegram_body(body,sizeof body,"-100123","a \"quote\" \\ and\nnew line \x01 \xE2\x9A\xA0");
     assert(n&&!strcmp(body,"{\"chat_id\":\"-100123\",\"text\":\"a \\\"quote\\\" \\\\ and\\nnew line \\u0001 \xE2\x9A\xA0\",\"disable_web_page_preview\":true}"));
     assert(!notify_telegram_body(body,40,"1","hello there, this does not fit")&&!notify_telegram_body(body,sizeof body,"1","")&&!notify_telegram_body(NULL,9,"1","x"));
+    assert(telegram_body(body,sizeof body,"42","Guide",TG_SHORTCUTS|TG_SHORTCUT_CHECKS));
+    assert(strstr(body,"\"keyboard\":[[\"/devices\",\"/checks\"]]}") && !strstr(body,"/status"));
+    assert(telegram_body(body,sizeof body,"42","Guide",TG_SHORTCUTS|TG_SHORTCUT_STATUS));
+    assert(strstr(body,"\"one_time_keyboard\":true") && strstr(body,"/status") && !strstr(body,"/checks"));
     assert(notify_wanted(NOTIFY_PROBLEMS,HIST_EV_TAILNET,HIST_WARN)&&notify_wanted(NOTIFY_PROBLEMS,HIST_EV_CRASH,HIST_ERROR));
     assert(!notify_wanted(NOTIFY_PROBLEMS,HIST_EV_UPLINK,HIST_INFO)&&notify_wanted(NOTIFY_ALL,HIST_EV_UPLINK,HIST_INFO));
     assert(notify_wanted(NOTIFY_PROBLEMS,HIST_EV_SERVICE,HIST_INFO));          /* operational results always */

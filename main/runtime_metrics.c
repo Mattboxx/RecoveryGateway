@@ -4,6 +4,19 @@
 /* One sampler for UI, MQTT and ntfy; no request-time task-list allocation. */
 #include "runtime_metrics.h"
 #include "control_validation.h"
+#include "homelab_ops.h"
+#include "notify_channels.h"
+#include "ota_flash.h"
+#include "portmap.h"
+#include "service_check.h"
+#include "tailscale_config.h"
+#include "sdkconfig.h"
+#if CONFIG_TSR_SNMP
+#include "snmp_agent.h"
+#endif
+#if CONFIG_TSR_DDNS
+#include "ddns.h"
+#endif
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -43,6 +56,18 @@ static void sample_task(void *arg)
         s_sample_time = now;
         taskEXIT_CRITICAL(&s_lock);
         last = now;
+        service_watch_retry_worker();
+        homelab_ops_retry_worker();
+        notify_channels_retry_setup();
+        portmap_retry_pending();
+        ota_flash_retry_binding();
+        tailscale_retry_peer_dns();
+#if CONFIG_TSR_SNMP
+        snmp_agent_retry();
+#endif
+#if CONFIG_TSR_DDNS
+        ddns_retry_scheduler();
+#endif
     }
 }
 

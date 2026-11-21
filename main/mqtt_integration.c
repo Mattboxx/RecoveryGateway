@@ -15,6 +15,7 @@
 #include "esp_crt_bundle.h"
 #include "ml_tls_distrust.h"
 #include "esp_app_desc.h"
+#include "esp_attr.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -50,6 +51,9 @@
 #include "tailnet_forward.h"
 #include "mqtt_power_event.h"
 #include "notify_text.h"
+#include "history.h"
+#include "mbedtls/md.h"
+#include "nvs.h"
 
 /* The gateway has an IPv4 address on its LAN-side uplink (Wi-Fi station or
  * Ethernet: a broker on the local network) or on the uplink carrying Internet
@@ -71,12 +75,15 @@ static TaskHandle_t s_manager_task;
 static esp_mqtt_client_handle_t s_client;
 static volatile bool s_connected;
 static volatile bool s_publish_requested;
-static volatile bool s_discovery_requested;
+static bool s_discovery_requested;
 static volatile bool s_watchdog_triggered;
 static volatile uint32_t s_watchdog_wake_count;
 static int64_t s_last_broker_ok_us;
 static portMUX_TYPE s_broker_clock_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_connection_events;
+static uint32_t s_subscription_ack;
+static int s_last_puback;
+static bool s_commands_ready;
 #define BROKER_CONNECTED 1u
 #define BROKER_DISCONNECTED 2u
 static volatile bool s_restart_requested;
@@ -85,6 +92,9 @@ static char s_device_id[24];
 static char s_availability_topic[128];
 static char s_state_topic[128];
 static discovery_budget_t s_discovery;
+static const char *s_retiring_prefix; /* manager-owned, non-NULL only during retirement */
+static const char *s_catalog_prefix;
+static EXT_RAM_BSS_ATTR uint8_t s_client_broker[32];
 static mqtt_integration_status_t s_status;
 static portMUX_TYPE s_status_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -165,6 +175,24 @@ static int publish(const char *topic, const char *payload, int retain)
     return esp_mqtt_client_publish(s_client, topic, payload ? payload : "", 0, 1, retain);
 }
 
+static bool delete_retained_topic(const char *topic)
+{
+    if (!s_connected || !s_client) return false;
+    __atomic_store_n(&s_last_puback, 0, __ATOMIC_RELEASE);
+    int id = esp_mqtt_client_enqueue(s_client, topic, "", 0, 1, 1, true);
+    int64_t until = esp_timer_get_time() + 1000000;
+    while (id > 0 && s_connected && esp_timer_get_time() < until &&
+           __atomic_load_n(&s_last_puback, __ATOMIC_ACQUIRE) != id)
+        vTaskDelay(pdMS_TO_TICKS(20));
+    return id > 0 && __atomic_load_n(&s_last_puback, __ATOMIC_ACQUIRE) == id;
+}
+
+static void discovery_clear_topic(const char *topic)
+{
+    if (discovery_visit(&s_discovery))
+        discovery_result(&s_discovery, s_retiring_prefix ? delete_retained_topic(topic) : publish(topic, "", 1) >= 0);
+}
+
 static bool add_device(cJSON *root)
 {
     cJSON *device = cJSON_AddObjectToObject(root, "device");
@@ -184,11 +212,13 @@ static void discovery_publish_entity(const char *domain, const char *object_id,
                                      const char *device_class, const char *unit)
 {
     if(!discovery_visit(&s_discovery))return;
-    mqtt_integration_config_t cfg;
-    mqtt_integration_get_config(&cfg);
     char topic[256];
-    snprintf(topic, sizeof topic, "%s/%s/%s/%s/config", cfg.discovery_prefix,
+    snprintf(topic, sizeof topic, "%s/%s/%s/%s/config", s_catalog_prefix,
              domain, s_device_id, object_id);
+    if (s_retiring_prefix) {
+        discovery_result(&s_discovery, delete_retained_topic(topic));
+        return;
+    }
     cJSON *root = cJSON_CreateObject();
     if (!root) {discovery_result(&s_discovery,false);return;}
     char unique_id[96];
@@ -227,12 +257,106 @@ static void normalized_mac(const uint8_t mac[6], char out[13])
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-static void publish_discovery(void)
+#define HA_INVENTORY_SLOTS 4
+#define HA_INVENTORY_KEY "mqtt_ha_idx1"
+typedef struct {
+    char prefix[48];
+    uint8_t broker[32];
+    uint8_t count;
+    uint8_t macs[WOL_MAX_DEVICES][6];
+} ha_scope_t;
+
+/* No broker URL, user name or secret is persisted here. MAC addresses are
+ * needed to reproduce the exact owned discovery topics after a reboot. */
+static EXT_RAM_BSS_ATTR ha_scope_t s_ha_book[HA_INVENTORY_SLOTS];
+static EXT_RAM_BSS_ATTR ha_scope_t s_ha_desired;
+static bool s_ha_loaded;
+
+static bool ha_scope_has_mac(const ha_scope_t *scope, const uint8_t mac[6])
 {
-    mqtt_integration_config_t cfg;
+    for (unsigned i = 0; i < scope->count; i++)
+        if (!memcmp(scope->macs[i], mac, sizeof scope->macs[i])) return true;
+    return false;
+}
+
+static bool ha_prefix_valid(const char *prefix, size_t cap)
+{
+    return memchr(prefix, 0, cap) && prefix[0] && !strpbrk(prefix, "#+");
+}
+
+static esp_err_t ha_inventory_load(void *unused)
+{
+    (void)unused;
+    size_t length = sizeof s_ha_book;
+    esp_err_t err = nvs_param_get_blob(HA_INVENTORY_KEY, s_ha_book, &length);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        memset(s_ha_book, 0, sizeof s_ha_book);
+        return ESP_OK;
+    }
+    if (err != ESP_OK) return err;
+    if (length != sizeof s_ha_book) return ESP_ERR_INVALID_SIZE;
+    for (unsigned i = 0; i < HA_INVENTORY_SLOTS; i++) {
+        const ha_scope_t *scope = &s_ha_book[i];
+        if (scope->count > WOL_MAX_DEVICES || (!scope->prefix[0] && scope->count) ||
+            (scope->prefix[0] && !ha_prefix_valid(scope->prefix, sizeof scope->prefix)))
+            return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+typedef struct {int slot; const ha_scope_t *replacement;} ha_inventory_change_t;
+
+static esp_err_t ha_inventory_write(void *arg)
+{
+    const ha_inventory_change_t *change = arg;
+    ha_scope_t committed[HA_INVENTORY_SLOTS];
+    memcpy(committed, s_ha_book, sizeof committed);
+    if (change->replacement) committed[change->slot] = *change->replacement;
+    else memset(&committed[change->slot], 0, sizeof committed[0]);
+    esp_err_t err = nvs_param_set_blob(HA_INVENTORY_KEY, committed, sizeof committed);
+    if (err == ESP_OK) s_ha_book[change->slot] = committed[change->slot];
+    return err;
+}
+
+static bool ha_broker_hash(const char *uri, uint8_t broker[32])
+{
+    const mbedtls_md_info_t *hash = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    return hash && mbedtls_md(hash, (const unsigned char *)uri, strlen(uri), broker) == 0;
+}
+
+static bool ha_snapshot_desired(const mqtt_integration_config_t *cfg)
+{
+    memset(&s_ha_desired, 0, sizeof s_ha_desired);
+    if (!ha_broker_hash(cfg->uri, s_ha_desired.broker) ||
+        memcmp(s_client_broker, s_ha_desired.broker, sizeof s_client_broker))
+        return false;
+    if (!cfg->home_assistant_discovery || !cfg->discovery_prefix[0]) return true;
+    if (!ha_prefix_valid(cfg->discovery_prefix, sizeof cfg->discovery_prefix)) return false;
+    strlcpy(s_ha_desired.prefix, cfg->discovery_prefix, sizeof s_ha_desired.prefix);
+    for (int i = 0; i < WOL_MAX_DEVICES; i++) {
+        wol_device_t device;
+        if (wol_get(i, &device) && !ha_scope_has_mac(&s_ha_desired, device.mac))
+            memcpy(s_ha_desired.macs[s_ha_desired.count++], device.mac, sizeof device.mac);
+    }
+    return true;
+}
+
+static void retire_wol_mac(const uint8_t mac_bytes[6])
+{
+    char mac[13], topic[128];
+    normalized_mac(mac_bytes, mac);
+    snprintf(topic, sizeof topic, "%s/button/%s/wol_%s/config", s_retiring_prefix, s_device_id, mac);
+    discovery_clear_topic(topic);
+    snprintf(topic, sizeof topic, "%s/button/%s/recovery_%s/config", s_retiring_prefix, s_device_id, mac);
+    discovery_clear_topic(topic);
+}
+
+static void publish_discovery_catalog(const mqtt_integration_config_t *settings, const ha_scope_t *retired)
+{
     char command[160];
-    mqtt_integration_get_config(&cfg);
-    if (!cfg.home_assistant_discovery || !cfg.discovery_prefix[0]) return;
+    const mqtt_integration_config_t cfg = *settings;
+    const char *prefix = retired ? retired->prefix : cfg.discovery_prefix;
+    if (!prefix[0]) return;
     /* Publish this entity early; the event waits for the paced discovery pass. */
     snprintf(command, sizeof command, "%s/event/power", cfg.base_topic);
     discovery_publish_entity("event", "possible_blackout", "Possible blackout", command,
@@ -278,9 +402,9 @@ static void publish_discovery(void)
     /* No SNMP in this firmware: clear the retained records of earlier versions. */
     for (unsigned i = 0; i < 2; i++) {
         char topic[256];
-        snprintf(topic, sizeof topic, "%s/binary_sensor/%s/%s/config", cfg.discovery_prefix, s_device_id,
+        snprintf(topic, sizeof topic, "%s/binary_sensor/%s/%s/config", prefix, s_device_id,
                  i ? "snmp_running" : "snmp_enabled");
-        if(discovery_visit(&s_discovery))discovery_result(&s_discovery,publish(topic,"",1)>=0);
+        discovery_clear_topic(topic);
     }
 #endif
     discovery_publish_entity("sensor", "socket_limit", "Socket limit", s_state_topic,
@@ -438,7 +562,7 @@ static void publish_discovery(void)
     discovery_publish_entity("button", "publish_status", "Publish status now",
                              NULL, NULL, command, NULL, NULL);
 
-    int tf_count = tailnet_forward_count();
+    int tf_count = retired ? 0 : tailnet_forward_count();
     for (int i = 0; i < tf_count; i++) {
         tailnet_forward_rule_t rule;
         if (!tailnet_forward_get(i, &rule, NULL)) continue;
@@ -464,20 +588,24 @@ static void publish_discovery(void)
         char object_id[48], topic[256];
         snprintf(object_id, sizeof object_id, "tailnet_forward_%d", i + 1);
         snprintf(topic, sizeof topic, "%s/switch/%s/%s/config",
-                 cfg.discovery_prefix, s_device_id, object_id);
-        if(discovery_visit(&s_discovery))discovery_result(&s_discovery,publish(topic,"",1)>=0);
-        snprintf(topic,sizeof topic,"%s/sensor/%s/tailnet_expiry_%d/config",cfg.discovery_prefix,s_device_id,i+1);
-        if(discovery_visit(&s_discovery))discovery_result(&s_discovery,publish(topic,"",1)>=0);
-        snprintf(topic,sizeof topic,"%s/sensor/%s/tailnet_status_%d/config",cfg.discovery_prefix,s_device_id,i+1);
-        if(discovery_visit(&s_discovery))discovery_result(&s_discovery,publish(topic,"",1)>=0);
-        snprintf(topic,sizeof topic,"%s/button/%s/tailnet_test_%d/config",cfg.discovery_prefix,s_device_id,i+1);
-        if(discovery_visit(&s_discovery))discovery_result(&s_discovery,publish(topic,"",1)>=0);
+                 prefix, s_device_id, object_id);
+        discovery_clear_topic(topic);
+        snprintf(topic,sizeof topic,"%s/sensor/%s/tailnet_expiry_%d/config",prefix,s_device_id,i+1);
+        discovery_clear_topic(topic);
+        snprintf(topic,sizeof topic,"%s/sensor/%s/tailnet_status_%d/config",prefix,s_device_id,i+1);
+        discovery_clear_topic(topic);
+        snprintf(topic,sizeof topic,"%s/button/%s/tailnet_test_%d/config",prefix,s_device_id,i+1);
+        discovery_clear_topic(topic);
     }
 
+    if (retired) {
+        for (unsigned i = 0; i < retired->count; i++) retire_wol_mac(retired->macs[i]);
+        return;
+    }
     int count = wol_count();
     for (int i = 0; i < count; i++) {
         wol_device_t device;
-        if (!wol_get(i, &device)) continue;
+        if (!wol_get(i, &device) || !ha_scope_has_mac(&s_ha_desired, device.mac)) continue;
         char mac[13];
         normalized_mac(device.mac, mac);
         char object_id[32];
@@ -493,6 +621,67 @@ static void publish_discovery(void)
         discovery_publish_entity("button",object_id,name,NULL,NULL,command,NULL,NULL);
     }
     if(discovery_finished(&s_discovery))ESP_LOGI(TAG, "Home Assistant discovery accepted locally (%d WOL button(s)); broker delivery unverified", count);
+}
+
+static void ha_restart_discovery(void)
+{
+    discovery_reset(&s_discovery);
+    s_discovery.ordinal = 1; /* another pass is required after durable cleanup */
+}
+
+static void publish_discovery(const mqtt_integration_config_t *cfg)
+{
+    if (!s_ha_loaded) {
+        if (history_run_job(ha_inventory_load, NULL) != ESP_OK) {s_discovery.failed = true; return;}
+        s_ha_loaded = true;
+    }
+    if (!s_discovery.cursor) {
+        if (!ha_snapshot_desired(cfg)) {s_discovery.failed = true; return;}
+    } else {
+        uint8_t broker[32];
+        const char *prefix = cfg->home_assistant_discovery ? cfg->discovery_prefix : "";
+        if (!ha_broker_hash(cfg->uri, broker) || memcmp(broker, s_client_broker, sizeof broker) ||
+            strcmp(prefix, s_ha_desired.prefix)) {
+            s_discovery.failed = true;
+            return;
+        }
+    }
+
+    int current = -1, vacant = -1;
+    for (int i = 0; i < HA_INVENTORY_SLOTS; i++) {
+        const ha_scope_t *old = &s_ha_book[i];
+        if (!old->prefix[0]) {vacant = i; continue;}
+        if (memcmp(old->broker, s_ha_desired.broker, sizeof old->broker)) continue;
+        if (!strcmp(old->prefix, s_ha_desired.prefix)) {current = i; continue;}
+        s_catalog_prefix = s_retiring_prefix = old->prefix;
+        publish_discovery_catalog(cfg, old);
+        s_catalog_prefix = s_retiring_prefix = NULL;
+        if (discovery_finished(&s_discovery)) {
+            ha_inventory_change_t change = {.slot = i};
+            if (history_run_job(ha_inventory_write, &change) == ESP_OK) ha_restart_discovery();
+            else s_discovery.failed = true;
+        }
+        return;
+    }
+    if (!s_ha_desired.prefix[0]) return;
+    if (current >= 0 && memcmp(&s_ha_book[current], &s_ha_desired, sizeof s_ha_desired) == 0) {
+        s_catalog_prefix = s_ha_desired.prefix;
+        publish_discovery_catalog(cfg, NULL);
+        s_catalog_prefix = NULL;
+        return;
+    }
+    int slot = current >= 0 ? current : vacant;
+    if (slot < 0) {s_discovery.failed = true; return;}
+    const ha_scope_t *old = &s_ha_book[slot];
+    s_retiring_prefix = old->prefix;
+    for (unsigned i = 0; i < old->count; i++)
+        if (!ha_scope_has_mac(&s_ha_desired, old->macs[i])) retire_wol_mac(old->macs[i]);
+    s_retiring_prefix = NULL;
+    if (!discovery_finished(&s_discovery)) return;
+
+    ha_inventory_change_t change = {.slot = slot, .replacement = &s_ha_desired};
+    if (history_run_job(ha_inventory_write, &change) == ESP_OK) ha_restart_discovery();
+    else s_discovery.failed = true;
 }
 
 /* QoS1 retained state shares the client's 8 KiB outbox with Discovery and
@@ -845,7 +1034,7 @@ static void handle_command(const char *topic, const char *payload)
             &&command[17]=='/'&&control_parse_hex32(command+18,&token)&&token
             &&tailnet_forward_set_enabled_bound(command[16]-'0',token,enabled)==ESP_OK) {
             s_publish_requested = true;
-            s_discovery_requested = true;
+            __atomic_store_n(&s_discovery_requested, true, __ATOMIC_RELEASE);
         }
     } else if (!strncmp(command, "wol/", 4)) {
         const char *compact = command + 4;
@@ -869,13 +1058,24 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     esp_mqtt_event_handle_t event = event_data;
     if (!event || event->client != s_client) return;
     if (event_id == MQTT_EVENT_CONNECTED) {
+        __atomic_store_n(&s_commands_ready, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&s_subscription_ack, 0, __ATOMIC_RELEASE);
         broker_clock_set(true, false);
         __atomic_fetch_or(&s_connection_events, BROKER_CONNECTED, __ATOMIC_RELEASE);
     } else if (event_id == MQTT_EVENT_DISCONNECTED) {
+        __atomic_store_n(&s_commands_ready, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&s_subscription_ack, 0, __ATOMIC_RELEASE);
         broker_clock_set(false, false);
         __atomic_fetch_or(&s_connection_events, BROKER_DISCONNECTED, __ATOMIC_RELEASE);
         ESP_LOGW(TAG, "disconnected");
+    } else if (event_id == MQTT_EVENT_SUBSCRIBED && event->msg_id > 0 && event->msg_id <= UINT16_MAX) {
+        /* The pinned SDK supplies the raw SUBACK result bytes. */
+        bool accepted = event->data_len == 1 && event->data && (uint8_t)event->data[0] <= 1;
+        __atomic_store_n(&s_subscription_ack, ((uint32_t)event->msg_id << 1) | accepted, __ATOMIC_RELEASE);
+    } else if (event_id == MQTT_EVENT_PUBLISHED) {
+        __atomic_store_n(&s_last_puback, event->msg_id, __ATOMIC_RELEASE);
     } else if (event_id == MQTT_EVENT_DATA) {
+        if (!__atomic_load_n(&s_commands_ready, __ATOMIC_ACQUIRE)) return;
         /* Command topics are edge-triggered controls, never state.  A retained
          * `restart` (or Tailscale toggle) would otherwise execute on every
          * reconnect and can trap the device in a reboot loop.  QoS1 duplicate
@@ -906,7 +1106,22 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
 static void stop_client(void)
 {
+    __atomic_store_n(&s_commands_ready, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&s_subscription_ack, 0, __ATOMIC_RELEASE);
     if (s_client) {
+        /* A graceful DISCONNECT suppresses the broker's last will. Retire
+         * availability on the old topic while the old connection is alive. */
+        if (s_connected && s_availability_topic[0]) {
+            __atomic_store_n(&s_last_puback, 0, __ATOMIC_RELEASE);
+            int id = esp_mqtt_client_enqueue(s_client, s_availability_topic, "offline", 7, 1, 1, true);
+            int64_t until = esp_timer_get_time() + 1000000;
+            while (id > 0 && s_connected && esp_timer_get_time() < until &&
+                   __atomic_load_n(&s_last_puback, __ATOMIC_ACQUIRE) != id) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            if (id <= 0 || __atomic_load_n(&s_last_puback, __ATOMIC_ACQUIRE) != id)
+                ESP_LOGW(TAG, "Broker did not acknowledge retained offline state");
+        }
         esp_mqtt_client_stop(s_client);
         esp_mqtt_client_destroy(s_client);
         s_client = NULL;
@@ -921,6 +1136,7 @@ static bool start_client(void)
     mqtt_integration_get_config(&cfg);
     if (!cfg.enabled || !cfg.uri[0] || !cfg.base_topic[0]) return false;
     if(!homelab_ops_admit())return false;
+    if (!ha_broker_hash(cfg.uri, s_client_broker)) memset(s_client_broker, 0, sizeof s_client_broker);
     snprintf(s_availability_topic, sizeof s_availability_topic, "%s/availability", cfg.base_topic);
     snprintf(s_state_topic, sizeof s_state_topic, "%s/state", cfg.base_topic);
     const esp_mqtt_client_config_t client_config = {
@@ -964,6 +1180,7 @@ static void status_update(const mqtt_integration_config_t *cfg, const service_re
     mqtt_integration_status_t next = {0};
     next.configured = cfg->enabled && cfg->uri[0] && cfg->base_topic[0];
     next.connected = next.configured && s_connected;
+    next.commands_ready = next.connected && __atomic_load_n(&s_commands_ready, __ATOMIC_ACQUIRE);
     next.connecting = next.configured && !s_connected && retry->awaiting;
     next.retry_level = retry->failures;
     if (next.configured && !s_connected && !retry->awaiting && retry->next_ms > now_ms)
@@ -993,8 +1210,13 @@ static void manager_task(void *arg)
     (void)arg;
     service_retry_t retry = {0};
     service_retry_t discovery_retry = {0};
+    service_retry_t subscription_retry = {0};
+    int subscription_id = -1;
+    uint64_t power_connected_at = 0;
     bool discovery_pending = false;
     broker_clock_set(false, true);
+    unsigned wake_attempts = 0;
+    uint64_t wake_retry_at = 0;
     int elapsed = 0;
     mqtt_integration_config_t cfg;
     mqtt_integration_get_config(&cfg);
@@ -1019,9 +1241,13 @@ static void manager_task(void *arg)
             mqtt_power_event_cancel(&power); /* No stale startup event after a settings edit. */
             stop_client();
             service_retry_reset(&retry);
+            service_retry_reset(&subscription_retry);
+            subscription_id = -1;
             discovery_reset(&s_discovery);discovery_pending=false;service_retry_reset(&discovery_retry);
             broker_clock_set(false, true);
             s_watchdog_triggered = false;
+            wake_attempts = 0;
+            wake_retry_at = 0;
             elapsed = 0;
         }
         mqtt_integration_get_config(&cfg);
@@ -1030,14 +1256,36 @@ static void manager_task(void *arg)
         if (events && s_connected) {
             service_retry_reset(&retry);
             s_watchdog_triggered = false;
-            char command_topic[128];
-            snprintf(command_topic, sizeof command_topic, "%s/command/#", cfg.base_topic);
-            esp_mqtt_client_subscribe(s_client, command_topic, 1);
+            wake_attempts = 0;
+            wake_retry_at = 0;
+            service_retry_reset(&subscription_retry);
+            subscription_id = -1;
             publish(s_availability_topic, "online", 1);
-            s_discovery_requested = true;
+            __atomic_store_n(&s_discovery_requested, true, __ATOMIC_RELEASE);
             s_publish_requested = true;
         } else if (events & BROKER_DISCONNECTED) {
             service_retry_failed(&retry, now_ms);
+        }
+        uint32_t ack = __atomic_exchange_n(&s_subscription_ack, 0, __ATOMIC_ACQ_REL);
+        if (s_connected && subscription_id > 0 && (ack >> 1) == (uint32_t)subscription_id) {
+            subscription_id = -1;
+            if (ack & 1) {
+                __atomic_store_n(&s_commands_ready, true, __ATOMIC_RELEASE);
+                service_retry_reset(&subscription_retry);
+            } else service_retry_failed(&subscription_retry, now_ms);
+        }
+        if (s_connected && !__atomic_load_n(&s_commands_ready, __ATOMIC_ACQUIRE)) {
+            if (service_retry_timed_out(&subscription_retry, now_ms)) {
+                subscription_id = -1;
+                service_retry_failed(&subscription_retry, now_ms);
+            }
+            if (service_retry_due(&subscription_retry, now_ms)) {
+                char command_topic[128];
+                snprintf(command_topic, sizeof command_topic, "%s/command/#", cfg.base_topic);
+                subscription_id = esp_mqtt_client_subscribe(s_client, command_topic, 1);
+                if (subscription_id > 0) service_retry_begin(&subscription_retry, now_ms);
+                else service_retry_failed(&subscription_retry, now_ms);
+            }
         }
         /* No broker attempt before the uplink has an address: the first try
          * at boot always failed ("Host is unreachable") and logged errors.
@@ -1061,41 +1309,44 @@ static void manager_task(void *arg)
             elapsed = 0;
             publish_state(&power, cfg.poweron_events);
         }
-        if (s_connected && s_discovery_requested) {
-            s_discovery_requested = false;
+        if (s_connected && __atomic_exchange_n(&s_discovery_requested, false, __ATOMIC_ACQ_REL)) {
             discovery_reset(&s_discovery);discovery_pending=true;service_retry_reset(&discovery_retry);
         }
         if (s_connected && discovery_pending && service_retry_due(&discovery_retry,now_ms)) {
             discovery_begin(&s_discovery);
             if(!homelab_ops_admit()){service_retry_failed(&discovery_retry,now_ms);}
             else {
-                publish_discovery();
+                publish_discovery(&cfg);
                 if(discovery_finished(&s_discovery))discovery_pending=false;
                 if(s_discovery.failed)service_retry_failed(&discovery_retry,now_ms);
                 else {service_retry_reset(&discovery_retry);discovery_retry.next_ms=now_ms+1000;}
             }
         }
         status_update(&cfg, &retry, discovery_pending, now_ms);
+        if (s_connected && !power_connected_at) power_connected_at = now_ms;
         if (mqtt_power_event_due(&power, cfg.enabled, cfg.poweron_events, s_connected,
                                  !(cfg.home_assistant_discovery && cfg.discovery_prefix[0])
-                                     || (!discovery_pending && !s_discovery_requested && s_discovery.cursor > 0),
+                                     || (!discovery_pending && !__atomic_load_n(&s_discovery_requested, __ATOMIC_ACQUIRE) && s_discovery.cursor > 0)
+                                     || (power_connected_at && now_ms - power_connected_at >= 90000),
                                  now_ms)
             && homelab_ops_admit())
             mqtt_power_event_result(&power, publish_power_event(&cfg, &power), now_ms);
         if (!s_connected && cfg.enabled && cfg.broker_watchdog_enabled
-            && cfg.broker_watchdog_wol_mac[0] && !s_watchdog_triggered) {
+            && cfg.broker_watchdog_wol_mac[0] && !s_watchdog_triggered &&
+            wake_attempts < 3 && now_ms >= wake_retry_at) {
             int64_t silence_us = broker_silence_us();
             if (silence_us >= (int64_t)cfg.broker_watchdog_timeout_seconds * 1000000LL) {
-                esp_err_t wake_err = wol_send_saved_mac_text(cfg.broker_watchdog_wol_mac);
-                s_watchdog_triggered = true; /* one three-packet burst per outage */
-                if (wake_err == ESP_OK) {
+                uint8_t sent;
+                esp_err_t wake_err = wol_send_saved_mac_count(cfg.broker_watchdog_wol_mac, &sent);
+                wake_attempts++;
+                if (sent) {
+                    s_watchdog_triggered = true; /* stop once any packet was accepted */
                     s_watchdog_wake_count++;
-                    ESP_LOGW(TAG, "broker silent for %lu s; watchdog WOL sent to %s",
-                             (unsigned long)cfg.broker_watchdog_timeout_seconds,
-                             cfg.broker_watchdog_wol_mac);
+                    ESP_LOGW(TAG, "Broker watchdog submitted %u wake datagram(s)", sent);
                 } else {
-                    ESP_LOGE(TAG, "broker watchdog WOL failed for %s: %s",
-                             cfg.broker_watchdog_wol_mac, esp_err_to_name(wake_err));
+                    if (wake_err == ESP_ERR_NOT_FOUND || wake_err == ESP_ERR_INVALID_ARG) wake_attempts = 3;
+                    wake_retry_at = now_ms + 30000u * wake_attempts;
+                    ESP_LOGW(TAG, "Broker watchdog could not send a wake packet: %s", esp_err_to_name(wake_err));
                 }
             }
         }
@@ -1218,11 +1469,11 @@ void mqtt_integration_publish_now(void)
 
 void mqtt_integration_wol_changed(void)
 {
-    s_discovery_requested = true;
+    __atomic_store_n(&s_discovery_requested, true, __ATOMIC_RELEASE);
 }
 
 void mqtt_integration_tailnet_forward_changed(void)
 {
-    s_discovery_requested = true;
+    __atomic_store_n(&s_discovery_requested, true, __ATOMIC_RELEASE);
     s_publish_requested = true;
 }

@@ -197,8 +197,10 @@ static bool wol_lan_address(esp_netif_ip_info_t *info)
     return uplink_address(uplink_local_netif(), info);
 }
 
-esp_err_t wol_send_mac(const uint8_t mac[6], const char *broadcast, uint16_t port)
+esp_err_t wol_send_mac_count(const uint8_t mac[6], const char *broadcast, uint16_t port, uint8_t *sent)
 {
+    if (!sent) return ESP_ERR_INVALID_ARG;
+    *sent = 0;
     if (!mac) return ESP_ERR_INVALID_ARG;
     char derived[16];
     bool automatic = !broadcast || !broadcast[0];
@@ -243,6 +245,7 @@ esp_err_t wol_send_mac(const uint8_t mac[6], const char *broadcast, uint16_t por
             result = ESP_FAIL;
             break;
         }
+        ++*sent;
         if (attempt < 2) vTaskDelay(pdMS_TO_TICKS(30));
     }
     close(sock);
@@ -254,6 +257,12 @@ esp_err_t wol_send_mac(const uint8_t mac[6], const char *broadcast, uint16_t por
     return result;
 }
 
+esp_err_t wol_send_mac(const uint8_t mac[6], const char *broadcast, uint16_t port)
+{
+    uint8_t sent;
+    return wol_send_mac_count(mac, broadcast, port, &sent);
+}
+
 esp_err_t wol_send_index(int index)
 {
     wol_device_t device;
@@ -261,16 +270,24 @@ esp_err_t wol_send_index(int index)
     return wol_send_mac(device.mac, device.broadcast, device.port);
 }
 
-esp_err_t wol_send_saved_mac_text(const char *mac_text)
+esp_err_t wol_send_saved_mac_count(const char *mac_text, uint8_t *sent)
 {
+    if (!sent) return ESP_ERR_INVALID_ARG;
+    *sent = 0;
     uint8_t wanted[6];
     if (!wol_parse_mac(mac_text, wanted)) return ESP_ERR_INVALID_ARG;
     int count = wol_count();
     for (int i = 0; i < count; i++) {
         wol_device_t device;
         if (wol_get(i, &device) && memcmp(device.mac, wanted, 6) == 0) {
-            return wol_send_mac(device.mac, device.broadcast, device.port);
+            return wol_send_mac_count(device.mac, device.broadcast, device.port, sent);
         }
     }
     return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t wol_send_saved_mac_text(const char *mac_text)
+{
+    uint8_t sent;
+    return wol_send_saved_mac_count(mac_text, &sent);
 }

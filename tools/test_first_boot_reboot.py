@@ -37,6 +37,7 @@ functions = '\n'.join([
     c_func(fb_c, 'void first_boot_init(void)'),
     c_func(fb_c, 'bool first_boot_active(void)'),
     c_func(main_c, 'static void wifi_first_boot_storage(void)'),
+    c_func(main_c, 'static void wifi_sta_copy_credentials('),
     c_func(main_c, 'esp_netif_t *wifi_init_sta(void)'),
 ])
 
@@ -58,7 +59,8 @@ static const char *TAG = "first_boot", *TAG_STA = "WiFi Sta";
 #define EXAMPLE_ESP_WIFI_STA_PASSWD "otherappassword"
 typedef enum { WIFI_IF_STA, WIFI_IF_AP } wifi_interface_t;
 typedef enum { WIFI_STORAGE_FLASH, WIFI_STORAGE_RAM } wifi_storage_t;
-typedef struct { struct { uint8_t ssid[32]; uint8_t password[64]; } sta; } wifi_config_t;
+typedef struct { uint8_t ssid[32]; uint8_t password[64]; } wifi_sta_config_t;
+typedef struct { wifi_sta_config_t sta; } wifi_config_t;
 typedef struct { char ssid[33]; char passwd[65]; uint8_t valid; } wifi_network_t;
 typedef struct { int unused; } esp_netif_t;
 typedef struct { int unused; } fb_ctx_t;
@@ -96,7 +98,8 @@ static SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *s) { ret
 static fb_ctx_t s_ctx; static fb_crypto_t s_crypto;
 static void fb_init(fb_ctx_t *c, const fb_crypto_t *k) { (void)c; (void)k; }
 static bool s_active;
-static size_t strlcpy(char *d, const char *s, size_t n) { size_t l = strlen(s); if (n) { size_t c = l < n - 1 ? l : n - 1; memcpy(d, s, c); d[c] = 0; } return l; }
+static size_t fixture_strnlen(const char *s,size_t n) { size_t i=0;while(i<n&&s[i])i++;return i; }
+#define strnlen fixture_strnlen
 '''
 
 tests = r'''
@@ -113,7 +116,8 @@ static void boot(void) {
 /* What wifi_setup_test_start() does through wifi_apply_entry(). */
 static void wizard_wifi_test(const char *ssid, const char *pw) {
     wifi_config_t c; memset(&c, 0, sizeof c);
-    strcpy((char *)c.sta.ssid, ssid); strcpy((char *)c.sta.password, pw);
+    wifi_network_t entry={0};strcpy(entry.ssid,ssid);strcpy(entry.passwd,pw);
+    wifi_sta_copy_credentials(&c.sta,&entry,false);
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &c));
 }
 static void factory(void) {
@@ -155,6 +159,17 @@ int main(void) {
     boot();
     assert(!first_boot_active() && nvs_has_setup_done && nvs_setup_done);
     assert(nvs_net_count == 1 && !strcmp(nvs_nets[0].ssid, "OldNet") && drv_storage == WIFI_STORAGE_FLASH);
+
+    /* Full-width driver fields need no terminator, but the saved values do. */
+    factory();nvs_password=true;
+    const char *full_ssid="123456789012345678901234567890AB";
+    const char *full_key="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    wizard_wifi_test(full_ssid,full_key);
+    assert(!memcmp(drv_flash.sta.ssid,full_ssid,32)&&!memcmp(drv_flash.sta.password,full_key,64));
+    boot();assert(nvs_net_count==1&&!strcmp(nvs_nets[0].ssid,full_ssid)&&!strcmp(nvs_nets[0].passwd,full_key));
+    wifi_sta_config_t enterprise={0};
+    wifi_sta_copy_credentials(&enterprise,&nvs_nets[0],true);
+    assert(!memcmp(enterprise.ssid,full_ssid,32)&&!enterprise.password[0]);
 
     /* The shipped Kconfig placeholder is never migrated, in either mode. */
     factory(); nvs_password = true; strcpy((char *)drv_flash.sta.ssid, EXAMPLE_ESP_WIFI_STA_SSID); strcpy((char *)drv_flash.sta.password, EXAMPLE_ESP_WIFI_STA_PASSWD);

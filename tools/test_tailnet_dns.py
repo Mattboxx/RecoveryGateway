@@ -119,7 +119,8 @@ static void config_cases(void) {
 
 static int mkans(uint8_t *r, const uint8_t *q, int ql, int rcode, const uint8_t *answers, int alen, int an) {
     memcpy(r, q, (size_t)ql); r[2] = 0x81; r[3] = (uint8_t)(0x80 | rcode); r[6] = 0; r[7] = (uint8_t)an;
-    memcpy(r + ql, answers, (size_t)alen); return ql + alen;
+    if (alen) memcpy(r + ql, answers, (size_t)alen);
+    return ql + alen;
 }
 
 static void wire_cases(void) {

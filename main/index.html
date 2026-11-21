@@ -3584,7 +3584,7 @@
           </div>
         </div>
         <div class="card-body">
-          <p class="form-hint" style="margin:0 0 0.75rem 0;">Send ICMP echo requests. Tailnet targets (100.64.0.0/10) go through the WG tunnel, everything else through STA.</p>
+          <p class="form-hint">Test whether a host responds to ICMP.</p>
           <div style="display:flex; gap:0.5rem;">
             <input class="input mono" type="text" id="tool-ping-target" aria-label="Ping target" placeholder="8.8.8.8 or homeassistant" style="flex:1; min-width:0;">
             <input class="input" type="number" id="tool-ping-count" value="4" min="1" max="10" style="width:5rem;" aria-label="Ping count">
@@ -3604,7 +3604,7 @@
           </div>
         </div>
         <div class="card-body">
-          <p class="form-hint" style="margin:0 0 0.75rem 0;">TTL-incrementing ICMP probes. One per hop; stops at the destination or after max_hops.</p>
+          <p class="form-hint">Show the hops to a destination.</p>
           <div style="display:flex; gap:0.5rem;">
             <input class="input mono" type="text" id="tool-trace-target" aria-label="Traceroute target" placeholder="8.8.8.8 or homeassistant" style="flex:1; min-width:0;">
             <input class="input" type="number" id="tool-trace-hops" value="16" min="1" max="30" style="width:5rem;" aria-label="Traceroute maximum hops">
@@ -3678,7 +3678,7 @@
             <span class="card-title">Live log</span>
           </div>
           <div style="display:flex; gap:0.5rem; align-items:center;">
-            <label style="display:flex; align-items:center; gap:0.35rem; font-size:var(--text-xs); color:var(--fg-muted); margin:0;" title="Console (UART) log level — gates this live serial stream + the UART output. Applied live, independent of the SD recorder. Off silences the console (max performance / no UART jitter on the data path); raw panic/boot output is always kept unless Off.">
+            <label style="display:flex; align-items:center; gap:0.35rem; font-size:var(--text-xs); color:var(--fg-muted); margin:0;" title="Controls UART output and the live log. The SD recorder has a separate setting.">
               UART level
               <select class="input" id="sys-sdlog-conlvl" style="height:1.9rem; padding:0.1rem 0.4rem; font-size:var(--text-xs); width:auto;">
                 <option value="3">All (info+)</option>
@@ -3697,7 +3697,7 @@
           </div>
           <pre id="tool-log-body" data-seq="0" style="background:var(--bg-page); border:1px solid var(--border); border-radius:var(--radius-md); padding:0.75rem; max-height:32rem; overflow:auto; font-family:var(--font-mono); font-size:0.8rem; line-height:1.4; margin:0; white-space:pre-wrap; word-break:break-all;">— waiting for first tail —</pre>
           <span class="form-hint" style="margin-top:0.4rem; display:block;">
-            16 KB ring buffer of every ESP_LOG line (serial keeps the same stream). Polls every 500 ms; older lines roll off when the ring wraps.
+            The device keeps only the newest log lines. The viewer marks gaps and restarts.
             Level legend: <span class="lvl-E">E</span> errors, <span class="lvl-W">W</span> warnings, <span class="lvl-I">I</span> info, <span class="lvl-D">D</span>/<span class="lvl-V">V</span> debug.
           </span>
         </div>
@@ -4060,6 +4060,8 @@
           </div>
             <details class="form-hint cmd-reference"><summary>Command reference</summary>
               <ul>
+                <li><code class="mono" data-no-i18n>help</code> — show the commands available on this channel.</li>
+                <li><code class="mono" data-no-i18n>devices</code> — list saved devices and their last known results.</li>
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
                 <li><code class="mono" data-no-i18n>check NAS</code> — check reachability without waking the device.</li>
@@ -4067,8 +4069,8 @@
                 <li><code class="mono" data-no-i18n>checks</code> — list saved TCP checks and their last results.</li>
                 <li><code class="mono" data-no-i18n>info</code> — show gateway status when allowed.</li>
               </ul>
-              <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
-              <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
+              <p>Use the full saved name. Verified recovery enables recover, check, probe and checks. Manual results return to this topic. Device profile notifications control scheduled outage alerts.</p>
+              <p>With Tailscale disabled, commands work with either switch setting.</p>
             </details>
           </div>
           <div class="form-hint mono" id="ntfy-status">—</div>
@@ -4115,6 +4117,8 @@
           </div>
             <details class="form-hint cmd-reference"><summary>Command reference</summary>
               <ul>
+                <li><code class="mono" data-no-i18n>/help</code> — show the command guide and shortcuts in a private chat.</li>
+                <li><code class="mono" data-no-i18n>/devices</code> — list saved devices and their last known results.</li>
                 <li><code class="mono" data-no-i18n>wol NAS</code> — send the wake packet.</li>
                 <li><code class="mono" data-no-i18n>recover NAS</code> — wake if needed and verify within the saved timeout.</li>
                 <li><code class="mono" data-no-i18n>check NAS</code> — check reachability without waking the device.</li>
@@ -4122,8 +4126,8 @@
                 <li><code class="mono" data-no-i18n>checks</code> — list saved TCP checks and their last results.</li>
                 <li><code class="mono" data-no-i18n>info</code> — show gateway status when allowed.</li>
               </ul>
-              <p>Replace NAS with the saved device name. Enable verified recovery for recover and check, and enable result notifications in the device profile to receive the final reply.</p>
-              <p>With Tailscale disabled, leave the Tailscale-down-only switch off.</p>
+              <p>Use the full saved name. Verified recovery enables recover, check, probe and checks. Manual results return to this chat. Device profile notifications control scheduled outage alerts.</p>
+              <p>With Tailscale disabled, commands work with either switch setting.</p>
             </details>
           </div>
           <p class="form-hint mono" id="nt-tg-status">—</p>
@@ -4744,7 +4748,7 @@
       <div class="modal-body">
         <div id="panic-summary" style="margin-bottom:0.6rem;"></div>
         <div class="mono" id="panic-crash" style="font-size:var(--text-xs); padding:0.5rem; background:var(--bg-elevated); border:1px solid var(--border); border-radius:4px; word-break:break-all;"></div>
-        <div style="font-size:var(--text-xs); color:var(--fg-muted); margin-top:0.6rem;">Open <strong>Diagnostics → Reset history</strong> for the full trail. The pre-crash log card in Diagnostics has the last log lines before the panic.</div>
+        <div style="font-size:var(--text-xs); color:var(--fg-muted); margin-top:0.6rem;">See <strong>Diagnostics → Reset history</strong> and <strong>Pre-crash log</strong>.</div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-danger btn-md" id="panic-ack">OK, noted</button>
@@ -5371,7 +5375,7 @@
       }
 
       // Uptime
-      pendingRebootObserveUptime(data.uptime_s);
+      if(typeof data.restart_required==='boolean')setPendingReboot(data.restart_required);
       document.getElementById('uptime-value').textContent = formatUptime(data.uptime_s || 0);
       /* last_reboot is computed client-side: now - uptime. Avoids needing
        * the device to know wallclock at boot. */
@@ -6788,7 +6792,15 @@
         return e;
       }).filter(function (e) { return e.ssid.length > 0; });
       if (!nets.length) {
-        showToast('error', 'No networks', 'Add at least one network with an SSID.', 5000);
+        if (s_net_list.length) {
+          showToast('error', 'No networks', 'Enter an SSID or remove the empty rows.', 5000);
+          return;
+        }
+        var button = this;
+        showConfirm('Remove the Wi-Fi uplink?',
+          'All saved Wi-Fi networks will be removed. After restart the gateway will stop joining Wi-Fi. Make sure you can reach it via Ethernet or its access point.',
+          function () { saveNetwork(button, { networks: [] }); },
+          { confirmText: 'Remove Wi-Fi uplink' });
         return;
       }
       var body = { networks: nets };
@@ -6876,6 +6888,7 @@
                 if (d.status === 'ready') {
                   return opts.onReady(d.networks || [], d.age_ms || 0);
                 }
+                if (d.status === 'error') return opts.onError(d.reason || 'scan-failed');
                 if (Date.now() < deadline) {
                   setTimeout(poll, 500);
                 } else {
@@ -7426,7 +7439,7 @@
       var btn=this;btn.disabled=true;
       try{var r=await apiFetch('/api/ethernet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var d=await r.json();
         if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
-        if(d.restart_required)setPendingReboot(true);
+        if(d.restart_required)setPendingReboot(true);else if(d.restart_required===false)fetchStatus();
         showToast('success','Ethernet settings saved','Restart the device to apply them.',5000);await loadEthernet();}
       catch(e){document.getElementById('eth-status').textContent='Not saved: '+e.message;btn.disabled=false;}
     });
@@ -7459,11 +7472,15 @@
       }
       return parts.join(' · ')+(st.error?' — '+usbMsg(st.error):'')+(st.restart_required?' · '+UT('restart to apply the saved settings'):'');
     }
-    function loadCellular(){
-      s_cell_loaded=false;document.getElementById('cell-save').disabled=true;
+    var cellRead=0,limitRead=0;
+    function loadCellular(section){
+      var modem=section==='quota'?0:++cellRead, quota=section==='modem'?0:++limitRead;
+      if(modem){s_cell_loaded=false;document.getElementById('cell-save').disabled=true;}
       return apiFetch('/api/cellular',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(d){
         if(!d||!d.config||!d.status||typeof d.config.enabled!=='boolean')throw new Error('Invalid cellular response');
         var c=d.config,st=d.status,set=function(id,v){var el=document.getElementById(id);if(el.type==='checkbox')el.checked=!!v;else el.value=v;};
+        if(quota&&quota===limitRead)cellLimitView(d.data_limit);
+        if(!modem||modem!==cellRead)return;
         set('cell-ack',c.data_ack);set('cell-enabled',c.enabled);set('cell-roaming',c.roaming);set('cell-mode',c.mode);set('cell-apn',c.apn);set('cell-user',c.user);
         set('cell-password','');set('cell-clear-password',false);set('cell-pin','');set('cell-clear-pin',false);
         document.getElementById('cell-password').placeholder=c.has_password?'Saved — leave empty to keep':'Optional';
@@ -7473,13 +7490,15 @@
         set('cell-transport',c.transport==='usb'?'usb':'uart');set('cell-usb-mode',c.usb_mode||'auto');
         set('cell-usb-iface',String(typeof c.usb_interface==='number'?c.usb_interface:-1));cellTransportView();
         document.getElementById('cell-status').textContent=cellStatusText(st,c);
-        cellLimitView(d.data_limit);
         var badge=document.getElementById('cell-badge');
         /* Waiting: between attempts, for example while no USB device is plugged in. */
         badge.textContent=UT(st.compiled===false?'Not compiled':!st.enabled_at_boot?'Off':st.state==='connected'?'Connected':st.state==='stopped'?'Stopped':st.state==='backoff'?'Waiting':'Connecting…');
         badge.className='badge '+(st.state==='connected'?'badge-success':st.state==='stopped'?'badge-danger':st.enabled_at_boot?'badge-warning':'badge-neutral');
         s_cell_loaded=true;
-      }).catch(function(e){document.getElementById('cell-status').textContent='Cellular settings unavailable: '+e.message;});
+      }).catch(function(e){
+        if(modem===cellRead&&modem)document.getElementById('cell-status').textContent='Cellular settings unavailable: '+e.message;
+        if(quota===limitRead&&quota)document.getElementById('cell-limit-status').textContent='Unavailable: '+e.message;
+      });
     }
     CELL_FIELDS.forEach(function(id){var el=document.getElementById(id);el.addEventListener(el.type==='checkbox'||el.tagName==='SELECT'?'change':'input',function(){document.getElementById('cell-save').disabled=!s_cell_loaded;});});
     document.getElementById('cell-reload').addEventListener('click',loadCellular);
@@ -7497,8 +7516,8 @@
       var btn=this;btn.disabled=true;
       try{var r=await apiFetch('/api/cellular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var d=await r.json();
         if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
-        if(d.restart_required)setPendingReboot(true);
-        showToast('success','Cellular settings saved','Restart the device to apply them.',5000);await loadCellular();}
+        if(d.restart_required)setPendingReboot(true);else if(d.restart_required===false)fetchStatus();
+        showToast('success','Cellular settings saved','Restart the device to apply them.',5000);await loadCellular('modem');}
       catch(e){document.getElementById('cell-status').textContent='Not saved: '+e.message;btn.disabled=false;}
     });
     /* Monthly mobile data limit: applies at once, separate from the modem settings. */
@@ -7526,7 +7545,7 @@
       if(reset)body.data_limit.reset_usage=true;
       try{var r=await apiFetch('/api/cellular',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var d=await r.json();
         if(!r.ok||!d.ok)throw new Error(d.error||('HTTP '+r.status));
-        showToast('success',reset?'Mobile data counter reset':'Data limit saved','',4000);await loadCellular();}
+        showToast('success',reset?'Mobile data counter reset':'Data limit saved','',4000);await loadCellular('quota');}
       catch(e){document.getElementById('cell-limit-status').textContent='Not saved: '+e.message;}
     }
     document.getElementById('cell-limit-save').addEventListener('click',function(){cellLimitPost(false);});
@@ -7577,7 +7596,10 @@
     /* Throughput test. */
     (function () {
       function el(id) { return document.getElementById(id); }
-      function rate(kbps) { return kbps >= 1000 ? (kbps / 1000).toFixed(2) + ' Mbit/s' : kbps + ' kbit/s'; }
+      function rate(kbps) {
+        var bits = kbps >= 1000 ? (kbps / 1000).toFixed(2) + ' Mbit/s' : kbps + ' kbit/s';
+        return bits + ' (' + (kbps / 8000).toFixed(3) + ' MB/s)';
+      }
       function busy(on, text) {
         el('thr-start').disabled = on; el('thr-browser').disabled = on;
         el('thr-badge').textContent = on ? 'Running' : 'Idle'; el('thr-badge').className = 'badge ' + (on ? 'badge-info' : 'badge-neutral');
@@ -7585,10 +7607,12 @@
       }
       async function poll() {
         try {
-          var r = await apiFetch('/api/diag/speedtest', {cache: 'no-store'}); var d = await r.json();
+          var r = await apiFetch('/api/diag/speedtest', {cache: 'no-store'});
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          var d = await r.json();
           var line = formatBytes(d.bytes) + ' in ' + (d.elapsed_ms / 1000).toFixed(1) + ' s — ' + rate(d.kbps);
           if (d.running) { busy(true, line); setTimeout(poll, 1000); return; }
-          busy(false, d.bytes ? line + ' (' + d.result + (d.first_byte_ms ? ', first byte after ' + d.first_byte_ms + ' ms' : '') + ')' : 'No data: ' + d.result + (d.http ? ' (HTTP ' + d.http + ')' : ''));
+          busy(false, d.bytes ? line + ' (' + d.result + (d.first_byte_ms ? ', headers after ' + d.first_byte_ms + ' ms' : '') + ')' : 'No data: ' + d.result + (d.http ? ' (HTTP ' + d.http + ')' : ''));
         } catch (e) { busy(false, 'Unavailable: ' + e.message); }
       }
       el('thr-start').addEventListener('click', async function () {
@@ -7604,12 +7628,13 @@
       el('thr-browser').addEventListener('click', async function () {
         busy(true, 'Downloading from the gateway…');
         try {
-          var start = performance.now(), got = 0;
-          var r = await apiFetch('/api/diag/speedtest/blob?bytes=8388608', {cache: 'no-store'});
+          var start = performance.now(), got = 0, expected = 8388608;
+          var r = await apiFetch('/api/diag/speedtest/blob?bytes=' + expected, {cache: 'no-store'});
           if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
           var reader = r.body.getReader();
           for (;;) { var part = await reader.read(); if (part.done) break; got += part.value.length; }
           var ms = performance.now() - start;
+          if (got !== expected || ms <= 0) throw new Error('Incomplete measurement');
           busy(false, 'Browser ← gateway: ' + formatBytes(got) + ' in ' + (ms / 1000).toFixed(1) + ' s — ' + rate(Math.round(got * 8 / ms)));
         } catch (e) { busy(false, 'Not completed: ' + e.message); }
       });
@@ -7782,8 +7807,8 @@
     /* Dynamic DNS. */
     var ddnsUi = (function () {
       function el(id) { return document.getElementById(id); }
-      var HINTS = {duckdns: ['Sub-domain', 'Without .duckdns.org; several separated by commas.', 'The token shown at the top of duckdns.org after signing in.'],
-                   cloudflare: ['Record name', 'The full name of an existing A record, e.g. home.example.com.', 'An API token limited to Zone → DNS → Edit for this zone.']};
+      var HINTS = {duckdns: ['Sub-domain', 'Comma-separated names without .duckdns.org.', 'Copy the token from your DuckDNS account.'],
+                   cloudflare: ['Record name', 'Full name of an existing A record.', 'API token with Zone → DNS → Edit for this zone.']};
       var saved = null, poll = null;
       function ago(s) { return s < 90 ? s + ' s ago' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 129600 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago'; }
       function shape() {
@@ -7804,15 +7829,16 @@
           el('ddns-token').value = ''; el('ddns-url').value = '';
           el('ddns-token').placeholder = d.has_token ? 'Saved — leave empty to keep' : 'Token';
           el('ddns-url').placeholder = d.has_url ? 'Saved — leave empty to keep' : 'https://provider.example/update?host=…&ip={ip}';
-          var on = d.provider !== 'off', failing = on && /^Not updated:/.test(d.status), b = el('ddns-badge');
-          b.textContent = !on ? 'Off' : failing ? 'Not updated' : d.updated_ago_s >= 0 ? 'Up to date' : 'Waiting';
-          b.className = 'badge ' + (!on ? 'badge-neutral' : failing ? 'badge-warning' : d.updated_ago_s >= 0 ? 'badge-success' : 'badge-neutral');
+          var on = d.provider !== 'off', failing = /^Not updated:/.test(d.status), b = el('ddns-badge');
+          var waiting = on && (d.pending || d.scheduler_ready === false), current = d.updated_ago_s >= 0;
+          b.textContent = !on ? 'Off' : waiting ? 'Waiting' : failing ? 'Not updated' : current ? 'Up to date' : 'Waiting';
+          b.className = 'badge ' + (!on ? 'badge-neutral' : waiting || failing ? 'badge-warning' : current ? 'badge-success' : 'badge-neutral');
           el('ddns-public').textContent = d.public_ip || (on ? 'Not known yet (needs Tailscale, or Cloudflare)' : '—');
           el('ddns-updated').textContent = d.updated_ip ? d.updated_ip + (d.updated_ago_s >= 0 ? ' · ' + ago(d.updated_ago_s) : '') : on && d.updated_ago_s >= 0 ? 'Updated ' + ago(d.updated_ago_s) : '—';
           el('ddns-status').textContent = on ? d.status : 'Off.';
           el('ddns-save').disabled = true;
           shape();
-          if (d.running && onPage('network')) poll = setTimeout(load, 3000);
+          if ((d.running || waiting) && onPage('network')) poll = setTimeout(load, d.running ? 3000 : 15000);
         }).catch(function (e) { el('ddns-status').textContent = 'Unavailable: ' + e.message; });
       }
       async function post(update) {
@@ -7831,7 +7857,7 @@
         finally { el('ddns-token').value = ''; el('ddns-url').value = ''; }
       });
       el('ddns-update').addEventListener('click', async function () {
-        try { await post(true); el('ddns-status').textContent = 'Updating…'; setTimeout(load, 3000); }
+        try { await post(true); await load(); }
         catch (e) { el('ddns-status').textContent = 'Not updated: ' + e.message; }
       });
       return {load: load};
@@ -7876,17 +7902,17 @@
           }
           var tcs = t.commands || {};   /* status: also when unsaved edits keep the fields */
           el('nt-tg-status').textContent = channelText(t) + (tcs.enabled
-            ? ' · commands ' + (tcs.running ? 'on' : 'waiting') + ': ' + (tcs.received | 0) + ' run, ' + (tcs.errors | 0) + ' refused' +
+            ? ' · commands ' + (tcs.running ? 'on' : 'waiting') + ': ' + (tcs.received | 0) + ' run, ' + (tcs.errors | 0) + ' errors' +
               (tcs.other_chats_skipped ? ', ' + tcs.other_chats_skipped + ' from other chats ignored' : '') + (tcs.last_error ? ' — ' + tcs.last_error : '')
             : '');
           el('nt-mail-status').textContent = channelText(m);
           badge('nt-tg-badge', t.enabled); badge('nt-mail-badge', m.enabled);
-          var waiting = d.waiting ? d.waiting + ' message(s) waiting to be sent.' : d.pending_connectivity ? 'Checking connectivity: alerts wait ' + (d.connectivity_grace_seconds || 60) + ' seconds.' : null;
-          if (d.waiting && d.worker_running === false) waiting += ' Delivery is waiting for resources and retries automatically.';
+          var waiting = d.waiting ? d.waiting + ' message(s) queued.' : d.pending_connectivity ? 'Connectivity alerts wait ' + (d.connectivity_grace_seconds || 60) + ' seconds.' : '';
+          if (d.delivery_ready === false) waiting += ' Waiting for resources.';
           el('nt-tg-note').textContent = waiting && t.enabled ? waiting : t.enabled ? 'Ready.' : 'Off.';
           el('nt-mail-note').textContent = waiting && m.enabled ? waiting : m.enabled ? 'Ready.' : 'Off.';
           el('nt-tg-save').disabled = saving.tg || !dirty.tg; el('nt-mail-save').disabled = saving.mail || !dirty.mail;
-          if ((d.waiting || d.pending_connectivity) && onPage('automation')) poll = setTimeout(load, 5000);
+          if ((waiting && (t.enabled || m.enabled)) && onPage('automation')) poll = setTimeout(load, 5000);
         }).catch(function (e) { if (serial === loadSerial) el('nt-tg-note').textContent = el('nt-mail-note').textContent = 'Unavailable: ' + e.message; });
       }
       ['tg', 'mail'].forEach(function (ch) {
@@ -8341,7 +8367,7 @@
       return apiFetch('/api/service-watch',{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();}).then(function(w){
         if(!w||typeof w.enabled!=='boolean'||!Number.isInteger(w.interval_s))throw new Error('Invalid response');
         document.getElementById('sw-enabled').checked=w.enabled;document.getElementById('sw-notify').checked=!!w.notify;document.getElementById('sw-interval').value=w.interval_s;
-        document.getElementById('sw-status').textContent=w.enabled?'Watching every '+w.interval_s+' s.':'Off.';
+        document.getElementById('sw-status').textContent=w.enabled?(w.waiting_for_worker?'Waiting for resources.':'Watching every '+w.interval_s+' s.'):'Off.';
       }).catch(function(e){document.getElementById('sw-status').textContent='Unavailable: '+e.message;});
     }
     ['sw-enabled','sw-notify','sw-interval'].forEach(function(id){document.getElementById(id).addEventListener(id==='sw-interval'?'input':'change',function(){document.getElementById('sw-save').disabled=false;});});
@@ -9558,7 +9584,7 @@
             ||(r.diagnostic&&(typeof r.diagnostic.summary!=='string'||typeof r.diagnostic.next_step!=='string'));}))throw new Error('Invalid forwarding status');
         s_tf_list=d.rules.slice();s_tf_list.forEach(function(r){r._lease=tfLease(r);});s_tf_max=d.max;s_tf_context=d;s_tf_dirty=false;s_tf_loaded=true;renderTf();
         document.getElementById('tf-add').disabled=false;
-        document.getElementById('tf-context').textContent='Saved configuration. Open "Explain status" on a rule for details. Reload to refresh.';
+        document.getElementById('tf-context').textContent=d.refresh_pending?'Applying saved rules. Reload to refresh.':'Saved configuration. Open "Explain status" for details.';
       }).catch(function(){
         if(epoch!==s_tf_epoch)return;
         var badge=document.getElementById('tf-badge');badge.textContent='Unavailable';badge.className='badge badge-warning';
@@ -11346,7 +11372,8 @@
       if (s_updatesPending) return s_updatesPending;
       s_updatesPending = readAutomationSettings('/api/system/updates').then(function (d) {
         if (!d || typeof d.enabled !== 'boolean' || typeof d.auto_install !== 'boolean' || typeof d.beta_channel !== 'boolean' || typeof d.busy !== 'boolean' || typeof d.checked !== 'boolean' || typeof d.update_available !== 'boolean') throw new Error('Invalid update settings response');
-        s_updatesLoaded = true; s_updatesBusy = d.busy;
+        s_updatesLoaded = true; s_updatesBusy = d.busy || d.restart_pending;
+        if (d.restart_pending) setPendingReboot(true);
         s_updatesChecked = d.checked; s_updatesAvailable = d.update_available;
         if (!s_updatesDirty) {
           document.getElementById('sys-updates-enabled').checked = d.enabled;
@@ -11363,8 +11390,8 @@
         if (d.checked && /^Mattboxx\/(RecoveryGateway|esp32-tailnet-gateway|esp32-tailscale-gateway-NAS-recovery)$/.test(d.repository || '')) document.getElementById('sys-updates-repo').href = 'https://github.com/' + d.repository + '/releases';
         link.style.display = safe ? '' : 'none'; if (safe) link.href = d.release_url;
         var badge = document.getElementById('sys-ota-badge');
-        badge.textContent = d.busy ? 'Working…' : d.update_available ? 'Update available' : d.enabled ? (d.auto_install ? 'Automatic install' : 'Checks enabled') : 'Periodic checks off';
-        badge.className = 'badge ' + (d.update_available ? 'badge-warning' : 'badge-neutral');
+        badge.textContent = d.restart_pending ? 'Restart required' : d.busy ? 'Working…' : d.update_available ? 'Update available' : d.enabled ? (d.auto_install ? 'Automatic install' : 'Checks enabled') : 'Periodic checks off';
+        badge.className = 'badge ' + (d.restart_pending || d.update_available ? 'badge-warning' : 'badge-neutral');
         updatesControls();
       }).catch(function (e) {
         document.getElementById('sys-updates-status').textContent = 'Update status unavailable: ' + e.message;
@@ -11591,9 +11618,9 @@
     document.getElementById('sys-config-backup').addEventListener('click', function () {
       showConfirm(
         'Download config backup',
-        '<p style="margin:0 0 0.75rem 0;">Secrets (WiFi/AP/EAP/MQTT passwords, Tailscale auth key and ntfy token) are encrypted with your passphrase. You need the same passphrase to restore them on this or another device.</p>' +
+        '<p>Portable backup excludes SIM, saved TCP checks and Telegram/email settings. Keep the passphrase to restore included secrets.</p>' +
         '<label style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; cursor:pointer;">' +
-          '<input type="checkbox" id="backup-include-secrets" checked> Include encrypted secrets' +
+          '<input type="checkbox" id="backup-include-secrets"> Include encrypted secrets' +
         '</label>' +
         '<div id="backup-passphrase-block">' +
           '<div class="form-group">' +
@@ -11634,27 +11661,34 @@
       }, 0);
     });
 
+    async function readBackupSection(path, valid) {
+      var response = await apiFetch(path);
+      if (!response.ok) throw new Error(path + ' HTTP ' + response.status);
+      var value = await response.json();
+      if (!value || typeof value !== 'object' || Array.isArray(value) ||
+          value.ok === false || value.error || (valid && !valid(value))) {
+        throw new Error(path + ' returned incomplete settings.');
+      }
+      return value;
+    }
+
     function _runConfigBackup(includeSecrets, passphrase) {
       var btn = document.getElementById('sys-config-backup');
       btn.disabled = true; btn.textContent = 'Gathering…';
       var fetches = [
-        apiFetch('/api/network')           .then(function (r) { return r.json(); }),
-        apiFetch('/api/system')            .then(function (r) { return r.json(); }),
-        apiFetch('/api/dhcp/reservations') .then(function (r) { return r.json(); }),
-        apiFetch('/api/portmap')           .then(function (r) { return r.json(); }),
-        apiFetch('/api/tailscale')         .then(function (r) { return r.json(); }),
-        apiFetch('/api/firewall')          .then(function (r) { return r.json(); }),
-        apiFetch('/api/wol')               .then(function (r) { return r.json(); }),
-        apiFetch('/api/mqtt')              .then(function (r) { return r.json(); }),
-        apiFetch('/api/ntfy')              .then(function (r) { return r.json(); }),
-        apiFetch('/api/tailnet-forward')   .then(function (r) { return r.json(); })
+        readBackupSection('/api/network', d => Array.isArray(d.networks) && d.ap && typeof d.ap === 'object'),
+        readBackupSection('/api/system', d => typeof d.version === 'string'),
+        readBackupSection('/api/dhcp/reservations', d => Array.isArray(d.reservations)),
+        readBackupSection('/api/portmap', d => Array.isArray(d.mappings)),
+        readBackupSection('/api/tailscale', d => d.settings && typeof d.settings === 'object'),
+        readBackupSection('/api/firewall', d => Array.isArray(d.lists) &&
+          d.lists.every(list => list && Number.isInteger(list.index) && Array.isArray(list.rules))),
+        readBackupSection('/api/wol', d => Array.isArray(d.devices)),
+        readBackupSection('/api/mqtt', d => typeof d.enabled === 'boolean'),
+        readBackupSection('/api/ntfy', d => typeof d.enabled === 'boolean'),
+        readBackupSection('/api/tailnet-forward', d => Array.isArray(d.rules))
       ];
-      if (includeSecrets) {
-        fetches.push(apiFetch('/api/system/secrets').then(function (r) {
-          if (!r.ok) throw new Error('secrets HTTP ' + r.status);
-          return r.json();
-        }));
-      }
+      if (includeSecrets) fetches.push(readBackupSection('/api/system/secrets'));
       Promise.all(fetches).then(function (parts) {
         var sys = parts[1] || {};
         delete sys.log_tail;
@@ -11682,14 +11716,14 @@
           device_name:   sys.device_name || '',
           network:       parts[0] || {},
           system:        sys,
-          dhcp_reservations: (parts[2] && parts[2].reservations) || [],
-          portmap:       (parts[3] && parts[3].mappings) || [],
+          dhcp_reservations: parts[2].reservations,
+          portmap:       parts[3].mappings,
           tailscale:     ts,
           firewall:      parts[5] || {},
-          wol:           (parts[6] && parts[6].devices) || [],
+          wol:           parts[6].devices,
           mqtt:          mqtt,
           ntfy:          ntfy,
-          tailnet_forward: tfConfigRules((parts[9] && parts[9].rules) || [])
+          tailnet_forward: tfConfigRules(parts[9].rules)
         };
         var step = Promise.resolve();
         if (includeSecrets) {
@@ -11888,16 +11922,18 @@
       prelude.then(function () {
         function next(i) {
           if (i >= steps.length) {
-            btn.disabled = false; btn.textContent = 'Restore…';
-            showToast('success', 'Restored — rebooting',
-              (includeSecrets ? 'Config + secrets applied. ' : '') +
-              'Device is rebooting now so every section actually takes effect.',
-              6000);
-            /* Force-reboot the device — most restored values (WiFi nets,
-             * Tailscale auth_key, web-server certs) only re-read from
-             * NVS at boot, so the SPA staying online without a reboot
-             * would mislead the operator into thinking nothing applied. */
-            post('/api/system/restart', {}).catch(function () {});
+            /* Settings are already saved. Keep the button locked until
+             * the server acknowledges a restart or we can report its failure. */
+            post('/api/system/restart', {}).then(function () {
+              showToast('success', 'Restored — rebooting',
+                includeSecrets ? 'Config + secrets saved.' : 'Config saved.', 6000);
+            }).catch(function () {
+              setPendingReboot(true);
+              showToast('warning', 'Settings restored',
+                'Automatic restart failed. Restart the device to apply all settings.', 8000);
+            }).finally(function () {
+              btn.disabled = false; btn.textContent = 'Restore…';
+            });
             return;
           }
           var s = steps[i];
@@ -12093,12 +12129,18 @@
       pre.textContent = 'Loading last ' + n + ' lines…';
       pre.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       apiFetch('/sdlog/list')
-        .then(function (r) { return r.json(); })
+        .then(function (r) {
+          if (!r.ok) throw new Error('SD log list unavailable');
+          return r.json();
+        })
         .then(function (list) {
           if (!list.length) { pre.textContent = '(no log files yet)'; return; }
           var name = list[0].name;   /* newest first */
           return apiFetch('/sdlog/tail?file=' + encodeURIComponent(name) + '&n=' + n)
-            .then(function (r) { return r.text(); })
+            .then(function (r) {
+              if (!r.ok) throw new Error('SD log tail unavailable');
+              return r.text();
+            })
             .then(function (txt) {
               pre.textContent = '# ' + name + '  (last ' + n + ' lines)\n' + (txt || '(empty)');
               pre.scrollTop = pre.scrollHeight;
@@ -12389,6 +12431,7 @@
       var uartOff = false;   /* mirrors the UART-level selector: Off = no source */
       var carry  = '';   /* partial line carried between polls */
       var firstTick = true;
+      var logBoot = '';
 
       /* Single source of truth for the live/paused/off badge, so the UART-level
        * selector and the pause toggle never contradict each other. */
@@ -12455,7 +12498,7 @@
       function poll() {
         var toolsActive = document.getElementById('page-tools').classList.contains('active');
         if (!toolsActive || paused) { setTimeout(poll, 500); return; }
-        apiFetch('/api/log/raw?since=' + (pre.dataset.seq || 0), { cache: 'no-store' })
+        apiFetch('/api/log/raw?since=' + (pre.dataset.seq || 0) + (logBoot ? '&boot='+logBoot : ''), { cache: 'no-store' })
           .then(function (r) {
             if (!r.ok) throw r.status;
             return r.json();
@@ -12465,6 +12508,12 @@
               pre.textContent = ''; carry = '';
               firstTick = false;
             }
+            if (logBoot && j.boot_id && logBoot !== j.boot_id) {
+              carry = ''; bootMs = 0;
+              pre.querySelectorAll('[data-raw]').forEach(function(sp){delete sp.dataset.raw;});
+              emitLine('Device restarted', '\n');
+            }
+            logBoot = j.boot_id || '';
             setBootMs(j.boot_ms);
             if (j.lost) {
               /* The device ring wrapped past our cursor — some lines
@@ -12674,61 +12723,10 @@
     // =====================================================================
     // INITIAL LOAD — auth gate
     // =====================================================================
-    /* Centralised brand-name updater. Called on every /api/auth/status
-     * fetch + after the operator saves a new name from the System tab. */
-    /* Pending-reboot banner state. Latches on any restart_required:true
-     * response and clears when the SPA observes the device coming back
-     * from a reboot (uptime drops below the last seen value). */
-    var s_last_seen_uptime = -1;
     function setPendingReboot(on) {
       var b = document.getElementById('pendingRebootBanner');
-      if (!b) return;
-      if (on) {
-        b.classList.add('visible');
-        try {
-          localStorage.setItem('pending_reboot', '1');
-          /* Snapshot the latch-time uptime — the first /api/status that
-           * comes back with a *smaller* uptime tells us the device has
-           * rebooted since the latch, even across page reloads. */
-          localStorage.setItem('pending_reboot_latched_uptime',
-            String(s_last_seen_uptime > 0 ? s_last_seen_uptime : 0));
-        } catch (e) {}
-      } else {
-        b.classList.remove('visible');
-        try {
-          localStorage.removeItem('pending_reboot');
-          localStorage.removeItem('pending_reboot_latched_uptime');
-        } catch (e) {}
-      }
+      if(b)b.classList.toggle('visible',!!on);
     }
-    function pendingRebootObserveUptime(uptime_s) {
-      if (typeof uptime_s !== 'number') return;
-      /* In-session detection: uptime moved backwards between two
-       * polls → device rebooted. */
-      if (s_last_seen_uptime > 0 && uptime_s + 5 < s_last_seen_uptime) {
-        setPendingReboot(false);
-      }
-      /* Cross-page-reload detection: compare current uptime with the
-       * snapshot we stored when the latch was set. Works after a hard
-       * refresh, because the s_last_seen_uptime in-memory cursor would
-       * be -1 in that path and the old logic never fired. */
-      try {
-        var latched = parseInt(localStorage.getItem('pending_reboot_latched_uptime') || '0', 10);
-        if (latched > 0 && uptime_s + 5 < latched) {
-          setPendingReboot(false);
-        }
-      } catch (e) {}
-      s_last_seen_uptime = uptime_s;
-    }
-    /* Restore latched state on page load. */
-    try {
-      if (localStorage.getItem('pending_reboot') === '1') {
-        /* Don't call setPendingReboot here — it would overwrite the
-         * latched-uptime snapshot with 0. Just toggle the DOM directly. */
-        var b = document.getElementById('pendingRebootBanner');
-        if (b) b.classList.add('visible');
-      }
-    } catch (e) {}
     /* Server-side session state lives in process memory and dies with
      * the reboot. The browser still holds the now-orphan cookie, so
      * the next /api hit returns 401 — and apiFetch's 401 handler
@@ -13393,6 +13391,7 @@
       .then(function (r) { return r.json(); })
       .then(function (s) {
         updateBrandName(s.device_name);
+        if(typeof s.restart_required==='boolean')setPendingReboot(s.restart_required);
         /* Unconfigured gateway on its setup Wi-Fi: only the paired wizard. */
         if (s.setup_mode) { FirstBoot.start(); return; }
         s_web_auth_required = !!s.auth_required;

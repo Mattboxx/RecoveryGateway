@@ -220,6 +220,8 @@ static void set_error(const char *text)
     xSemaphoreGive(s_lock);
 }
 
+static atomic_bool s_stability_lost;
+
 /* Select the LAN independently of the Internet uplink (which can be PPP). */
 static void apply_choice(void)
 {
@@ -228,16 +230,23 @@ static void apply_choice(void)
     esp_netif_ip_info_t info = {0};
     bool sta_ok = uplink_address(sta, &info);
     bool eth_ok = atomic_load(&s_link) && atomic_load(&s_has_ip);
-    eth_selector_t immediate = {.eth_streak = ETH_STABLE_SAMPLES};
-    int choice = eth_uplink_choose(&immediate, true, s_running.preference, sta_ok, eth_ok);
-    bool eth = choice == ETH_CHOICE_ETH;
+    if (eth_ok && sta_ok && s_running.preference == ETH_PREF_ETHERNET_FIRST) {
+        /* Only the route supervisor may promote Ethernet when Wi-Fi works.
+         * Refresh already-selected bindings when Ethernet changes address. */
+        if (atomic_load(&s_selected_eth)) portmap_install_all();
+        return;
+    }
+    bool eth = eth_ok && !sta_ok;
     if (atomic_exchange(&s_selected_eth, eth) != eth || eth) portmap_install_all();
 }
 
 static void link_changed(bool up)
 {
     atomic_store(&s_link, up);
-    if (!up) atomic_store(&s_has_ip, false);
+    if (!up) {
+        atomic_store(&s_has_ip, false);
+        atomic_store(&s_stability_lost, true);
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_status.link_changes++;
     if (up && s_running.ip_static) {
@@ -264,6 +273,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (got && ((const ip_event_got_ip_t *)data)->esp_netif != s_netif) return;
         lost = !got;
         atomic_store(&s_has_ip, got);
+        if (!got) atomic_store(&s_stability_lost, true);
         xSemaphoreTake(s_lock, portMAX_DELAY);
         if (got) {
             const ip_event_got_ip_t *e = data;
@@ -280,6 +290,17 @@ void eth_uplink_wifi_changed(void) { apply_choice(); }
 static esp_err_t apply_static(esp_netif_t *netif, const eth_config_t *c);
 
 #if CONFIG_ETH_SPI_ETHERNET_W5500
+static esp_err_t subscribe_w5500_events(void)
+{
+    esp_event_handler_instance_t eth_events;
+    esp_err_t err = esp_event_handler_instance_register(ETH_EVENT, ESP_EVENT_ANY_ID,
+                                                         on_event, NULL, &eth_events);
+    if (err != ESP_OK) return err;
+    err = esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, on_event, NULL, NULL);
+    if (err != ESP_OK) esp_event_handler_instance_unregister(ETH_EVENT, ESP_EVENT_ANY_ID, eth_events);
+    return err;
+}
+
 static esp_err_t start_w5500(const eth_config_t *c)
 {
     esp_err_t err = gpio_install_isr_service(0);
@@ -314,8 +335,7 @@ static esp_err_t start_w5500(const eth_config_t *c)
     if (!glue) {err = ESP_ERR_NO_MEM; goto fail_netif;}
     if ((err = esp_netif_attach(s_netif, glue)) != ESP_OK) goto fail_netif;
     if ((err = apply_static(s_netif, c)) != ESP_OK) goto fail_netif;
-    if ((err = esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, on_event, NULL)) != ESP_OK
-        || (err = esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, on_event, NULL)) != ESP_OK) goto fail_netif;
+    if ((err = subscribe_w5500_events()) != ESP_OK) goto fail_netif;
     s_handle = handle;  /* started by eth_uplink_start() after the ACL hooks */
     return ESP_OK;
 fail_netif:
@@ -385,18 +405,33 @@ static void usb_note(uint8_t net, const char *text)
 static void usb_task(void *arg)
 {
     (void)arg;
-    uint8_t *cfg = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!cfg) {usb_note(USBP_NET_NONE, "not enough memory for the USB device"); vTaskDelete(NULL); return;}
+    const uint32_t retry_ms = 30000;
+    uint8_t *cfg = NULL;
+    while (!(cfg = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))) {
+        usb_note(USBP_NET_NONE, "not enough memory for the USB device");
+        vTaskDelay(pdMS_TO_TICKS(retry_ms));
+    }
     uint32_t handled = 0;   /* attach already acted on */
+    TickType_t retry_at = 0;
+    bool retry = false;
     for (;;) {
         usbp_device_t d;
         size_t len = 0;
-        if (!usb_port_device(&d, cfg, 1024, &len) || d.seq == handled) {
-            if (!d.present) usb_note(USBP_NET_NONE, "no USB device on the USB port");
-            usb_port_wait(d.seq, 30000);
+        if (!usb_port_device(&d, cfg, 1024, &len)) {
+            retry = false;
+            usb_note(USBP_NET_NONE, "no USB device on the USB port");
+            usb_port_wait(d.seq, retry_ms);
             continue;
         }
+        if (d.seq == handled) {
+            int32_t left = retry ? (int32_t)(retry_at - xTaskGetTickCount()) : 0;
+            if (!retry || left > 0) {
+                usb_port_wait(d.seq, retry ? pdTICKS_TO_MS((TickType_t)left) : retry_ms);
+                continue;
+            }
+        }
         handled = d.seq;
+        retry = false;
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_status.usb_vid = d.vid; s_status.usb_pid = d.pid;
         xSemaphoreGive(s_lock);
@@ -406,13 +441,20 @@ static void usb_task(void *arg)
         int action = usbp_action(false, USBP_MODE_NETWORK, 0, &net, &storage, d.num_configs, d.config_value);
         if (action == USBP_ACT_NETWORK) {
             const char *why = "";
-            if (usb_port_net_open(&d, &net, s_netif, usb_link, NULL, &why) != ESP_OK) {usb_note(USBP_NET_NONE, why); continue;}
-            usb_note(net.kind, "");
-            while (usb_port_net_alive()) vTaskDelay(pdMS_TO_TICKS(250));
-            usb_port_net_close();
-            usb_note(USBP_NET_NONE, "USB Ethernet device stopped or disconnected");
-            vTaskDelay(pdMS_TO_TICKS(30000));   /* still attached: retry, at most every 30 s */
-            handled = 0;
+            esp_err_t err = usb_port_net_open(&d, &net, s_netif, usb_link, NULL, &why);
+            if (err == ESP_OK) {
+                usb_note(net.kind, "");
+                while (usb_port_net_alive()) vTaskDelay(pdMS_TO_TICKS(250));
+                usb_port_net_close();
+                usb_note(USBP_NET_NONE, "USB Ethernet device stopped or disconnected");
+                retry = true;
+            } else {
+                usb_note(USBP_NET_NONE, why);
+                /* Invalid/poisoned sessions need a new attachment or restart.
+                 * Allocation and other transient failures may clear in place. */
+                retry = err != ESP_ERR_INVALID_ARG && err != ESP_ERR_INVALID_STATE;
+            }
+            retry_at = xTaskGetTickCount() + pdMS_TO_TICKS(retry_ms);
         } else if (action == USBP_ACT_SWITCH) {
             usb_note(USBP_NET_NONE, usb_port_switch(&d, &storage) == ESP_ERR_INVALID_STATE
                      ? "the USB device stays in storage mode: it may need a switch this firmware does not know"
@@ -524,9 +566,8 @@ void eth_uplink_get_config(eth_config_t *out)
     xSemaphoreGive(s_lock);
 }
 
-esp_err_t eth_uplink_set_config(const eth_config_t *c, char *why, size_t n)
+esp_err_t eth_uplink_store_for_reboot(const eth_config_t *c, char *why, size_t n)
 {
-    ensure_lock();
     if (!eth_config_valid(c, why, n)) return ESP_ERR_INVALID_ARG;
     if (c->enabled && c->transport == ETH_TRANSPORT_USB) {
         /* One USB port: one device at a time (no hubs). */
@@ -539,18 +580,27 @@ esp_err_t eth_uplink_set_config(const eth_config_t *c, char *why, size_t n)
     }
     union {eth_record_t v2; eth_record_v1_t v1;} r;
     size_t size = record_encode(c, &r);
-    nvs_handle_t nvs;
-    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
-    if (err == ESP_OK) {
-        err = nvs_set_blob(nvs, "eth_cfg", &r, size);
-        if (err == ESP_OK) err = nvs_commit(nvs);
-        nvs_close(nvs);
-    }
+    return nvs_param_set_blob("eth_cfg", &r, size);
+}
+
+esp_err_t eth_uplink_set_config(const eth_config_t *c, char *why, size_t n)
+{
+    ensure_lock();
+    esp_err_t err = eth_uplink_store_for_reboot(c, why, n);
     if (err != ESP_OK) return err;   /* RAM keeps the previously saved value */
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_saved = *c;
     xSemaphoreGive(s_lock);
     return ESP_OK;
+}
+
+bool eth_uplink_restart_required(void)
+{
+    ensure_lock();
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool pending = memcmp(&s_saved, &s_running, sizeof s_saved) != 0;
+    xSemaphoreGive(s_lock);
+    return pending;
 }
 
 void eth_uplink_get_status(eth_status_t *out)
@@ -579,7 +629,9 @@ struct netif *eth_uplink_lwip_select(struct netif *sta)
 {
     if (!s_running.enabled || !s_lwip) return NULL;
     bool sta_ok = sta && netif_is_up(sta) && netif_is_link_up(sta) && ip4_addr_get_u32(netif_ip4_addr(sta));
-    bool eth_ok = netif_is_up(s_lwip) && netif_is_link_up(s_lwip) && ip4_addr_get_u32(netif_ip4_addr(s_lwip));
+    bool eth_ok = atomic_load(&s_link) && atomic_load(&s_has_ip) &&
+                  netif_is_up(s_lwip) && netif_is_link_up(s_lwip) && ip4_addr_get_u32(netif_ip4_addr(s_lwip));
+    if (atomic_exchange(&s_stability_lost, false)) s_selector.eth_streak = 0;
     int choice = eth_uplink_choose(&s_selector, true, s_running.preference, sta_ok, eth_ok);
     bool eth = choice == ETH_CHOICE_ETH;
     /* Already in TCP/IP context: rebind listeners in place, never queue-wait on ourselves. */
@@ -751,7 +803,7 @@ static esp_err_t post_ethernet(httpd_req_t *req)
     if (err != ESP_OK) {
         httpd_resp_set_status(req, err == ESP_ERR_INVALID_ARG ? "400 Bad Request" : "500 Internal Server Error");
         if (reply) {cJSON_AddBoolToObject(reply, "ok", false); cJSON_AddStringToObject(reply, "error", err == ESP_ERR_INVALID_ARG ? why : esp_err_to_name(err));}
-    } else if (reply) {cJSON_AddBoolToObject(reply, "ok", true); cJSON_AddBoolToObject(reply, "restart_required", true);}
+    } else if (reply) {cJSON_AddBoolToObject(reply, "ok", true); cJSON_AddBoolToObject(reply, "restart_required", eth_uplink_restart_required());}
     return send_json(req, reply);
 }
 

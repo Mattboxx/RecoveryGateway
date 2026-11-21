@@ -56,7 +56,9 @@ bool eth_uplink_usb_configured(void);
 void eth_uplink_start(void);
 void eth_uplink_get_config(eth_config_t *out);
 esp_err_t eth_uplink_set_config(const eth_config_t *c, char *why, size_t why_size);
+esp_err_t eth_uplink_store_for_reboot(const eth_config_t *c, char *why, size_t why_size);
 void eth_uplink_get_status(eth_status_t *out);
+bool eth_uplink_restart_required(void);
 /* TCP/IP context only (route supervisor). NULL: Ethernet disabled, keep the
  * legacy STA default; otherwise the lwIP netif to use as uplink. */
 struct netif *eth_uplink_lwip_select(struct netif *sta);

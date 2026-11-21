@@ -41,13 +41,12 @@ bool netif_hooks_install_ppp(struct netif *nif);
  * installed on every add, like the STA, AP and Ethernet netifs. false means
  * the netif must not start. */
 bool netif_hooks_register_usbnet(struct netif *nif);
-uint64_t netif_hooks_get_usbnet_bytes_in(void);
-uint64_t netif_hooks_get_usbnet_bytes_out(void);
 /* TCP/IP context: false when the ACL drops a packet received on the PPP
  * netif; true for every other interface. Counts PPP input bytes. */
 bool netif_hooks_ppp_input_allowed(struct pbuf *p, struct netif *input);
-uint64_t netif_hooks_get_ppp_bytes_in (void);
-uint64_t netif_hooks_get_ppp_bytes_out(void);
+/* Consistent cellular snapshot: raw PPP plus network-mode USB. TX counts
+ * frames accepted by the driver. RX includes frames filtered locally. */
+void netif_hooks_get_mobile_bytes(uint64_t *rx, uint64_t *tx);
 uint64_t netif_hooks_get_eth_bytes_in(void);
 uint64_t netif_hooks_get_eth_bytes_out(void);
 

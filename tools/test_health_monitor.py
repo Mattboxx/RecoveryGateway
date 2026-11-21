@@ -32,8 +32,9 @@ fixture=r'''
 #include <arpa/inet.h>
 #endif
 #define EXT_RAM_BSS_ATTR
-#define HLOCK() ((void)0)
-#define HUNLOCK() ((void)0)
+static bool health_locked;
+#define HLOCK() do {assert(!health_locked);health_locked=true;} while(0)
+#define HUNLOCK() do {assert(health_locked);health_locked=false;} while(0)
 #define ESP_OK 0
 #define ESP_ERR_INVALID_ARG -2
 #define ESP_ERR_INVALID_STATE -3
@@ -52,7 +53,7 @@ static uint64_t fixture_now=1000;
 static bool admit=true,race_generation;
 static int probe_result=1;
 static uint64_t health_now(void){return fixture_now;}
-typedef struct {struct {uint32_t addr;} ip;} esp_netif_ip_info_t;
+typedef struct {struct {uint32_t addr;} ip,netmask;} esp_netif_ip_info_t;
 typedef int wifi_ap_record_t;
 typedef struct {bool authority_ready;} ml_policy_status_t;
 static bool health_uplink(esp_netif_ip_info_t *info){(void)info;return true;}
@@ -61,20 +62,41 @@ static void ml_policy_get_status(ml_policy_status_t *p){p->authority_ready=false
 static bool tailscale_is_connected(void){return true;}
 static bool homelab_ops_admit(void){return admit;}
 static int ntfy_integration_queue_event(const char *s){assert(s);notifications++;return 0;}
+bool remote_command_reply(ops_recovery_origin_t origin,uint32_t destination,const char *s){
+    assert(origin==OPS_RECOVERY_TELEGRAM && destination==19 && s);notifications++;return true;}
 static void mqtt_integration_publish_now(void){publishes++;}
 static int nvs_open(const char *s,int mode,int *h){(void)s;(void)mode;*h=1;return ++stage==fault?-1:0;}
 static int nvs_set_blob(int h,const char *k,const void *p,size_t n){(void)h;(void)k;assert(p&&n);return ++stage==fault?-1:0;}
 static int nvs_commit(int h){(void)h;return ++stage==fault?-1:0;}
 static void nvs_close(int h){(void)h;}
+static int nvs_param_set_blob(const char *k,const void *p,size_t n){
+    int h;int err=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&h);
+    if(!err){err=nvs_set_blob(h,k,p,n);if(!err)err=nvs_commit(h);nvs_close(h);}
+    return err;
+}
 static void health_monitor_init(void){}
-static bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin){return origin==OPS_RECOVERY_LOCAL;}
+static bool telegram_allowed;
+static bool telegram_commands_on=true;
+bool remote_command_active(ops_recovery_origin_t origin,uint32_t destination){
+    return (origin==OPS_RECOVERY_LOCAL && !destination) ||
+           (origin==OPS_RECOVERY_TELEGRAM && destination==19 && telegram_commands_on);}
+static bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin){return origin==OPS_RECOVERY_LOCAL || (telegram_allowed && origin==OPS_RECOVERY_TELEGRAM);}
 static int homelab_ops_start_optional_worker(void){return worker_fail?-3:0;}
 '''
 adapters=r'''
-static bool uplink_address(void *netif,esp_netif_ip_info_t *info){(void)netif;(void)info;return true;}
-static void *uplink_internet_netif(void){return NULL;}
+static bool wan_up=true,local_up;
+static int wan,local;
+static bool uplink_address(void *netif,esp_netif_ip_info_t *info){
+    if(netif==&wan)return wan_up;
+    assert(netif==&local);
+    info->ip.addr=htonl(0xc0000201u);info->netmask.addr=htonl(0xffffff00u);
+    return local_up;
+}
+static void *uplink_internet_netif(void){return &wan;}
+static void *uplink_local_netif(void){return &local;}
 static int saved_probe_result=1;
-static int health_tcp(uint32_t addr,uint16_t port){assert(addr&&port);return saved_probe_result;}
+static unsigned saved_probe_calls;
+static int health_tcp(uint32_t addr,uint16_t port){assert(addr&&port);saved_probe_calls++;return saved_probe_result;}
 static int health_probe(const health_config_t *c,unsigned role){assert(c&&role<4);probe_calls++;if(race_generation)health_generation++;return probe_result;}
 '''
 tests=r'''
@@ -91,6 +113,12 @@ int main(void){
     fault=0;stage=0;assert(health_monitor_set(&c)==0);assert(configuration.interval_s==60);
     c.enabled=1;worker_fail=true;assert(health_monitor_set(&c)!=0&&!configuration.enabled);worker_fail=false;
     assert(health_monitor_set(&c)==0&&configuration.enabled);assert(health_configured(&c,1)&&!health_configured(&c,0));
+    assert(health_monitor_stage_enabled(false,false)==ESP_ERR_INVALID_STATE&&!health_locked);
+    assert(health_monitor_stage_enabled(true,false)==ESP_OK&&health_locked&&configuration.enabled);
+    health_monitor_finish_staged(false,false);assert(!health_locked&&configuration.enabled);
+    assert(health_monitor_stage_enabled(true,false)==ESP_OK&&health_locked&&configuration.enabled);
+    health_monitor_finish_staged(false,true);assert(!health_locked&&!configuration.enabled);
+    assert(health_monitor_set(&c)==ESP_OK);
     health_result r={0};health_observe(&r,0,3,1000,1,60);assert(r.state==H_DEGRADED&&r.failures==1&&r.due==121000);
     health_observe(&r,0,3,2000,1,60);assert(r.state==H_DEGRADED);
     health_observe(&r,0,3,3000,1,60);assert(r.state==H_DOWN&&r.failures==3);
@@ -134,8 +162,29 @@ int main(void){
     fixture_now+=30000;saved_tcp_poll();assert(notifications==before+2);
     char summary[160];saved_tcp_summary(summary,sizeof summary);
     assert(strstr(summary,"printer: not reachable")&&!strstr(summary,"192.0.2.15"));
+    telegram_allowed=true;
+    fixture_now+=5000;
+    assert(saved_tcp_remote_request("printer",OPS_RECOVERY_TELEGRAM,19)==ESP_OK);
+    telegram_commands_on=false;
+    uint64_t observed=saved_results[0].observed;
+    saved_tcp_poll();assert(notifications==before+2 && saved_results[0].observed==observed);
+    fixture_now+=5000;
+    assert(saved_tcp_remote_request("printer",OPS_RECOVERY_TELEGRAM,19)==ESP_ERR_NOT_SUPPORTED);
+    telegram_commands_on=true;
+    assert(saved_tcp_remote_request("printer",OPS_RECOVERY_TELEGRAM,19)==ESP_OK);
+    saved_tcp_poll();assert(notifications==before+3);
     safe=health_monitor_snapshot(false);plain=cJSON_PrintUnformatted(safe);
     assert(!strstr(plain,"printer")&&!strstr(plain,"192.0.2.15"));free(plain);cJSON_Delete(safe);
+    unsigned probes=saved_probe_calls;
+    wan_up=false;local_up=true;saved_probe_result=1;
+    fixture_now+=5000;
+    assert(saved_tcp_request("printer",OPS_RECOVERY_LOCAL)==ESP_OK);
+    saved_tcp_poll();assert(saved_results[0].outcome==1&&saved_probe_calls==probes+1);
+    strcpy(targets[0].address,"198.51.100.15");
+    assert(saved_tcp_set(targets)==ESP_OK);
+    fixture_now+=5000;
+    assert(saved_tcp_request("printer",OPS_RECOVERY_LOCAL)==ESP_OK);
+    saved_tcp_poll();assert(saved_results[0].outcome<0&&saved_probe_calls==probes+1);
     puts("PASS: saved TCP checks validation, save failure, bounded job, scheduled transition and redaction");
     puts("PASS: actual health bounds/persistence faults, worker refusal, cadence/admission/generation, failure/backoff evidence and sanitized snapshot (mock probes/platform)");
 }
@@ -143,9 +192,11 @@ int main(void){
 with tempfile.TemporaryDirectory(prefix='health-monitor-') as folder:
     p=Path(folder);(p/'test.c').write_text(fixture+types+adapters+''.join(function(s) for s in (
         'static uint32_t health_checksum(','static bool health_name(','static bool health_public(',
-        'static bool health_valid(','static esp_err_t health_save_locked(','esp_err_t health_monitor_set(',
+        'static bool health_valid(','static esp_err_t health_store_locked(','static void health_publish_locked(',
+        'static esp_err_t health_save_locked(','esp_err_t health_monitor_set(',
+        'esp_err_t health_monitor_stage_enabled(','void health_monitor_finish_staged(',
         'esp_err_t health_monitor_set_enabled(','static bool saved_valid(','esp_err_t saved_tcp_set(',
-        'esp_err_t saved_tcp_request(','static const char *saved_state(','void saved_tcp_summary(','static void saved_tcp_poll(','static bool health_configured(','static void health_observe(',
+        'esp_err_t saved_tcp_remote_request(','esp_err_t saved_tcp_request(','static const char *saved_state(','void saved_tcp_summary(','static void saved_tcp_poll(','static bool health_configured(','static void health_observe(',
         'static const char *health_reason(','static const char *health_next_step(','void health_monitor_poll(','void health_monitor_codes(','cJSON *health_monitor_snapshot('))+tests)
     binary=p/('test.exe' if os.name=='nt' else 'test')
     flags=['-I',str(ROOT/'main'),'-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable','-O1','-g']

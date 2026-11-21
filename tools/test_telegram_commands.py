@@ -24,10 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = (ROOT / 'main/telegram_commands.c').read_text(encoding='utf-8').replace('\r\n', '\n')
 fw = SRC[SRC.index('#ifndef TG_COMMANDS_HOST_TEST'):]
 assert 'offset=-1&limit=1&timeout=0' in fw and 's_have_offset = true' in fw
-run_at = fw.index('run(c, u.cmd[i].text);')
-assert 'if (!poll_current(generation, token, chat)) break;\n            run(c, u.cmd[i].text);' in fw
+run_at = fw.index('run(c, u.cmd[i].text, destination,')
+assert fw.rindex('if (!poll_current(generation, token, chat)) break;', 0, run_at) < run_at
+assert fw.rindex('if (!destination || !poll_current(generation, token, chat)) return false;', 0, run_at) < run_at
 assert fw.rindex('if (u.last_update_id > s_last_update) s_last_update = u.last_update_id;', 0, run_at) < run_at
-assert 'if ((size_t)total >= cap - 1 || !esp_http_client_is_complete_data_received(*client)) total = -1;' in fw
 assert 'timeout=%d' in fw and '.keep_alive_enable = true' in fw   # long polling on one connection
 assert 'memset(url, 0, sizeof url);' in fw and 'memset(token, 0, sizeof token);' in fw
 assert 'MALLOC_CAP_SPIRAM) == pdPASS' in fw and 'nvs_param_set' not in fw[:fw.index('esp_err_t telegram_commands_store_config')]
@@ -36,9 +36,12 @@ assert 'remote_command_run(message, c->info_enabled, c->allow_direct_mac' in ntf
 assert 'remote_command_run(command, c->info_enabled, c->allow_direct_mac' in SRC
 
 poll_current = fw[fw.index('static bool poll_current('):fw.index('static bool poll_once(')]
+fetch_code = fw[fw.index('#define TG_LONG_POLL_S'):fw.index('static esp_err_t reply(')]
+poll_once = fw[fw.index('static bool poll_once('):fw.index('static void task_main(')]
 PROGRAM = r'''
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "telegram_commands.h"
 #define portMAX_DELAY 0
@@ -53,6 +56,63 @@ static bool notify_telegram_target(char *token,size_t tc,char *chat,size_t cc){
     snprintf(token,tc,"fixture");snprintf(chat,cc,"42");return target_present;
 }
 ''' + poll_current + r'''
+typedef int esp_http_client_method_t;
+typedef void *esp_http_client_handle_t;
+typedef struct {const char *url;int method,timeout_ms;bool keep_alive_enable,disable_auto_redirect;void *crt_bundle_attach;} esp_http_client_config_t;
+enum {HTTP_METHOD_GET,ESP_OK,MALLOC_CAP_SPIRAM,MALLOC_CAP_8BIT=4};
+#define TG_ANSWER_MAX 512
+static unsigned request_count,cleanups,runs;
+static uint32_t s_last_update;
+static bool s_have_offset;
+static struct {uint32_t skipped_other_chats;char last_error[64];} s_st;
+static char url_used[200],error[64];
+static void *ml_tls_bundle_attach;
+static int response_mode;
+static size_t remaining;
+static const char *current;
+static bool complete;
+static const char *readable="{\"ok\":true,\"result\":[{\"update_id\":12,\"message\":{\"date\":1800000000,\"chat\":{\"id\":42},\"text\":\"help\"}}]}";
+static void set_error(const char *msg){snprintf(error,sizeof error,"%s",msg);}
+static uint32_t wall(void){return 1800000000;}
+static void *heap_caps_malloc(size_t n,int flags){assert(flags==(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));return malloc(n);}
+static uint32_t notify_telegram_destination(const char *token,const char *chat){assert(token&&chat);return 9;}
+static int esp_http_client_set_url(void *c,const char *url){assert(c);snprintf(url_used,sizeof url_used,"%s",url);return ESP_OK;}
+static void *esp_http_client_init(const esp_http_client_config_t *c){assert(c->keep_alive_enable);esp_http_client_set_url(&s_lock,c->url);return &s_lock;}
+static void esp_http_client_cleanup(void *c){assert(c);cleanups++;}
+static int esp_http_client_open(void *c,int len){
+    assert(c&&!len);request_count++;
+    assert(strstr(url_used,"offset=12"));
+    if(request_count==1){assert(strstr(url_used,"limit=5&timeout=25"));}
+    else {assert(request_count==2&&strstr(url_used,"limit=1&timeout=0"));}
+    if(response_mode==2)return -1;
+    complete=request_count==2&&response_mode!=1;
+    current=response_mode==3?"{\"ok\":true,\"result\":[{\"update_id\":99":readable;
+    remaining=complete?strlen(current):TG_ANSWER_MAX+8;
+    return ESP_OK;
+}
+static int esp_http_client_fetch_headers(void *c){assert(c);return 0;}
+static int esp_http_client_get_status_code(void *c){assert(c);return 200;}
+static int esp_http_client_read(void *c,char *out,int len){
+    assert(c&&len>0);size_t take=remaining<(size_t)len?remaining:(size_t)len;
+    if(complete)memcpy(out,current,take);else memset(out,'x',take);
+    remaining-=take;return (int)take;
+}
+static bool esp_http_client_is_complete_data_received(void *c){assert(c);return complete&&!remaining;}
+static void run(const telegram_commands_config_t *cfg,const char *text,uint32_t destination,bool private_chat){
+    assert(cfg&&!strcmp(text,"help")&&destination==9&&private_chat&&s_last_update==12);runs++;
+}
+''' + fetch_code + poll_once + r'''
+static void oversized_batches(void){
+    for(response_mode=0;response_mode<4;response_mode++){
+        esp_http_client_handle_t client=NULL;
+        s_last_update=11;s_have_offset=true;request_count=cleanups=runs=0;
+        bool ok=poll_once(&client,&s_cfg,"fixture","42",s_generation);
+        assert(request_count==(response_mode==2?1:2));
+        if(!response_mode)assert(ok&&runs==1&&s_last_update==12&&cleanups==1);
+        else assert(!ok&&!runs&&s_last_update==11);
+        if(response_mode==1)assert(strstr(error,"receive limit")&&cleanups==2);
+    }
+}
 static const char *msg(char *buf, size_t cap, long long uid, long long chat, long date, const char *text) {
     snprintf(buf, cap, "{\"update_id\":%lld,\"message\":{\"message_id\":1,\"chat\":{\"id\":%lld,\"type\":\"private\"},\"date\":%ld,\"text\":\"%s\"}}", uid, chat, date, text);
     return buf;
@@ -67,6 +127,9 @@ int main(void) {
     s_cfg.commands_only_when_tailscale_down=true;connected=true;
     assert(!poll_current(4,"fixture","42"));
     connected=false;assert(poll_current(4,"fixture","42"));
+    tailscale_enabled=false;connected=true;assert(poll_current(4,"fixture","42"));
+    oversized_batches();
+    tailscale_enabled=true;connected=false;
     target_present=false;assert(!poll_current(4,"fixture","42"));
     target_present=true;s_cfg.commands_enabled=false;
     assert(!poll_current(4,"fixture","42"));
@@ -124,7 +187,7 @@ int main(void) {
 '''
 
 
-FETCH = fw[fw.index('#define TG_LONG_POLL_S'):fw.index('static void reply(')]
+FETCH = fw[fw.index('#define TG_LONG_POLL_S'):fw.index('static esp_err_t reply(')]
 FETCH_PROGRAM = r"""
 #include <assert.h>
 #include <stdbool.h>
@@ -149,7 +212,7 @@ static int esp_http_client_get_status_code(esp_http_client_handle_t c) { (void)c
 static int esp_http_client_read(esp_http_client_handle_t c, char *o, int n) {
     (void)c; int left = (int)strlen(body) - body_off; if (left <= 0) return 0; if (n > left) n = left; if (n > 7) n = 7;
     memcpy(o, body + body_off, (size_t)n); body_off += n; return n; }
-static bool esp_http_client_is_complete_data_received(esp_http_client_handle_t c) { (void)c; return complete; }
+static bool esp_http_client_is_complete_data_received(esp_http_client_handle_t c) { (void)c; return complete && (size_t)body_off==strlen(body); }
 static esp_err_t esp_http_client_cleanup(esp_http_client_handle_t c) { (void)c; cleanups++; live--; return ESP_OK; }
 @@FETCH@@
 int main(void) {
@@ -164,7 +227,9 @@ int main(void) {
     assert(fetch(&cl, "TOKEN", "q", a, sizeof a) > 0 && inits == 2);
     /* an answer larger than allowed or cut short is refused and never reused */
     body = "{\"ok\":true,\"result\":[0123456789012345678901234567890123456789012345678901234567890]}";
-    assert(fetch(&cl, "TOKEN", "q", a, sizeof a) == -1 && !cl);
+    assert(fetch(&cl, "TOKEN", "q", a, sizeof a) == TG_FETCH_TOO_LARGE && !cl);
+    char exact[sizeof a];memset(exact,' ',sizeof exact-1);memcpy(exact,"{}",2);exact[sizeof exact-1]=0;
+    body=exact;assert(fetch(&cl,"TOKEN","q",a,sizeof a)==(int)(sizeof a-1)&&cl&&!strcmp(exact,a));
     body = "{}"; complete = 0; assert(fetch(&cl, "TOKEN", "q", a, sizeof a) == -1 && !cl); complete = 1;
     status = 502; assert(fetch(&cl, "TOKEN", "q", a, sizeof a) == -1 && !cl); status = 200;
     /* a URL that does not fit is refused before any connection */

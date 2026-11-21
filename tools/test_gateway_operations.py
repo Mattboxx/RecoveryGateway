@@ -97,6 +97,10 @@ static void event_locked(unsigned state,unsigned index) {(void)state;(void)index
 static bool ntfy_integration_queue_event(const char *text) {
     assert(strlen(text)<sizeof notice); strcpy(notice,text); ++sent; return true;
 }
+bool remote_command_reply(ops_recovery_origin_t origin,uint32_t destination,const char *text) {
+    assert(origin==OPS_RECOVERY_TELEGRAM && destination==19);
+    return ntfy_integration_queue_event(text);
+}
 ''' + function(ops_source, 'static void finish_locked(')
     + function(ops_source, 'static void notify_job_result(') + r'''
 int main(void) {
@@ -116,13 +120,18 @@ int main(void) {
     finish_locked(J_TIMEOUT); assert(!job.notify_result); /* another MAC cannot inherit an outage */
     job.manual=job.wake=true;
     finish_locked(J_REACHABLE); assert(job.notify_result);
-    notify_job_result(&job); assert(sent==2 && strstr(notice,"WoL not sent"));
+    notify_job_result(&job); assert(sent==2 && strstr(notice,"Wake not sent"));
     job.wake_attempted=true;
     finish_locked(J_UNKNOWN); assert(job.notify_result);
-    notify_job_result(&job); assert(sent==3 && strstr(notice,"WoL send failed"));
+    notify_job_result(&job); assert(sent==3 && strstr(notice,"Wake send failed"));
     job.packet_sent=true;
     finish_locked(J_REACHABLE); assert(job.notify_result);
-    notify_job_result(&job); assert(sent==4 && strstr(notice,"WoL packet sent"));
+    notify_job_result(&job); assert(sent==4 && strstr(notice,"Wake packet sent"));
+    job.packet_sent=false;job.wake_datagrams=1;
+    job.origin=OPS_RECOVERY_TELEGRAM;job.destination=19;
+    finish_locked(J_REACHABLE);notify_job_result(&job);
+    assert(sent==5 && strstr(notice,"burst partly sent"));
+    job.origin=OPS_RECOVERY_LOCAL;job.destination=0;
     job.profile.notify=0;
     finish_locked(J_REACHABLE); assert(!job.notify_result);
     puts("PASS: manual recovery outcomes and one alert per new monitored outage");
@@ -260,6 +269,8 @@ const char *service_check_next_step(unsigned s){(void)s;return "fixture step";}
 typedef int esp_netif_t;
 typedef struct {struct {uint32_t addr;} ip;} esp_netif_ip_info_t;
 static bool authenticated=true,uplink=true,control=true;
+static bool refresh_pending;
+static bool portmap_refresh_pending(void){return refresh_pending;}
 static int rows=1,send_result;
 static tailnet_forward_rule_t rule={.valid=1,.enabled=1,.proto=6,.source_prefix=32,.listen_port=18830,.destination_port=1883,.destination="100.64.0.2",.name="Synthetic broker"};
 static tailnet_forward_runtime_t runtime={.installed=true,.resolved_ip=0x64400002,.accepted_packets=4,.blocked_packets=1};
@@ -281,6 +292,8 @@ void tailnet_forward_format_sources(const tailnet_forward_rule_t *r,char *out,si
 static void check(const char *code){
  httpd_req_t r={.status=200};assert(tailnet_forward_handler(&r)==send_result&&r.status==200);
  cJSON *root=cJSON_Parse(r.response);assert(root);free(r.response);
+ cJSON *pending=cJSON_GetObjectItem(root,"refresh_pending");
+ assert(cJSON_IsBool(pending)&&cJSON_IsTrue(pending)==refresh_pending);
  cJSON *a=cJSON_GetObjectItem(root,"rules");assert(cJSON_GetArraySize(a)==rows);
  cJSON *j=cJSON_GetArrayItem(a,0),*d=cJSON_GetObjectItem(j,"diagnostic");
  assert(!strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(d,"code")),code));
@@ -295,6 +308,7 @@ static unsigned allocations,fail_at;
 static void *allocate(size_t n){return ++allocations==fail_at?NULL:malloc(n);}
 int main(void){
  check("mapping_installed");
+ refresh_pending=true;check("mapping_installed");refresh_pending=false;
  for(unsigned mask=0;mask<64;mask++){
   rule.enabled=!!(mask&1);uplink=!!(mask&2);control=!!(mask&4);runtime.resolved_ip=(mask&8)?1:0;
   runtime.installed=!!(mask&16);runtime.error[0]=(mask&32)?'x':0;

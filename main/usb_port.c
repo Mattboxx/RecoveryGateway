@@ -385,6 +385,7 @@ int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *
 #include "freertos/semphr.h"
 #include "freertos/ringbuf.h"
 #include "freertos/task.h"
+#include "task_reaper.h"
 #include "usb/usb_host.h"
 
 #define TAG "usb_port"
@@ -404,13 +405,16 @@ int usbp_serial_find(const uint8_t *cfg, size_t len, uint8_t iface, usbp_net_t *
 /* USB host library objects, enumeration buffers and FIFO setup before any
  * device: an estimate, refined by the measurement in usb_port_memory(). */
 #define USBP_HOST_ESTIMATE (6 * 1024)
+#define USBP_CLIENT_ESTIMATE 1024      /* client object, event queue and semaphore */
 #define USBP_TRANSFER_OVERHEAD 128     /* per transfer: URB and heap headers (estimate) */
 #define USBP_PIPE_OVERHEAD 1024        /* endpoint pipes, descriptor lists, interface claims (estimate) */
 #define USBP_SERIAL_OUT_LEAN 512
 
 static SemaphoreHandle_t s_lock, s_changed, s_done;   /* created by usb_port_start only */
 static usb_host_client_handle_t s_client;
-static bool s_started;
+static TaskHandle_t s_lib_pump, s_client_pump;        /* owned by the cellular task */
+static atomic_bool s_started;
+enum { USBP_PUMP_START = 1, USBP_PUMP_CANCEL };
 /* Plain state lives in PSRAM so the USB code costs no internal RAM while it
  * is off; atomics and spinlocks stay internal (no atomics in PSRAM on S3). */
 EXT_RAM_BSS_ATTR static usbp_device_t s_dev;   /* under s_lock */
@@ -425,6 +429,7 @@ static unsigned s_switched_count;
  * loss instead of a leak per retry). */
 static bool s_poisoned;
 EXT_RAM_BSS_ATTR static usbp_memory_t s_mem;   /* measured internal RAM use */
+static portMUX_TYPE s_mem_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* One data session at a time: a serial (AT/PPP) port or a network function.
  * State is written by the open/close owner task; transfer callbacks run in
@@ -545,10 +550,10 @@ static void read_device(uint8_t address)
     usb_host_device_close(s_client, h);
 }
 
-static void device_removed(int address)
+static void device_removed(uint8_t address)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    bool changed = s_dev.present && (address < 0 || s_dev.address == address);
+    bool changed = s_dev.present && s_dev.address == address;
     if (changed) {s_dev.present = false; s_dev.seq++;}
     xSemaphoreGive(s_lock);
     if (changed) xSemaphoreGive(s_changed);
@@ -561,22 +566,30 @@ static void client_event(const usb_host_client_event_msg_t *m, void *arg)
     case USB_HOST_CLIENT_EVENT_NEW_DEV: read_device(m->new_dev.address); break;
     case USB_HOST_CLIENT_EVENT_DEV_GONE:
         if (m->dev_gone.dev_hdl == s_net.dev) {atomic_store(&s_net.gone, true); atomic_store(&s_net.link, false);}
-        device_removed(-1);
         break;
     case USB_HOST_CLIENT_EVENT_DEV_REMOVED: device_removed(m->dev_removed.address); break;
     default: break;
     }
 }
 
+static void wait_for_pump_start(void)
+{
+    uint32_t command = USBP_PUMP_CANCEL;
+    xTaskNotifyWait(0, 0, &command, portMAX_DELAY);
+    if (command != USBP_PUMP_START) task_reaper_self_delete();
+}
+
 static void client_task(void *arg)
 {
     (void)arg;
+    wait_for_pump_start();
     for (;;) usb_host_client_handle_events(s_client, portMAX_DELAY);
 }
 
 static void lib_task(void *arg)
 {
     (void)arg;
+    wait_for_pump_start();
     for (;;) {
         uint32_t flags = 0;
         usb_host_lib_handle_events(portMAX_DELAY, &flags);
@@ -586,12 +599,20 @@ static void lib_task(void *arg)
 
 static size_t internal_free(void) {return heap_caps_get_free_size(MALLOC_CAP_INTERNAL);}
 
-esp_err_t usb_port_start(const char **why)
+static void record_host_cost(size_t before)
 {
-    *why = "";
-    if (s_started) return ESP_OK;
+    size_t after = internal_free();
+    portENTER_CRITICAL(&s_mem_mux);
+    if (before > after) s_mem.host_bytes += (uint32_t)(before - after);
+    portEXIT_CRITICAL(&s_mem_mux);
+}
+
+static esp_err_t install_host(const char **why)
+{
     size_t before = internal_free();
+    portENTER_CRITICAL(&s_mem_mux);
     s_mem.free_at_start = (uint32_t)before;
+    portEXIT_CRITICAL(&s_mem_mux);
     if (!usbp_fits(before, USBP_HOST_ESTIMATE)) {
         *why = "not enough internal RAM for the USB port (it keeps 40 KB free for the rest of the gateway): turn off unused features";
         return ESP_ERR_NO_MEM;
@@ -600,38 +621,96 @@ esp_err_t usb_port_start(const char **why)
     s_changed = xSemaphoreCreateBinary();
     s_done = xSemaphoreCreateBinary();
     s_cfg = heap_caps_malloc(USBP_CFG_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_lock || !s_changed || !s_done || !s_cfg) {*why = "no memory for the USB port"; return ESP_ERR_NO_MEM;}
-    /* No ESP_INTR_FLAG_IRAM: usb_flash.lf keeps the driver's buffer code in flash. */
-    usb_host_config_t host = {.skip_phy_setup = false, .intr_flags = ESP_INTR_FLAG_LOWMED};
+    esp_err_t err = ESP_ERR_NO_MEM;
+    *why = "no memory for the USB port";
+    if (!s_lock || !s_changed || !s_done || !s_cfg) goto fail;
+
+    *why = "no memory for the USB event tasks";
+    if (xTaskCreatePinnedToCoreWithCaps(lib_task, "usb_lib", 3072, NULL, 7, &s_lib_pump, tskNO_AFFINITY,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) goto fail;
+    if (xTaskCreatePinnedToCoreWithCaps(client_task, "usb_port", 4096, NULL, 7, &s_client_pump, tskNO_AFFINITY,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) goto fail;
+
+    /* Prevent enumeration before the gateway client has registered. The
+     * tasks are already reserved, and no callback can observe partial state. */
+    usb_host_config_t host = {
+        .skip_phy_setup = false,
+        .intr_flags = ESP_INTR_FLAG_LOWMED, /* usb_flash.lf keeps buffer code in flash */
+        .root_port_unpowered = true,
+    };
 #if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
     host.enum_filter_cb = enum_filter;
 #endif
-    esp_err_t err = usb_host_install(&host);
-    if (err != ESP_OK) {*why = "the USB host did not start"; return err;}
-    s_started = true;   /* the PHY now belongs to the OTG host until restart */
-    if (xTaskCreatePinnedToCoreWithCaps(lib_task, "usb_lib", 3072, NULL, 7, NULL, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {*why = "no memory for the USB task"; return ESP_ERR_NO_MEM;}
-    const usb_host_client_config_t client = {.is_synchronous = false, .max_num_event_msg = 5,
-                                             .async = {.client_event_callback = client_event, .callback_arg = NULL}};
-    if ((err = usb_host_client_register(&client, &s_client)) != ESP_OK) {*why = "the USB host did not start"; return err;}
-    if (xTaskCreatePinnedToCoreWithCaps(client_task, "usb_port", 4096, NULL, 7, NULL, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {*why = "no memory for the USB task"; return ESP_ERR_NO_MEM;}
-    size_t after = internal_free();
-    s_mem.host_bytes = (uint32_t)(before > after ? before - after : 0);
-    ESP_LOGI(TAG, "USB host started: %u bytes of internal RAM, %u free", (unsigned)s_mem.host_bytes, (unsigned)after);
+    err = usb_host_install(&host);
+    if (err == ESP_OK) {
+        record_host_cost(before);
+        return ESP_OK;
+    }
+    *why = "the USB host did not start";
+fail:
+    if (s_client_pump) xTaskNotify(s_client_pump, USBP_PUMP_CANCEL, eSetValueWithOverwrite);
+    if (s_lib_pump) xTaskNotify(s_lib_pump, USBP_PUMP_CANCEL, eSetValueWithOverwrite);
+    s_client_pump = s_lib_pump = NULL;
+    if (s_lock) vSemaphoreDelete(s_lock);
+    if (s_changed) vSemaphoreDelete(s_changed);
+    if (s_done) vSemaphoreDelete(s_done);
+    s_lock = s_changed = s_done = NULL;
+    heap_caps_free(s_cfg);
+    s_cfg = NULL;
+    return err;
+}
+
+esp_err_t usb_port_start(const char **why)
+{
+    *why = "";
+    if (atomic_load(&s_started)) return ESP_OK;
+    if (!s_lib_pump) {
+        esp_err_t err = install_host(why);
+        if (err != ESP_OK) return err;
+    }
+    if (!s_client) {
+        size_t before = internal_free();
+        if (!usbp_fits(before, USBP_CLIENT_ESTIMATE)) {
+            *why = "not enough internal RAM for the USB client";
+            return ESP_ERR_NO_MEM;
+        }
+        const usb_host_client_config_t client = {.is_synchronous = false, .max_num_event_msg = 5,
+                                                 .flags = {.notify_dev_removed = true},
+                                                 .async = {.client_event_callback = client_event, .callback_arg = NULL}};
+        usb_host_client_handle_t registered = NULL;
+        esp_err_t err = usb_host_client_register(&client, &registered);
+        if (err != ESP_OK) {*why = "the USB client did not register"; return err;}
+        s_client = registered;
+        record_host_cost(before);
+    }
+    size_t before = internal_free();
+    if (!usbp_fits(before, 0)) {
+        *why = "not enough internal RAM to bring up the USB port";
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err = usb_host_lib_set_root_port_power(true);
+    if (err != ESP_OK) {*why = "the USB root port did not start"; return err;}
+    record_host_cost(before);
+    xTaskNotify(s_client_pump, USBP_PUMP_START, eSetValueWithOverwrite);
+    xTaskNotify(s_lib_pump, USBP_PUMP_START, eSetValueWithOverwrite);
+    atomic_store(&s_started, true);
+    ESP_LOGI(TAG, "USB host started: %u bytes of internal RAM, %u free", (unsigned)s_mem.host_bytes, (unsigned)internal_free());
+    *why = "";
     return ESP_OK;
 }
 
 void usb_port_memory(usbp_memory_t *out)
 {
+    portENTER_CRITICAL(&s_mem_mux);
     *out = s_mem;
+    portEXIT_CRITICAL(&s_mem_mux);
     out->free_now = (uint32_t)internal_free();
     out->min_free = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
 }
 
 bool usb_port_device(usbp_device_t *out, uint8_t *cfg, size_t cap, size_t *len)
 {
-    if (!s_started) {memset(out, 0, sizeof *out); if (len) *len = 0; return false;}
+    if (!atomic_load(&s_started)) {memset(out, 0, sizeof *out); if (len) *len = 0; return false;}
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *out = s_dev;
     size_t n = s_cfg_len < cap ? s_cfg_len : cap;
@@ -643,7 +722,7 @@ bool usb_port_device(usbp_device_t *out, uint8_t *cfg, size_t cap, size_t *len)
 
 void usb_port_wait(uint32_t seq, uint32_t ms)
 {
-    if (!s_started) {vTaskDelay(pdMS_TO_TICKS(ms)); return;}
+    if (!atomic_load(&s_started)) {vTaskDelay(pdMS_TO_TICKS(ms)); return;}
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool same = s_dev.seq == seq;
     xSemaphoreGive(s_lock);
@@ -1010,7 +1089,9 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
         *why = text;
         return ESP_ERR_NO_MEM;
     }
+    portENTER_CRITICAL(&s_mem_mux);
     s_mem.lean = lean;
+    portEXIT_CRITICAL(&s_mem_mux);
     s_net.kind = f->kind; s_net.ctrl = f->ctrl; s_net.data = f->data; s_net.data_alt = f->data_alt;
     s_net.ep_in = f->ep_in; s_net.ep_out = f->ep_out; s_net.ep_notify = notify ? f->ep_notify : 0; s_net.mac_index = f->mac_index;
     s_net.netif = netif;
@@ -1079,10 +1160,13 @@ static esp_err_t session_open(const usbp_device_t *d, const usbp_net_t *f, esp_n
     if (s_net.notify) resubmit(s_net.notify);
     if (!serial && (f->kind == USBP_NET_RNDIS || !notify)) set_link(true);
     size_t after = internal_free();
-    s_mem.session_bytes = (uint32_t)(before > after ? before - after : 0);
+    uint32_t session_bytes = (uint32_t)(before > after ? before - after : 0);
+    portENTER_CRITICAL(&s_mem_mux);
+    s_mem.session_bytes = session_bytes;
+    portEXIT_CRITICAL(&s_mem_mux);
     ESP_LOGI(TAG, "%04x:%04x %s on interface %u (%s): %u bytes of internal RAM, %u free", d->vid, d->pid,
              serial ? "serial port" : f->kind == USBP_NET_ECM ? "CDC-ECM" : f->kind == USBP_NET_NCM ? "CDC-NCM" : "RNDIS",
-             f->data, lean ? "lean" : "full", (unsigned)s_mem.session_bytes, (unsigned)after);
+             f->data, lean ? "lean" : "full", (unsigned)session_bytes, (unsigned)after);
     return ESP_OK;
 fail:
     usb_port_net_close();

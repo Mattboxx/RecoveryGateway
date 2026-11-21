@@ -1,7 +1,7 @@
 /* Synchronous ICMP echo / traceroute (see net_diag.h).
  *
  * Built directly on lwIP's BSD-socket layer (SOCK_RAW + IPPROTO_ICMP) so
- * that HTTP handlers can call it synchronously and write the formatted
+ * that callers can write the formatted
  * results straight into a response buffer. Matches the source-binding
  * behaviour of the ip4_route_src_hook wrapper in lwip_route_hook.c —
  * locally-originated probes get routed by the same logic as any other

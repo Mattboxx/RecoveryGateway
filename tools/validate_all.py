@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -17,10 +18,10 @@ DRIVERS+=['json_guard','service_transfer','service_retry','capabilities','mqtt_d
 DRIVERS+=['soak_serial']
 DRIVERS+=['lab_echo']
 DRIVERS+=['gateway_benchmark']
-DRIVERS+=['dhcps_dns']
+DRIVERS+=['dhcps_dns','fourvia6_flows']
 # wg_rx_owned / wg_rx_sdk test the RX-ownership experiment (MicroLink branch
 # perf/owned-rx-pbuf-20261029); dev.3 leaves that change out (no measured gain).
-DRIVERS+=['wg_crypto_hotloop','ml_perf','wg_crypto_diff','wg_mgr_wake','poly1305_xtensa','chacha20_xtensa','forward_drop_counters','web_idle','sdlog_memory_sink','sdlog_probe','tailnet_event_text','control_loss_setting','tls_distrust','wg_rx_path','coord_session_end','derp_frame_read','stun_parse','dns_relay_upstream','wg_log_rate','fast_chksum','x25519','derp_rx_wait','wg_handshake','x25519_xtensa','x25519_pie','x25519_control','boot_timeline','netcheck_budget','notify_text','telegram_commands','tailnet_dns']
+DRIVERS+=['wg_crypto_hotloop','ml_perf','wg_crypto_diff','wg_mgr_wake','poly1305_xtensa','chacha20_xtensa','forward_drop_counters','web_idle','build_identity','web_transfer','sdlog_memory_sink','sdlog_probe','tailnet_event_text','control_loss_setting','tls_distrust','wg_rx_path','coord_session_end','derp_frame_read','stun_parse','dns_relay_upstream','wg_log_rate','fast_chksum','x25519','derp_rx_wait','wg_handshake','x25519_xtensa','x25519_pie','x25519_control','boot_timeline','netcheck_budget','notify_text','telegram_commands','tailnet_dns']
 DRIVERS+=['coord_recovery']
 DRIVERS+=['lab_cleanup']
 DRIVERS+=['candidate_ota_guard']
@@ -35,21 +36,29 @@ DRIVERS+=['task_reaper']
 DRIVERS+=['first_boot','password_crypto']
 DRIVERS+=['socket_origin','reliability_audit','first_boot_reboot','lan_name','lan_mdns','index_variants','resp_headers','notify_store','nvs_flags','nvs_txn','release_list']
 DRIVERS+=['ota_flash']
+DRIVERS+=['sdlog_download']
 DRIVERS+=['ota_local']
 DRIVERS+=['notify_delivery']
 DRIVERS+=['notify_ui']
 DRIVERS+=['notify_api']
 DRIVERS+=['log_capture']
 DRIVERS+=['power_diagnostics','power_diagnostics_ui']
-SANITIZERS='UPSTREAM NTFY SNMP ROUTE NETIF RUNTIME PORTMAP FORWARDING WEB_PORT TAILNET PEER_DNS OTA GATEWAY POLICY OPS LEASE HEALTH JSON TRANSFER RETRY CAP DISCOVERY WEB PROFILE SC MQTTSTATE ETH MQTTCMD TASKMEM REAPER FIRSTBOOT ORIGIN FBREBOOT LANNAME MDNS'.split()
-SANITIZERS+=['OTAFLASH','NOTIFY','NVS_FLAGS','NVS_TXN']
-SANITIZERS+=['LOG']
-SANITIZERS+=['ML_PERF','WG_CRYPTO_DIFF']
-SANITIZERS+=['MQTTPOWER']
-SANITIZERS+=['OTALOCAL','RELIABILITY']
-SANITIZERS+=['WG_RX']
-SANITIZERS+=['HOTLOOP']
-SANITIZERS+=['POWER_DIAG','PASSWORD_CRYPTO']
+DRIVERS+=['wifi_lease']
+DRIVERS+=['wifi_scan']
+# Drivers own their compiler switches. Discover their literal environment
+# lookups so new fixture switches do not need a second registry.
+SANITIZER_GET = re.compile(r"""\b(?:os\.environ\.get|os\.getenv)\(\s*['"]([A-Z][A-Z0-9_]*_SANITIZE)['"]""")
+
+
+def sanitizer_flags(root, drivers):
+    result = {}
+    for name in drivers:
+        path = root / "tools" / ("test_" + name + ".py")
+        flags = sorted(set(SANITIZER_GET.findall(path.read_text(encoding="utf-8"))))
+        if flags:
+            result[name] = flags
+    return result
+
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -58,6 +67,9 @@ def main():
     parser.add_argument('--sanitizers',action='store_true')
     parser.add_argument('--only',help='Comma-separated driver stems, for targeted reruns')
     args=parser.parse_args()
+    selected = args.only.split(',') if args.only else DRIVERS
+    if any(name not in DRIVERS for name in selected):
+        parser.error('Unknown offline driver')
     folder=ROOT/'build'/('validation-'+datetime.now().strftime('%Y%m%d-%H%M%S-%f'));folder.mkdir(parents=True)
     env=os.environ.copy()
     packages=Path.home()/'.platformio/packages'
@@ -86,10 +98,14 @@ def main():
         source=managed/relative
         if source.is_file():
             env.setdefault(variable,str(source))
+    enabled_sanitizers = {}
     if args.sanitizers:
-        if os.name=='nt':parser.error('Use Linux ASan/UBSan; do not mark unavailable Windows sanitizers as passed')
-        for prefix in SANITIZERS:env[prefix+'_SANITIZE']='1'
-        env.setdefault('ASAN_OPTIONS','detect_leaks=1:halt_on_error=1');env.setdefault('UBSAN_OPTIONS','halt_on_error=1')
+        if os.name == 'nt':
+            parser.error('Use Linux ASan/UBSan; do not mark unavailable Windows sanitizers as passed')
+        enabled_sanitizers = sanitizer_flags(ROOT, selected)
+        env.update({flag: '1' for flags in enabled_sanitizers.values() for flag in flags})
+        env.setdefault('ASAN_OPTIONS', 'detect_leaks=1:halt_on_error=1')
+        env.setdefault('UBSAN_OPTIONS', 'halt_on_error=1')
     results=[]
     def run(name,command,timeout=300):
         logfile=folder/(name+'.log')
@@ -124,8 +140,6 @@ def main():
             out=str(Path(env['PLATFORMIO_BUILD_DIR'])/'esp32-s3')
             run('image-provenance',[sys.executable,'tools/check_image_provenance.py',out])
             run('usb-ram-placement',[sys.executable,'tools/check_usb_ram_placement.py',out])
-    selected=args.only.split(',') if args.only else DRIVERS
-    if any(name not in DRIVERS for name in selected):parser.error('Unknown offline driver')
     if {'first_boot','password_crypto'}.intersection(selected) and env.get('MBEDTLS_DIR'):
         crypto_output=folder/'host-crypto'
         cmd=[sys.executable,str(ROOT/'tools/build_host_crypto.py'),
@@ -167,7 +181,8 @@ def main():
         run('site-installer-mobile',['node','tools/test_site_installer_mobile.cjs'])
         run('ui-layout',['node','tools/test_ui_layout.cjs'],1200)
     summary=dict(results=results,build_requested=args.build,browser_requested=args.browser,
-                 sanitizers_requested=args.sanitizers,targeted_only=bool(args.only),
+                 sanitizers_requested=args.sanitizers,
+                 sanitizer_driver_flags=enabled_sanitizers,targeted_only=bool(args.only),
                  hardware_executed=False,release_qualified=False)
     (folder/'summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
     failures=[r['name'] for r in results if r['status']=='FAIL']

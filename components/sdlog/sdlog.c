@@ -141,6 +141,7 @@ static sdmmc_card_t *s_card = NULL;
 static SemaphoreHandle_t s_state_mutex = NULL;
 /* Serializes all FAT access between the writer task and the read APIs. */
 static SemaphoreHandle_t s_file_mutex = NULL;
+static char s_download_name[SDLOG_NAME_MAX];  /* pinned during download; under s_file_mutex */
 
 /* Writer task + queue. */
 static QueueHandle_t s_queue = NULL;
@@ -342,6 +343,7 @@ static void prune_old_files(void)
             const char *dot = strrchr(e->d_name, '.');
             if (!dot || strcasecmp(dot, ".LOG") != 0) continue;
             count++;
+            if (!strcasecmp(e->d_name, s_download_name)) continue;
             if (oldest[0] == '\0' || strcasecmp(e->d_name, oldest) < 0) {
                 strncpy(oldest, e->d_name, sizeof(oldest) - 1);
                 oldest[sizeof(oldest) - 1] = '\0';
@@ -352,7 +354,7 @@ static void prune_old_files(void)
             return;
         char path[64];
         build_path(oldest, path, sizeof path);
-        unlink(path);
+        if (unlink(path) != 0) return;
     }
 }
 
@@ -1010,20 +1012,53 @@ esp_err_t sdlog_read_file(const char *name, sdlog_chunk_cb cb, void *ctx)
     if (!atomic_load(&s_present) || !s_file_mutex) return ESP_ERR_INVALID_STATE;
     if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(3000)) != pdTRUE)
         return ESP_ERR_TIMEOUT;
+    if (s_download_name[0]) {
+        xSemaphoreGive(s_file_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     char path[64];
     build_path(name, path, sizeof path);
-    FILE *f = fopen(path, "r");
-    if (!f) { xSemaphoreGive(s_file_mutex); return ESP_ERR_NOT_FOUND; }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        esp_err_t err = errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
+        xSemaphoreGive(s_file_mutex);
+        return err;
+    }
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || st.st_size < 0) {
+        fclose(f);
+        xSemaphoreGive(s_file_mutex);
+        return ESP_FAIL;
+    }
+    size_t remaining = (size_t)st.st_size;
+    memcpy(s_download_name, name, strlen(name) + 1);
+    xSemaphoreGive(s_file_mutex);
 
+    /* Bound the snapshot to the original length, even if the writer appends
+     * during transfer. Rotation and writes can acquire the mutex between reads. */
     esp_err_t err = ESP_OK;
     char buf[1024];
-    size_t r;
-    while ((r = fread(buf, 1, sizeof buf, f)) > 0) {
+    while (remaining) {
+        if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(3000)) != pdTRUE) {
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
+        size_t want = remaining < sizeof buf ? remaining : sizeof buf;
+        size_t r = fread(buf, 1, want, f);
+        bool read_ok = r == want && !ferror(f);
+        xSemaphoreGive(s_file_mutex);
+        if (!read_ok) {
+            err = ESP_FAIL;
+            break;
+        }
         err = cb(ctx, buf, r);
         if (err != ESP_OK) break;
+        remaining -= r;
     }
-    fclose(f);
+    xSemaphoreTake(s_file_mutex, portMAX_DELAY);
+    if (fclose(f) != 0 && err == ESP_OK) err = ESP_FAIL;
+    s_download_name[0] = '\0';
     xSemaphoreGive(s_file_mutex);
     return err;
 }
@@ -1039,27 +1074,37 @@ esp_err_t sdlog_tail_file(const char *name, int n_lines,
 
     char path[64];
     build_path(name, path, sizeof path);
-    FILE *f = fopen(path, "r");
-    if (!f) { xSemaphoreGive(s_file_mutex); return ESP_ERR_NOT_FOUND; }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        esp_err_t err = errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
+        xSemaphoreGive(s_file_mutex);
+        return err;
+    }
 
-    /* Read at most the last (buf_size-1) bytes, then trim to n_lines. */
-    fseek(f, 0, SEEK_END);
-    long fsz = ftell(f);
-    long want = (long)buf_size - 1;
-    long start = (fsz > want) ? fsz - want : 0;
-    fseek(f, start, SEEK_SET);
-    size_t got = fread(buf, 1, buf_size - 1, f);
-    fclose(f);
+    /* Read exactly the requested suffix while the writer is excluded. */
+    long fsz = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    size_t got = 0;
+    esp_err_t err = ESP_FAIL;
+    if (fsz >= 0) {
+        size_t want = (size_t)fsz < buf_size - 1 ? (size_t)fsz : buf_size - 1;
+        if (fseek(f, fsz - (long)want, SEEK_SET) == 0) {
+            got = fread(buf, 1, want, f);
+            if (got == want && !ferror(f)) err = ESP_OK;
+        }
+    }
+    if (fclose(f) != 0) err = ESP_FAIL;
     xSemaphoreGive(s_file_mutex);
+    if (err != ESP_OK) return err;
     buf[got] = '\0';
 
-    /* Walk back from the end counting newlines to keep only n_lines. */
+    /* A terminal newline ends the last line; it is not another line. */
     int seen = 0;
     size_t cut = 0;
-    for (long i = (long)got - 1; i >= 0; i--) {
-        if (buf[i] == '\n') {
-            seen++;
-            if (seen > n_lines) { cut = (size_t)(i + 1); break; }
+    size_t cursor = got && buf[got - 1] == '\n' ? got - 1 : got;
+    while (cursor > 0) {
+        if (buf[--cursor] == '\n' && ++seen == n_lines) {
+            cut = cursor + 1;
+            break;
         }
     }
     if (cut > 0) {
@@ -1076,6 +1121,10 @@ esp_err_t sdlog_erase_all(void)
     if (!atomic_load(&s_present) || !s_file_mutex) return ESP_ERR_INVALID_STATE;
     if (xSemaphoreTake(s_file_mutex, pdMS_TO_TICKS(3000)) != pdTRUE)
         return ESP_ERR_TIMEOUT;
+    if (s_download_name[0]) {
+        xSemaphoreGive(s_file_mutex);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     /* Close the active file first so we don't unlink an open handle. */
     tl_in_sdlog = true;

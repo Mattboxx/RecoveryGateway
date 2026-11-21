@@ -59,6 +59,7 @@ void tailnet_names_remember_zone(void);        /* after a validated netmap */
 void tailnet_names_uplink(uint32_t ip_nbo);    /* uplink address, 0 when down */
 void tailnet_names_get(bool *enabled, bool *lan);
 esp_err_t tailnet_names_set(bool enabled, bool lan);   /* persist, then apply */
+void tailnet_names_publish(bool enabled, bool lan);
 /* Tailnet DNS settings (extra records, split DNS, global resolvers) and the
  * gateway's own lookups (MQTT, ntfy, HTTP...) through tailnet names. Both off
  * by default, kept in their own record so an older image keeps the others. */

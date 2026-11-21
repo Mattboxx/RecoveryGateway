@@ -55,6 +55,9 @@ typedef struct {
 void tailnet_forward_init(void);
 int tailnet_forward_count(void);
 bool tailnet_forward_get(int index, tailnet_forward_rule_t *rule, tailnet_forward_runtime_t *runtime);
+/* Copy the rule and its volatile slot revision under the same lock. */
+bool tailnet_forward_get_revisioned(int index, tailnet_forward_rule_t *rule,
+                                   tailnet_forward_runtime_t *runtime, uint32_t *revision);
 esp_err_t tailnet_forward_set_all(const tailnet_forward_rule_t *rules, int count, char *error, size_t error_size);
 esp_err_t tailnet_forward_set_enabled(int index, bool enabled);
 esp_err_t tailnet_forward_set_enabled_bound(int index,uint32_t expected_rule,bool enabled);

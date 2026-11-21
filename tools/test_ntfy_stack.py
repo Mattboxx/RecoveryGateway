@@ -43,6 +43,7 @@ def elf_entry_frames(elf, names):
                 continue
             assert name_offset < len(table)
             name = table[name_offset:].split(b'\0', 1)[0].decode('ascii')
+            name = re.sub(r'(?:[.$](?:constprop|isra|part)[.$]\d+)+$', '', name)
             if name not in names:
                 continue
             assert name not in result and size >= 3, 'Duplicate/truncated heavy function'
@@ -69,7 +70,7 @@ class NtfyStackTests(unittest.TestCase):
             self.assertRegex(source, rf'static NTFY_NOINLINE \w+ {name}\(')
         self.assertIn('#define NTFY_TASK_STACK_BYTES 12288', source)
         self.assertIn('!= pdPASS', source)
-        alert = source.split('send_tailscale_alert(', 1)[1].split('static void task_main', 1)[0]
+        alert = source.split('send_tailscale_alert(', 1)[1].split('static void ntfy_task_main', 1)[0]
         self.assertNotIn('char logs[', alert)
         self.assertNotIn('log_capture_read(', alert)
         self.assertNotIn('malloc(', alert)
@@ -81,13 +82,13 @@ class NtfyStackTests(unittest.TestCase):
         self.assertIn('ntfy_json_parser_t parser;', source)
         self.assertIn('calloc(1, sizeof *batch)', source)
         self.assertIn('esp_http_client_is_complete_data_received(client)', source)
-        self.assertIn('err = send_info(c);', source)
+        self.assertIn('err = send_info(c, destination);', source)
         self.assertIn('uxTaskGetStackHighWaterMark(s_task)', source)
 
 
 def check_elf(objdump, elf):
     disassembly = subprocess.check_output([objdump, '-d', str(elf)], text=True)
-    limits = {'task_main': 768, 'poll_commands': 1280, 'send_info': 2048,
+    limits = {'ntfy_task_main': 768, 'poll_commands': 1280, 'send_info': 2048,
               'send_tailscale_alert': 256, 'handle_command': 512,
               'publish_message': 1024, 'save_state': 768, 'read_command_batch': 256,
               'send_system_event': 768, 'available_update_id': 768}

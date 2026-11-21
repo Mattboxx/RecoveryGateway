@@ -81,7 +81,7 @@ tests = r'''
 #undef malloc
 static void reset(void){
  fault=recvs=begins=writes=ends=aborts=boots=errors=last_code=snapshots=logs=0;
- consumed=written=begin_size=0;clock_us=0;s_writer_active=false;
+ consumed=written=begin_size=0;clock_us=0;s_writer_active=false;s_upload_restart_pending=false;
 }
 int main(void){
  (void)esp_timer_get_time;(void)vTaskDelay;
@@ -89,6 +89,7 @@ int main(void){
  /* First regression reproduces the former abort-on-first-timeout bug. */
  reset();fault=1;assert(ota_upload_handler(&r)==ESP_OK);
  assert(written==1024&&consumed==1024&&begin_size==1024&&boots==1&&ends==1&&!aborts&&s_writer_active);
+ assert(ota_upload_restart_pending());
  for(int f=0;f<=4;f++){
   if(f==3)continue;
   reset();fault=f;assert(ota_upload_handler(&r)==ESP_OK);

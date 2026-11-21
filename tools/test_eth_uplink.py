@@ -130,6 +130,210 @@ with tempfile.TemporaryDirectory(prefix='eth-uplink-') as folder:
     subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(path / 'test.c'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True, timeout=30)
 
+
+def implementation(signature):
+    start = source.index(signature)
+    return source[start:source.index('\n}\n', start) + 3]
+
+
+EVENT_PATH = r'''
+#include <assert.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+typedef int esp_err_t,esp_event_base_t;
+typedef void *esp_event_handler_instance_t;
+enum {ESP_OK,ESP_FAIL=-1};
+#define CONFIG_ETH_SPI_ETHERNET_W5500 1
+#define ESP_EVENT_ANY_ID -1
+#define ETH_EVENT 1
+#define IP_EVENT 2
+#define ETHERNET_EVENT_CONNECTED 1
+#define ETHERNET_EVENT_DISCONNECTED 2
+#define IP_EVENT_ETH_GOT_IP 3
+#define IP_EVENT_ETH_LOST_IP 4
+#define portMAX_DELAY 100
+static void xSemaphoreTake(int lock,int wait){assert(lock==0&&wait==portMAX_DELAY);}
+static void xSemaphoreGive(int lock){assert(lock==0);}
+#define ESP_LOGI(...)
+typedef struct netif {bool up,link;uint32_t ip;} esp_netif_t;
+typedef struct {struct {uint32_t addr;} ip,netmask,gw;} esp_netif_ip_info_t;
+typedef struct {esp_netif_t *esp_netif;esp_netif_ip_info_t ip_info;} ip_event_got_ip_t;
+static esp_netif_t wifi={true,true,1},ethernet={true,true,2};
+static esp_netif_t *s_netif=&ethernet,*s_lwip=&ethernet;
+static unsigned queued_refreshes,immediate_refreshes,scheduled;
+static atomic_bool s_link=true,s_has_ip=true,s_selected_eth,s_stability_lost;
+static int s_lock;
+static struct {uint32_t ip,mask,gw;unsigned link_changes;} s_status;
+static void portmap_install_all(void){queued_refreshes++;}
+static void portmap_install_now(void){immediate_refreshes++;}
+static void uplink_services_refresh(bool lost){(void)lost;}
+static void uplink_services_schedule_refresh(void){scheduled++;}
+static esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key){assert(!strcmp(key,"WIFI_STA_DEF"));return &wifi;}
+static bool uplink_address(esp_netif_t *n,esp_netif_ip_info_t *i){i->ip.addr=n->ip;return n->up&&n->ip;}
+#define netif_is_up(n) ((n)->up)
+#define netif_is_link_up(n) ((n)->link)
+#define netif_ip4_addr(n) ((n)->ip)
+#define ip4_addr_get_u32(addr) (addr)
+static int fail_registration;
+static unsigned registered,unregistered;
+static esp_err_t esp_event_handler_instance_register(int base,int event,void (*fn)(void *,esp_event_base_t,int32_t,void *),
+                                                      void *arg,esp_event_handler_instance_t *instance){
+    assert(event==ESP_EVENT_ANY_ID&&fn&&!arg&&base==(instance?ETH_EVENT:IP_EVENT));
+    if(base==fail_registration)return ESP_FAIL;
+    if(instance)*instance=&registered;
+    registered++;return ESP_OK;
+}
+static esp_err_t esp_event_handler_instance_unregister(int base,int event,esp_event_handler_instance_t instance){
+    assert(base==ETH_EVENT&&event==ESP_EVENT_ANY_ID&&instance==&registered);
+    registered--;unregistered++;return ESP_OK;
+}
+static uint32_t ntohl(uint32_t x){return __builtin_bswap32(x);}
+''' + types + core + r'''
+static eth_config_t s_running={.enabled=true,.preference=ETH_PREF_ETHERNET_FIRST};
+static eth_selector_t s_selector;
+''' + ''.join(implementation(sig) for sig in (
+    'static void apply_choice(', 'static void link_changed(', 'static void on_event(',
+    'static esp_err_t subscribe_w5500_events(', 'struct netif *eth_uplink_lwip_select('
+)) + r'''
+int main(void){
+    ip_event_got_ip_t event={.esp_netif=&ethernet,.ip_info={.ip.addr=2}};
+    assert(eth_uplink_lwip_select(&wifi)==&wifi);
+    assert(eth_uplink_lwip_select(&wifi)==&wifi);
+    on_event(NULL,ETH_EVENT,ETHERNET_EVENT_DISCONNECTED,NULL);
+    on_event(NULL,ETH_EVENT,ETHERNET_EVENT_CONNECTED,NULL);
+    on_event(NULL,IP_EVENT,IP_EVENT_ETH_GOT_IP,&event);
+    assert(!s_selected_eth&&!queued_refreshes&&!immediate_refreshes);
+    assert(eth_uplink_lwip_select(&wifi)==&wifi);
+    assert(eth_uplink_lwip_select(&wifi)==&wifi);
+    assert(eth_uplink_lwip_select(&wifi)==&ethernet&&immediate_refreshes==1&&scheduled==1);
+    on_event(NULL,IP_EVENT,IP_EVENT_ETH_GOT_IP,&event);
+    assert(s_selected_eth&&queued_refreshes==1);
+    on_event(NULL,IP_EVENT,IP_EVENT_ETH_LOST_IP,NULL);
+    assert(!s_selected_eth&&queued_refreshes==2);
+    wifi.up=false;
+    on_event(NULL,IP_EVENT,IP_EVENT_ETH_GOT_IP,&event);
+    assert(s_selected_eth&&queued_refreshes==3);
+
+    fail_registration=ETH_EVENT;assert(subscribe_w5500_events()==ESP_FAIL&&!registered&&!unregistered);
+    fail_registration=IP_EVENT;assert(subscribe_w5500_events()==ESP_FAIL&&!registered&&unregistered==1);
+    fail_registration=0;assert(subscribe_w5500_events()==ESP_OK&&registered==2&&unregistered==1);
+    puts("PASS: actual Ethernet events and supervisor share the stability gate; partial subscription unwinds");
+}
+'''
+with tempfile.TemporaryDirectory(prefix='eth-event-') as directory:
+    path = Path(directory)
+    c_file = path / 'test.c'
+    c_file.write_text(EVENT_PATH, encoding='utf-8')
+    exe = path / ('test.exe' if os.name == 'nt' else 'test')
+    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function']
+    if os.environ.get('ETH_SANITIZE') == '1':
+        flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(c_file), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], check=True, timeout=30)
+
+start = source.index('static void usb_task(')
+usb_worker = source[start:source.index('\n}', start) + 2]
+USB_FIXTURE = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <setjmp.h>
+#include <stdio.h>
+#include <string.h>
+#define ESP_OK 0
+#define ESP_ERR_NO_MEM 1
+#define ESP_ERR_INVALID_ARG 2
+#define ESP_ERR_INVALID_STATE 3
+#define MALLOC_CAP_SPIRAM 1
+#define MALLOC_CAP_8BIT 2
+#define pdMS_TO_TICKS(ms) (ms)
+#define pdTICKS_TO_MS(ticks) (ticks)
+enum {USBP_NET_NONE,USBP_NET_ECM,USBP_NET_UNSUPPORTED};
+enum {USBP_ACT_NETWORK,USBP_ACT_SWITCH,USBP_ACT_NEXT_CONFIG,USBP_MODE_NETWORK};
+typedef struct {bool present;uint32_t seq;unsigned vid,pid,num_configs,config_value;} usbp_device_t;
+typedef struct {uint8_t kind;} usbp_net_t;
+typedef struct {int unused;} usbp_storage_t;
+typedef unsigned TickType_t;
+typedef int esp_err_t;
+static unsigned now, allocs, opens, waits, closes;
+static bool linked, detached, delay_signal;
+static int lock, *s_lock=&lock, netif, *s_netif=&netif;
+static struct {unsigned usb_vid,usb_pid;} s_status;
+#define portMAX_DELAY 0
+static void xSemaphoreTake(int *m,int delay){assert(m==s_lock && !delay && !lock);lock=1;}
+static void xSemaphoreGive(int *m){assert(m==s_lock && lock);lock=0;}
+static jmp_buf finish;
+static uint8_t descriptor[1024];
+static void *heap_caps_malloc(size_t n,unsigned caps){
+    assert(n==sizeof descriptor && caps==(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    return ++allocs==1 ? NULL : descriptor;
+}
+static TickType_t xTaskGetTickCount(void){return now;}
+static void vTaskDelay(unsigned ms){assert(!lock && (ms==30000 || ms==250));now+=ms;}
+static bool usb_port_device(usbp_device_t *out,uint8_t *cfg,size_t cap,size_t *len){
+    assert(!lock && cfg==descriptor && cap==sizeof descriptor);
+    *out=(usbp_device_t){.present=!detached,.seq=now>=120010 ? 4 : detached ? 3 : now>=60010 ? 2 : 1,.vid=1,.pid=2,.num_configs=1,.config_value=1};
+    *len=cap;return out->present;
+}
+static void usb_port_wait(uint32_t seq,uint32_t ms){
+    assert(!lock && ms<=30000);
+    switch(waits++){
+    case 0: assert(seq==1 && now==30000 && ms==30000);now+=10;delay_signal=true;break;
+    case 1: assert(delay_signal && seq==1 && now==30010 && ms==29990);now+=ms;break;
+    case 2: assert(seq==1 && opens==2 && now==60000 && ms==30000);now+=10;break;
+    case 3: assert(seq==2 && opens==3 && now==60010 && ms==30000);now+=10;detached=true;break;
+    case 4: assert(seq==3 && detached && opens==3);now=120010;detached=false;break;
+    case 5: assert(seq==4 && opens==4 && closes==1 && ms==30000);longjmp(finish,1);
+    default: assert(0);
+    }
+}
+static int usbp_scan(uint8_t *cfg,size_t len,usbp_net_t *n,usbp_storage_t *s){
+    assert(cfg==descriptor && len==sizeof descriptor && s);
+    n->kind=USBP_NET_ECM;return 0;
+}
+static int usbp_action(bool x,int mode,int kind,const usbp_net_t *n,const usbp_storage_t *s,unsigned configs,unsigned value){
+    assert(!x && mode==USBP_MODE_NETWORK && !kind && n->kind==USBP_NET_ECM && s && configs==1 && value==1);
+    return USBP_ACT_NETWORK;
+}
+static esp_err_t usb_port_switch(const usbp_device_t *d,const usbp_storage_t *s){(void)d;(void)s;assert(0);return 0;}
+static bool usb_port_next_config(const usbp_device_t *d){(void)d;assert(0);return false;}
+static void usb_link(bool up,void *ctx){(void)up;assert(!ctx);}
+static void usb_note(uint8_t kind,const char *why){assert(!lock && why && (kind==USBP_NET_NONE || kind==USBP_NET_ECM));}
+static bool usb_port_net_alive(void){bool r=linked;linked=false;return r;}
+static void usb_port_net_close(void){assert(!linked);closes++;}
+static esp_err_t usb_port_net_open(const usbp_device_t *d,const usbp_net_t *n,int *netif_ptr,
+                                   void (*cb)(bool,void *),void *ctx,const char **why){
+    assert(d->present && n->kind==USBP_NET_ECM && netif_ptr==s_netif && cb==usb_link && !ctx);
+    switch(++opens){
+    case 1: assert(d->seq==1 && now==30000);*why="temporary allocation failure";return ESP_ERR_NO_MEM;
+    case 2: assert(d->seq==1 && now==60000);*why="session invalid";return ESP_ERR_INVALID_STATE;
+    case 3: assert(d->seq==2 && now==60010);*why="temporary allocation failure";return ESP_ERR_NO_MEM;
+    case 4: assert(d->seq==4 && now==120010);linked=true;return ESP_OK;
+    default: assert(0);return ESP_ERR_INVALID_ARG;
+    }
+}
+''' + usb_worker + r'''
+int main(void){
+    if(!setjmp(finish))usb_task(NULL);
+    assert(opens==4 && allocs==2 && !lock);
+    puts("PASS: USB Ethernet worker recovers from descriptor and open OOM, honors retry time, cancels on detach and opens replacement");
+}
+'''
+with tempfile.TemporaryDirectory(prefix='eth-usb-recovery-') as folder:
+    path = Path(folder)
+    c = path / 'worker.c'
+    c.write_text(USB_FIXTURE, encoding='utf-8')
+    binary = path / ('worker.exe' if os.name == 'nt' else 'worker')
+    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror']
+    if os.environ.get('ETH_SANITIZE') == '1':
+        flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(c), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, timeout=10)
+
 # Second program: actual POST /api/ethernet parser with the real validation core.
 def function(text, signature):
     at = text.index(signature); return text[at:text.index('\n}', at) + 2] + '\n'
@@ -169,6 +373,7 @@ static int httpd_req_recv(httpd_req_t *r,char *out,int n){memcpy(out,r->body+r->
 ''' + types + 'bool eth_config_valid(const eth_config_t *c, char *why, size_t why_size);\n' + core + r'''
 static eth_config_t stored;static int saves;static esp_err_t save_result;
 static void eth_uplink_get_config(eth_config_t *out){*out=stored;}
+static bool eth_uplink_restart_required(void){return true;}
 static esp_err_t eth_uplink_set_config(const eth_config_t *c,char *why,size_t n){if(!eth_config_valid(c,why,n))return ESP_ERR_INVALID_ARG;saves++;if(save_result)return save_result;stored=*c;return ESP_OK;}
 ''' + ''.join(function(source, s) for s in ('static esp_err_t send_json(', 'static bool json_int(', 'static bool json_ip(', 'static esp_err_t post_ethernet(')) + r'''
 static httpd_req_t post(const char *body){httpd_req_t r={.content_len=(int)strlen(body),.body=body,.authorized=true};post_ethernet(&r);return r;}

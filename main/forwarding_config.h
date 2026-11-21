@@ -3,6 +3,8 @@
  * TCP/IP callback while owning it: the callback also takes this mutex.
  * SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
+#include <stdbool.h>
 
 void forwarding_config_lock(void);
+bool forwarding_config_try_lock(void);
 void forwarding_config_unlock(void);

@@ -41,6 +41,10 @@ bool verify_web_password_proof(const uint8_t *message, size_t message_len,
 
 /* Salt + hash + persist. Empty string disables protection. */
 esp_err_t set_web_password_hashed(const char *plaintext);
+/* Persist the same verifier through the caller's settings writer. This does
+ * not update the running password cache. The caller applies it at reboot. */
+esp_err_t web_password_store_for_reboot(const char *plaintext,
+                                       esp_err_t (*write_string)(const char *, const char *));
 
 /* One device-wide failed-login budget shared by every password entry point
  * (web login, password change, remote console), so alternating channels or

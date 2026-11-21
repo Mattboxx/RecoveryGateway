@@ -18,6 +18,7 @@ fixture=r'''
 #include <assert.h>
 #define EXT_RAM_BSS_ATTR /* PSRAM placement attribute: none on the host */
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -37,6 +38,11 @@ fixture=r'''
 typedef int esp_err_t,nvs_handle_t;
 static unsigned fault,stage,commits;
 static uint8_t saved_permissions;
+static uint32_t telegram_ticket;
+bool remote_command_active(ops_recovery_origin_t origin,uint32_t destination){
+    return origin==OPS_RECOVERY_LOCAL ? destination==0 :
+           origin==OPS_RECOVERY_TELEGRAM && destination && destination==telegram_ticket;
+}
 static int nvs_param_set_u8(const char *key,uint8_t value){
     assert(!strcmp(key,"ops_recovery"));
     if(fault)return -1;
@@ -47,9 +53,35 @@ static int nvs_open(const char *s,int mode,nvs_handle_t *h){(void)s;(void)mode;*
 static int nvs_set_blob(int h,const char *key,const void *v,size_t n){(void)h;(void)key;(void)v;assert(n>0);return ++stage==fault?-1:0;}
 static int nvs_commit(int h){(void)h;commits++;return ++stage==fault?-1:0;}
 static void nvs_close(int h){(void)h;}
+static int nvs_param_set_blob(const char *k,const void *p,size_t n){
+    int h;int err=nvs_open(NVS_NAMESPACE,NVS_READWRITE,&h);
+    if(!err){err=nvs_set_blob(h,k,p,n);if(!err)err=nvs_commit(h);nvs_close(h);}
+    return err;
+}
 static uint64_t now_ms(void){return 1000;}
 static unsigned event_publishes,event_notifies;
 static void homelab_ops_init(void){}
+typedef uint32_t ip_addr_t;
+typedef int err_t;
+#define ERR_OK 0
+#define ERR_INPROGRESS -5
+#define IP_IS_V4(p) ((p)!=NULL)
+#define ip_2_ip4(p) (p)
+#define ip4_addr_get_u32(p) (*(p))
+#define LWIP_DNS_ADDRTYPE_IPV4 0
+static void (*posted)(void *);
+static void (*dns_done)(const char *,const ip_addr_t *,void *);
+static bool mailbox_full;
+static int tcpip_try_callback(void (*cb)(void *),void *arg){
+    assert(!arg && !posted);
+    if(mailbox_full)return -1;
+    posted=cb;return ERR_OK;
+}
+static int dns_gethostbyname_addrtype(const char *name,ip_addr_t *p,
+    void (*cb)(const char *,const ip_addr_t *,void *),void *arg,int type){
+    assert(!strcmp(name,"fixture.example") && p && !arg && type==LWIP_DNS_ADDRTYPE_IPV4);
+    dns_done=cb;return ERR_INPROGRESS;
+}
 static void mqtt_integration_publish_now(void){event_publishes++;}
 static bool ntfy_integration_queue_event(const char *s){assert(strstr(s,"temporary service rule(s) closed"));assert(!strstr(s,"100."));event_notifies++;return false;}
 '''
@@ -115,10 +147,30 @@ int main(void){
     apply_probe_locked(&local,1,25);assert(job.state==J_SERVICE && job.host_seen && !job.service_seen);
     local=job;apply_probe_locked(&local,0,500);assert(job.state==J_SERVICE && !job.service_seen);
     local=job;apply_probe_locked(&local,1,20);assert(job.state==J_REACHABLE && job.service_seen);
+    job.destination=19;job.profile.notify=false;finish_locked(J_REACHABLE);assert(job.notify_result);
+    job.destination=0;finish_locked(J_REACHABLE);assert(!job.notify_result);
+    telegram_ticket=5;job.origin=OPS_RECOVERY_TELEGRAM;job.destination=5;job.state=J_WAIT;
+    assert(job_allowed_locked(&job));
+    telegram_ticket=7;local=job;apply_probe_locked(&local,1,20);assert(job.state==J_CANCELLED);
+    job.origin=OPS_RECOVERY_LOCAL;job.destination=0;
     job.state=J_PRECHECK;job.cancel=true;local=job;apply_probe_locked(&local,1,10);assert(job.state==J_CANCELLED);
     job.cancel=false;job.state=J_PRECHECK;local=job;apply_probe_locked(&local,-1,0);assert(job.state==J_UNKNOWN);
     job.state=J_PRECHECK;job.wake=true;job.host_seen=job.service_seen=false;local=job;apply_probe_locked(&local,-1,0);assert(job.state==J_WAKE && !job.service_seen);
     local=job;local.id=999;unsigned checks=job.checks;apply_probe_locked(&local,1,1);assert(job.checks==checks);
+    job=(job_t){.id=7,.index=0,.state=J_WAIT,.deadline=1000,.manual=true,.wake=true};
+    local=job;apply_probe_locked(&local,1,1);assert(job.state==J_UNKNOWN && !job.host_seen);
+    job=(job_t){.id=8,.index=0,.state=J_WAIT,.deadline=2000,.manual=true,.wake=true,.wake_datagrams=1};
+    local=job;apply_probe_locked(&local,-1,0);assert(job.state==J_WAIT && !job.packet_sent);
+    uint32_t address=0;strcpy(local.profile.target,"fixture.example");
+    mailbox_full=true;assert(probe_dns_address(&local,&address)==-1 && !posted);
+    mailbox_full=false;assert(probe_dns_address(&local,&address)==OPS_PROBE_PENDING && posted);
+    posted(NULL);posted=NULL;
+    local.id++;assert(probe_dns_address(&local,&address)==OPS_PROBE_PENDING && !posted);
+    const ip_addr_t received=0x04030201u;dns_done(NULL,&received,NULL);
+    assert(probe_dns_address(&local,&address)==OPS_PROBE_PENDING && posted && !address);
+    posted(NULL);posted=NULL;dns_done(NULL,&received,NULL);
+    assert(probe_dns_address(&local,&address)==0 && address==received);
+    assert(probe_wait_budget(1000,1001)==1 && !probe_wait_budget(1000,1000) && probe_wait_budget(0,5000)==1000);
     for(unsigned i=0;i<100;i++)event_locked(J_TIMEOUT,0);assert(event_seq>100);
     puts("PASS: actual ops settings/profile bounds, NVS failures/commit, bounded event ring and recovery result transitions (synthetic only)");
 }
@@ -128,7 +180,8 @@ with tempfile.TemporaryDirectory(prefix='ops-core-') as directory:
     adapters='static bool active(job_state_t s){return s>=J_PRECHECK&&s<=J_SERVICE;}\nstatic ops_resources_t resources;\nstatic void homelab_ops_settings(ops_settings_t *out){*out=store.settings;}\nstatic void homelab_ops_resources(ops_resources_t *out){*out=resources;}\n'
     program.write_text(fixture+woltype+types+globals+adapters+''.join(function(n) for n in (
         'static uint32_t checksum(', 'static bool valid_settings(', 'static bool valid_profile(',
-        'static void event_locked(', 'static esp_err_t save_locked(', 'void homelab_ops_service_closed(', 'static bool guard_allows(', 'bool homelab_ops_admit(', 'bool homelab_ops_guard_deferring(', 'static uint8_t recovery_bit(', 'static uint8_t recovery_mask_locked(', 'static bool recovery_allowed_locked(', 'bool homelab_ops_recovery_allowed(', 'esp_err_t homelab_ops_stage_recovery(', 'void homelab_ops_publish_recovery(', 'static void finish_locked(', 'static void apply_probe_locked('))+body,encoding='utf-8')
+        'static void event_locked(', 'static esp_err_t store_registry(', 'static esp_err_t save_locked(', 'void homelab_ops_service_closed(', 'static bool guard_allows(', 'bool homelab_ops_admit(', 'bool homelab_ops_guard_deferring(', 'static uint8_t recovery_bit(', 'static uint8_t recovery_mask_locked(', 'static bool recovery_allowed_locked(', 'static bool job_allowed_locked(', 'bool homelab_ops_recovery_allowed(', 'esp_err_t homelab_ops_stage_recovery(', 'void homelab_ops_publish_recovery(', 'static void finish_locked(', 'static void apply_probe_locked('))
+        + source[source.index('enum {PROBE_DNS_IDLE'):source.index('/* One TCP probe at a time.')] + body,encoding='utf-8')
     flags=['-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-variable','-Wno-misleading-indentation','-g','-I',str(ROOT/'main')]
     if os.environ.get('OPS_SANITIZE')=='1':flags+=['-fsanitize=address,undefined','-fno-omit-frame-pointer']
     subprocess.run(['gcc',*flags,str(program),'-o',str(binary)],check=True)

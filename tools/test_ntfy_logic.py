@@ -8,9 +8,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-source = (ROOT / 'main/ntfy_integration.c').read_text()
+source = (ROOT / 'main/ntfy_integration.c').read_text(encoding='utf-8')
 # The shared command engine (remote_command_run) and ntfy's handler on top of it.
-command = source[source.index('/* One remote command, shared by ntfy and Telegram'):source.index('static void collect_line')]
+command = source[source.index('static esp_err_t named_wol_device('):source.index('static void collect_line')]
 reset_builder = source[source.index('static const char *reset_reason_text('):source.index('/* The info reply, shared by ntfy and Telegram')]
 assert '(unsigned long)esp_get_minimum_free_heap_size(), reset_reason_text(c->poweron_events),' in source
 boot = 'static NTFY_NOINLINE esp_err_t send_system_event' + source.split('static NTFY_NOINLINE esp_err_t send_system_event',1)[1].split('static bool operational_destination_equal',1)[0]
@@ -31,6 +31,11 @@ fixture = r'''
 #define ESP_FAIL -1
 #define ESP_ERR_NO_MEM 2
 #define ESP_ERR_INVALID_ARG 3
+#define ESP_ERR_NOT_SUPPORTED 4
+#define ESP_ERR_TIMEOUT 5
+#define ESP_ERR_INVALID_STATE 6
+#define ESP_ERR_NOT_ALLOWED 7
+#define ESP_ERR_INVALID_SIZE 8
 #define HTTP_EVENT_ON_DATA 1
 #define portMAX_DELAY 0
 typedef int esp_err_t;
@@ -49,6 +54,9 @@ void *checked_malloc(size_t n) {
 void checked_free(void *p) { if(p) live--; free(p); }
 #define malloc checked_malloc
 #define free checked_free
+#define MALLOC_CAP_SPIRAM 1
+#define MALLOC_CAP_8BIT 2
+static void *heap_caps_malloc(size_t n,int caps){(void)caps;return checked_malloc(n);}
 static esp_err_t publish_message(const ntfy_integration_config_t *c,const char *title,const char *tags,const char *msg) {
     (void)c; (void)title; (void)tags;
     assert(strlen(msg)<sizeof published); strcpy(published,msg); return publish_result;
@@ -59,23 +67,35 @@ size_t log_capture_read(char *out,size_t capacity) {
     memset(out,'x',capacity-1);memcpy(out+capacity-1-strlen(marker),marker,strlen(marker));
     out[capacity-1]=0;return capacity-1;
 }
-static esp_err_t send_info(const ntfy_integration_config_t *c) { (void)c; return info_result; }
-static esp_err_t wake_argument(bool allow_direct_mac,const char *s) { (void)allow_direct_mac; (void)s; return ESP_FAIL; }
+static esp_err_t send_info(const ntfy_integration_config_t *c, uint32_t destination) { (void)c;assert(destination==17);return info_result; }
 static size_t strlcpy_(char *d,const char *s,size_t n){size_t l=strlen(s);if(n){size_t c=l<n-1?l:n-1;memcpy(d,s,c);d[c]=0;}return l;}
 #define strlcpy strlcpy_
 #include "remote_commands.h"
-typedef struct {char name[32];uint8_t mac[6];} wol_device_t;
+static bool commands_enabled=true;
+bool remote_command_active(ops_recovery_origin_t origin,uint32_t destination){
+    return commands_enabled && origin>=OPS_RECOVERY_NTFY && destination==17;
+}
+typedef struct {char name[32],broadcast[16];uint8_t mac[6];uint16_t port;} wol_device_t;
 static bool wol_parse_mac(const char *s,uint8_t out[6]){(void)s;(void)out;return false;}
-static int wol_count(void){return 0;}
-static bool wol_get(int i,wol_device_t *d){(void)i;(void)d;return false;}
-static void wol_format_mac(const uint8_t mac[6],char out[18]){(void)mac;strcpy(out,"00:00:00:00:00:01");}
-static int homelab_ops_command(const char *s,bool wake,ops_recovery_origin_t origin){(void)s;(void)wake;assert(origin==OPS_RECOVERY_NTFY);return ESP_FAIL;}
 #define ESP_ERR_NOT_FOUND -8
+static int wol_count_fixture=1, wake_requests;
+static int wol_count(void){return wol_count_fixture;}
+static bool wol_get(int i,wol_device_t *d){assert(i>=0 && i<wol_count_fixture);*d=(wol_device_t){.name="Home NAS",.mac={2,(uint8_t)i}};return true;}
+static int wol_send_saved_mac_text(const char *s){(void)s;return ESP_ERR_NOT_FOUND;}
+static int wol_send_mac(const uint8_t mac[6],const char *ip,uint16_t port){(void)ip;(void)port;assert(mac[0]==2);wake_requests++;return ESP_OK;}
+static int recovery_result;
+static unsigned requests;
+static int homelab_ops_remote_request(const uint8_t mac[6],bool wake,ops_recovery_origin_t origin,uint32_t destination){
+    assert(mac[0]==2 && wake && (origin==OPS_RECOVERY_NTFY || origin==OPS_RECOVERY_TELEGRAM) && destination==17);
+    requests++;
+    return recovery_result;
+}
+static void homelab_ops_device_summary(char *out,size_t cap){snprintf(out,cap,"Home NAS: reachable");}
 static bool recovery_permission;
-static bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin){return origin==OPS_RECOVERY_NTFY&&recovery_permission;}
+static bool homelab_ops_recovery_allowed(ops_recovery_origin_t origin){return origin>=OPS_RECOVERY_NTFY&&recovery_permission;}
 static void saved_tcp_summary(char *out,size_t cap){snprintf(out,cap,"printer: reachable");}
-static int saved_tcp_request(const char *name,ops_recovery_origin_t origin){assert(origin==OPS_RECOVERY_NTFY);return !strcmp(name,"printer")?ESP_OK:ESP_ERR_NOT_FOUND;}
-static const char *esp_err_to_name(esp_err_t e) { (void)e; return "fixture error"; }
+static int saved_tcp_remote_request(const char *name,ops_recovery_origin_t origin,uint32_t destination){
+    assert(origin>=OPS_RECOVERY_NTFY && destination==17);return !strcmp(name,"printer")?ESP_OK:ESP_ERR_NOT_FOUND;}
 '''
 boot_fixture = r'''
 #include "ntfy_events.h"
@@ -90,18 +110,66 @@ static void ota_remote_get_state(ota_remote_state_t *s){strcpy(s->latest_version
 '''
 tests = r'''
 int main(void) {
-    char reply[160]; const char *title;
-    assert(remote_command_run("probe printer",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_ERROR);
-    recovery_permission=true;
-    assert(remote_command_run("probe printer",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_OK);
-    assert(remote_command_run("probe 192.0.2.15:443",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_ERROR);
-    assert(remote_command_run("checks",true,false,OPS_RECOVERY_NTFY,reply,sizeof reply,&title)==REMOTE_CMD_OK&&strstr(reply,"printer: reachable"));
+    char reply[REMOTE_REPLY_MAX]; const char *title;
+    for (ops_recovery_origin_t origin=OPS_RECOVERY_NTFY;origin<=OPS_RECOVERY_TELEGRAM;origin++) {
+        recovery_permission=false;
+#define RUN(s, enabled) remote_command_run(s,enabled,false,origin,17,reply,sizeof reply,&title)
+        commands_enabled=false;
+        const unsigned requests_before_disable=requests;
+        const int wakes_before_disable=wake_requests;
+        recovery_permission=true;
+        const char *blocked[]={"/help","/start","devices","status","wol Home NAS","recover Home NAS","check Home NAS","checks","probe printer"};
+        for(size_t i=0;i<sizeof blocked/sizeof *blocked;i++)
+            assert(RUN(blocked[i],true)==REMOTE_CMD_NONE && !reply[0] && !title);
+        assert(requests==requests_before_disable && wake_requests==wakes_before_disable);
+        commands_enabled=true;
+        recovery_permission=false;
+        assert(RUN("/help",false)==REMOTE_CMD_HELP && strstr(reply,"devices") && !strstr(reply,"info (or status)"));
+        assert(RUN("status",false)==REMOTE_CMD_ERROR && strstr(reply,"disabled"));
+        assert(RUN("status",true)==REMOTE_CMD_INFO);
+        assert(RUN("/devices",true)==REMOTE_CMD_OK && strstr(reply,"Home NAS"));
+        assert(RUN("recover  Home NAS",true)==REMOTE_CMD_ERROR && strstr(reply,"basic commands"));
+        assert(RUN("probe printer",true)==REMOTE_CMD_ERROR && strstr(reply,"basic commands"));
+        assert(requests==requests_before_disable);
+        assert(RUN("wol Home NAS",true)==REMOTE_CMD_OK && wake_requests==wakes_before_disable+1 && !strstr(reply,"Use recover"));
+        recovery_permission=true;
+        assert(RUN("/start",true)==REMOTE_CMD_HELP && strstr(reply,"probe PRINTER"));
+        const unsigned before=requests;
+        assert(RUN(" /ReCoVeR\tHome NAS \n",true)==REMOTE_CMD_OK && requests==before+1 && strstr(reply,"will follow here"));
+        assert(RUN("recover Unknown",true)==REMOTE_CMD_ERROR && requests==before+1 && strstr(reply,"not found"));
+        wol_count_fixture=2;
+        assert(RUN("recover Home NAS",true)==REMOTE_CMD_ERROR && requests==before+1 && strstr(reply,"More than one"));
+        wake_requests=0;
+        assert(RUN("wol Home NAS",true)==REMOTE_CMD_ERROR && !wake_requests);
+        wol_count_fixture=1;
+        assert(RUN("wol Home NAS",true)==REMOTE_CMD_OK && wake_requests==1 && strstr(reply,"Use recover"));
+        assert(RUN("recover",true)==REMOTE_CMD_ERROR && strstr(reply,"Usage"));
+        recovery_result=ESP_ERR_TIMEOUT;
+        assert(RUN("recover Home NAS",true)==REMOTE_CMD_ERROR && strstr(reply,"recently") && !strstr(reply,"basic commands"));
+        recovery_result=ESP_ERR_NOT_ALLOWED;
+        assert(RUN("recover Home NAS",true)==REMOTE_CMD_ERROR && strstr(reply,"low on resources"));
+        recovery_result=ESP_OK;
+        assert(RUN("probe printer",true)==REMOTE_CMD_OK);
+        assert(RUN("probe 192.0.2.15:443",true)==REMOTE_CMD_ERROR);
+        assert(RUN("checks",true)==REMOTE_CMD_OK&&strstr(reply,"printer: reachable"));
+    }
     ntfy_integration_config_t c={.info_enabled=true};
-    info_result=ESP_FAIL; handle_command(&c," info\n");
+    commands_enabled=false; handle_command(&c,17,"help");
+    assert(!s_status.commands_received && !s_status.command_errors && !published[0]);
+    commands_enabled=true;
+    info_result=ESP_FAIL; handle_command(&c,17," info\n");
     assert(s_status.command_errors==1 && s_status.commands_received==0);
-    info_result=ESP_OK; handle_command(&c,"INFO");
+    info_result=ESP_OK; handle_command(&c,17,"INFO");
     assert(s_status.command_errors==1 && s_status.commands_received==1);
-    handle_command(&c,"unknown"); assert(s_status.command_errors==1);
+    handle_command(&c,17,"unknown"); assert(s_status.command_errors==1);
+    publish_result=ESP_FAIL; handle_command(&c,17,"help");
+    assert(s_status.command_errors==2 && strstr(published,"commands"));
+    assert(live==0 && allocations>0);
+    const unsigned before_oom=requests;
+    fail_at=allocations+1;
+    handle_command(&c,17,"recover Home NAS");
+    assert(s_status.command_errors==3 && requests==before_oom && live==0);
+    allocations=fail_at=0;
     for(int details=0;details<=1;details++) {
         c.info_include_details=details!=0;
         publish_result=ESP_OK;assert(send_tailscale_alert(&c)==ESP_OK);

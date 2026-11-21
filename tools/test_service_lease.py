@@ -85,6 +85,9 @@ int main(void){
     assert(service_lease_set(0,token,120,false)==ESP_OK);wall=0;reboot();assert(!service_lease_allowed(0,&rule));
     wall=1800000122;assert(service_lease_tick());assert(service_lease_allowed(0,&rule));
     wall--;assert(service_lease_tick());assert(!service_lease_allowed(0,&rule));reboot();assert(!service_lease_allowed(0,&rule));
+    wall=1800000124;assert(service_lease_set(0,token,120,false)==ESP_OK);
+    wall=0;assert(!service_lease_allowed(0,&rule)&&service_lease_allowed(1,&other));
+    assert(service_lease_tick());wall=1800000125;reboot();assert(!service_lease_allowed(0,&rule));
     assert(service_lease_set(0,token+1,120,false)==ESP_ERR_INVALID_STATE);
     assert(service_lease_set(0,token,59,false)==ESP_ERR_INVALID_ARG);
     assert(service_lease_set(0,token,604801,false)==ESP_ERR_INVALID_ARG);

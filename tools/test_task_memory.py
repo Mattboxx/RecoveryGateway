@@ -38,6 +38,7 @@ typedef void (*TaskFunction_t)(void *);
 #define ESP_FAIL -1
 #define ESP_ERR_NO_MEM 0x101
 #define ESP_ERR_INVALID_ARG 0x102
+#define ESP_ERR_INVALID_STATE 0x103
 #define pdPASS 1
 #define pdTRUE 1
 #define MALLOC_CAP_SPIRAM 0x400
@@ -142,31 +143,138 @@ manager_budget = next(line for line in manager_source.splitlines()
 manager_init = 'void mqtt_integration_init(void)' + manager_source.split(
     'void mqtt_integration_init(void)', 1)[1].split('\nvoid mqtt_integration_get_config', 1)[0]
 tail_source = (ROOT / 'main/tailscale_manager.c').read_text(encoding='utf-8')
-tail_start = 'esp_err_t tailscale_request_connect(void)' + tail_source.split(
-    'esp_err_t tailscale_request_connect(void)', 1)[1].split('\nstatic void tailscale_connect_task(void *pvParameters)\n', 1)[0]
-tail_cleanup = 'static void startup_cleanup(void) {\n' + tail_source.rsplit(
-    '    taskENTER_CRITICAL(&s_connect_lock);', 1)[1]
-tail_cleanup = tail_cleanup.replace('static void startup_cleanup(void) {\n',
-    'static void startup_cleanup(void) {\n    taskENTER_CRITICAL(&s_connect_lock);', 1)
+admission = tail_source.split('static void tailscale_admission_schedule(', 1)[1].split(
+    '\nstatic void tailscale_connect_task(void *pvParameters)\n', 1)[0]
+tail_start = '\n'.join(line for line in tail_source.splitlines() if line.startswith('#define TS_ADMISSION_')) + '\n'
+tail_start += 'esp_err_t tailscale_start_error(void)' + tail_source.split(
+    'esp_err_t tailscale_start_error(void)', 1)[1].split('static uint32_t s_lifecycle_generation', 1)[0]
+tail_start += 'static void tailscale_admission_schedule(' + admission
 PROJECT_FIXTURE = r'''
-static bool tailscale_enabled, s_connect_in_flight, s_instance_ready;
+static bool tailscale_enabled, s_connect_in_flight, s_instance_ready, s_start_retrying, s_admission_pending;
+static bool s_start_cleanup_failed, cleanup_fails;
+static esp_err_t s_start_error;
+static unsigned s_admission_backoff;
 static int s_connect_lock;
+static esp_err_t connect_result = ESP_ERR_NO_MEM;
+static unsigned connect_calls, in_task_delays;
+#define pdMS_TO_TICKS(ms) (ms)
+static void vTaskDelay(unsigned ms){
+    assert(!locks && s_start_retrying && s_connect_in_flight);
+    assert(ms==(2000u << (in_task_delays++ % 4)));
+}
+static esp_err_t tailscale_connect(void){
+    assert(!locks && s_connect_in_flight);
+    connect_calls++;
+    if(connect_result==ESP_OK) s_instance_ready=true;
+    if(cleanup_fails) s_start_cleanup_failed=true;
+    s_start_error=connect_result;
+    return connect_result;
+}
 static TaskHandle_t s_manager_task;
 static void tailscale_connect_task(void *arg){(void)arg;}
 static void manager_task(void *arg){(void)arg;}
+#define ESP_LOGW(...) ((void)0)
+typedef int esp_event_base_t;
+enum {TAILSCALE_ADMISSION_EVENT=1};
+typedef struct {void (*callback)(void *); const char *name;} esp_timer_create_args_t;
+typedef esp_timer_create_args_t *esp_timer_handle_t;
+static esp_timer_create_args_t timer;
+static esp_timer_handle_t s_admission_timer;
+static void (*admission_event)(void *,esp_event_base_t,int32_t,void *);
+static bool have_uplink=true, fail_post, fail_timer_create, fail_event_register, fail_timer_start;
+static uint64_t armed_us;
+esp_err_t tailscale_request_connect(void);
+static bool uplink_internet_ready(void){assert(!locks);return have_uplink;}
+static esp_err_t esp_timer_create(const esp_timer_create_args_t *args,esp_timer_handle_t *out) {
+    assert(!locks && args->callback && args->name);
+    if(fail_timer_create)return ESP_FAIL;
+    timer=*args;*out=&timer;return ESP_OK;
+}
+static void esp_timer_delete(esp_timer_handle_t handle){assert(handle==&timer&&!armed_us);}
+static esp_err_t esp_timer_start_once(esp_timer_handle_t handle,uint64_t delay_us){
+    assert(!locks && handle==&timer && delay_us && !armed_us);
+    if(fail_timer_start)return ESP_FAIL;
+    armed_us=delay_us;return ESP_OK;
+}
+static esp_err_t esp_event_handler_register(esp_event_base_t base,int32_t id,
+    void (*cb)(void *,esp_event_base_t,int32_t,void *),void *arg){
+    assert(base==TAILSCALE_ADMISSION_EVENT && !id && cb && !arg);
+    if(fail_event_register)return ESP_FAIL;
+    admission_event=cb;return ESP_OK;
+}
+static bool event_enqueued;
+static esp_err_t esp_event_post(esp_event_base_t base,int32_t id,void *data,size_t len,int wait){
+    assert(!locks && base==TAILSCALE_ADMISSION_EVENT && !id && !data && !len && !wait && !event_enqueued);
+    if(fail_post)return ESP_FAIL;
+    event_enqueued=true;return ESP_OK;
+}
+static void fire_retry(uint64_t expected_us){
+    assert(armed_us==expected_us && !event_enqueued);
+    armed_us=0;timer.callback(NULL);
+    if(event_enqueued){event_enqueued=false;admission_event(NULL,TAILSCALE_ADMISSION_EVENT,0,NULL);}
+}
 '''
 PROJECT_TEST = r'''
 int main(void){
     assert(tailscale_request_connect()==ESP_OK&&!allocations);
-    tailscale_enabled=true;oom=true;
-    assert(tailscale_request_connect()==ESP_ERR_NO_MEM&&!s_connect_in_flight&&!locks);
-    oom=false;assert(tailscale_request_connect()==ESP_OK&&s_connect_in_flight);
+    tailscale_enabled=true;oom=true;fail_timer_create=true;
+    tailscale_admission_retry_init();
+    assert(!s_admission_timer && !admission_event);
+    fail_timer_create=false;fail_event_register=true;
+    tailscale_admission_retry_init();
+    assert(!s_admission_timer && !admission_event);
+    fail_event_register=false;tailscale_admission_retry_init();
+    assert(s_admission_timer && admission_event);
+    assert(tailscale_request_connect()==ESP_ERR_NO_MEM && !s_connect_in_flight && !locks);
+    assert(tailscale_start_error()==ESP_ERR_NO_MEM && tailscale_start_retrying());
+    for(int i=0;i<1000;i++)assert(tailscale_request_connect()==ESP_OK);
+    assert(allocations==1); /* No fresh IP event is needed. */
+    fail_post=true;fire_retry(2000000);
+    assert(allocations==1&&armed_us==2000000&&tailscale_start_retrying());
+    fail_post=false;
+    fire_retry(2000000);
+    fire_retry(4000000);
+    fire_retry(8000000);
+    fire_retry(16000000);
+    fire_retry(30000000);
+    assert(armed_us==30000000&&tailscale_start_retrying());
+    have_uplink=false;fire_retry(30000000);
+    assert(!armed_us&&!tailscale_start_retrying()&&!s_admission_backoff&&!s_connect_in_flight);
+    have_uplink=true;
+    assert(tailscale_request_connect()==ESP_ERR_NO_MEM);
+    tailscale_enabled=false;fire_retry(2000000);
+    assert(!armed_us&&!tailscale_start_retrying()&&!s_connect_in_flight);
+    tailscale_enabled=true;fail_timer_start=true;
+    assert(tailscale_request_connect()==ESP_ERR_NO_MEM&&!tailscale_start_retrying()&&!armed_us);
+    fail_timer_start=false;
+    assert(tailscale_request_connect()==ESP_ERR_NO_MEM && tailscale_start_retrying());
+    oom=false;fire_retry(4000000);
+    assert(s_connect_in_flight&&!tailscale_start_retrying()&&!armed_us);
     int before=allocations;
     for(int i=0;i<1000;i++)assert(tailscale_request_connect()==ESP_OK);
     assert(allocations==before); /* duplicate GOT_IP never allocates */
-    startup_cleanup();assert(!s_connect_in_flight&&reaper_deletes==1&&!caps_deletes);
-    assert(tailscale_request_connect()==ESP_OK&&s_connect_in_flight); /* retry */
-    s_instance_ready=true;startup_cleanup();before=allocations;
+    tailscale_start_attempts();
+    assert(connect_calls==5 && in_task_delays==4 && !s_connect_in_flight && tailscale_start_retrying());
+    assert(tailscale_start_error()==ESP_ERR_NO_MEM && armed_us==8000000);
+    assert(tailscale_request_connect()==ESP_OK && allocations==before);
+    fire_retry(8000000);tailscale_start_attempts();
+    assert(connect_calls==10 && in_task_delays==8 && armed_us==16000000);
+    connect_result=ESP_ERR_INVALID_ARG;
+    fire_retry(16000000);tailscale_start_attempts();
+    assert(connect_calls==11 && !tailscale_start_retrying() && !armed_us);
+    assert(tailscale_start_error()==ESP_ERR_INVALID_ARG);
+    connect_result=ESP_ERR_INVALID_STATE;cleanup_fails=true;
+    assert(tailscale_request_connect()==ESP_OK);
+    tailscale_start_attempts();
+    assert(s_start_cleanup_failed && !s_connect_in_flight && !armed_us);
+    assert(tailscale_request_connect()==ESP_ERR_INVALID_STATE && connect_calls==12);
+    s_start_cleanup_failed=false;cleanup_fails=false; /* a clean boot */
+    connect_result=ESP_ERR_NO_MEM;
+    assert(tailscale_request_connect()==ESP_OK);tailscale_start_attempts();
+    assert(connect_calls==17 && armed_us==2000000);
+    connect_result=ESP_OK;fire_retry(2000000);tailscale_start_attempts();
+    assert(connect_calls==18 && s_instance_ready && !s_connect_in_flight && !armed_us);
+    before=allocations;
     for(int i=0;i<1000;i++)assert(tailscale_request_connect()==ESP_OK);
     assert(allocations==before&&!s_connect_in_flight);
     mutex_oom=true;mqtt_integration_init();assert(!s_manager_task&&!s_lock);
@@ -174,7 +282,7 @@ int main(void){
     oom=false;mqtt_integration_init();assert(s_manager_task&&!locks&&config_loads==2);
     before=allocations;mqtt_integration_init();assert(before==allocations);
     assert(!normal_calls&&caps_calls==allocations);
-    puts("PASS: actual project task launchers: allocation failure, retry, 2000 coalesced IP events, matching cleanup and manager initialization (host fixtures)");
+    puts("PASS: task admission retry/backoff, lost wakeup, uplink/disable handling, coalesced requests and matching cleanup (host fixtures)");
 }
 '''
 
@@ -188,7 +296,7 @@ with tempfile.TemporaryDirectory(prefix='task-memory-') as directory:
              '-Wno-unused-variable', '-Wno-misleading-indentation', '-I', str(path), '-I', str(ROOT / 'main')]
     if os.environ.get('TASKMEM_SANITIZE') == '1':
         flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
-    cases = [('project', HEADER + PROJECT_FIXTURE + manager_budget + manager_init + tail_start + tail_cleanup + PROJECT_TEST)]
+    cases = [('project', HEADER + PROJECT_FIXTURE + manager_budget + manager_init + tail_start + PROJECT_TEST)]
     for external in (0, 1):
         for pinned in (0, 1):
             cases.append((f'mqtt-{external}-{pinned}', HEADER +

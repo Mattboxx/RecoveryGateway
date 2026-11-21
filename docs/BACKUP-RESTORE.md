@@ -3,20 +3,23 @@
 System → Backup & reset → **Backup file** (*Download backup*) downloads a JSON file generated in your
 browser from the device's own settings APIs. Nothing is uploaded anywhere.
 
-## What is included
+## Portable JSON coverage
 
 Network and AP settings, system settings (name, time zone, TX power, Web port,
 WiFi power save), DHCP reservations, AP-side port forwards, Tailscale settings
 (without the auth key), firewall lists, Wake-on-LAN devices, MQTT and ntfy
-settings (without passwords/tokens) and LAN → Tailnet rules.
+settings (without passwords/tokens) and LAN → Tailnet rules. This is the
+coverage of the `tsr-backup-v1` format.
 
-**Secrets** (WiFi passwords, auth key, MQTT password, ntfy token, ...) are
-included only if you choose *include secrets* and give a passphrase; they are
-encrypted in the browser. Without the passphrase they cannot be restored.
+The optional encrypted section covers Wi-Fi and AP passwords, Wi-Fi
+enterprise credentials, the Tailscale auth key, MQTT password and ntfy
+token. Select *Include encrypted secrets* and use the same passphrase to restore
+them. The browser performs the encryption.
 
-Not included: the web password, Tailscale node identity, NVS internals,
-service-rule expiry timers, profile history, Ethernet and Service watch
-settings, logs.
+The portable file omits the Web password, Tailscale node identity, Ethernet,
+cellular and data quota settings, saved TCP checks, Service Watch, temporary
+rule expiry, profiles, Telegram and email configuration, logs and NVS internals.
+Use an on-device settings copy before a risky change on the same gateway.
 
 ## Restore
 

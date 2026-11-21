@@ -34,6 +34,9 @@ void      wol_format_mac(const uint8_t mac[6], char out[18]);
 esp_err_t wol_send_index(int index);
 esp_err_t wol_send_mac(const uint8_t mac[6], const char *broadcast, uint16_t port);
 esp_err_t wol_send_saved_mac_text(const char *mac_text);
+/* Count full datagrams accepted by the socket, including a partial burst. */
+esp_err_t wol_send_mac_count(const uint8_t mac[6], const char *broadcast, uint16_t port, uint8_t *sent);
+esp_err_t wol_send_saved_mac_count(const char *mac_text, uint8_t *sent);
 
 #ifdef __cplusplus
 }
