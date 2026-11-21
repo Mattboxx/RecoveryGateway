@@ -185,7 +185,8 @@ def main():
     if https:
         if socket.gethostbyname(args.tls_hostname) != str(args.bind):
             parser.error("TLS hostname must resolve to the fixture address")
-        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        tls.minimum_version = ssl.TLSVersion.TLSv1_2
         tls.load_cert_chain(args.cert, args.key)
     secret = os.environ.get("TEST_DEVICE_PASSWORD") or getpass.getpass("Device password (not saved): ")
     api = login(str(args.host), password=secret)
