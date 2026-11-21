@@ -69,7 +69,7 @@ typedef struct { int unused; } StaticSemaphore_t;
 typedef void *SemaphoreHandle_t;
 
 /* Our own NVS namespace. */
-static bool nvs_setup_done, nvs_has_setup_done, nvs_password, nvs_has_key;
+static bool nvs_setup_done, nvs_has_setup_done, nvs_password, nvs_has_key, nvs_wifi_table_exists;
 static wifi_network_t nvs_nets[1]; static int nvs_net_count;
 /* Wi-Fi driver: flash copy survives reboots, RAM copy is what it uses. */
 static wifi_config_t drv_flash, drv_ram; static wifi_storage_t drv_storage;
@@ -80,8 +80,9 @@ static esp_err_t nvs_param_set_u8(const char *k, uint8_t v) { assert(!strcmp(k, 
 static char *nvs_param_get_str(const char *k) { if (!strcmp(k, "ts_authkey") && nvs_has_key) { char *s = malloc(8); strcpy(s, "tskey"); return s; } return NULL; }
 static bool is_web_password_set(void) { return nvs_password; }
 static int wifi_networks_count(void) { return nvs_net_count; }
+static bool wifi_networks_has_saved_table(void) { return nvs_wifi_table_exists; }
 static bool wifi_networks_get(int i, wifi_network_t *n) { if (i >= nvs_net_count) return false; *n = nvs_nets[i]; return true; }
-static esp_err_t wifi_networks_set_all(const wifi_network_t *a, int n) { assert(n <= 1); nvs_net_count = n; if (n) nvs_nets[0] = a[0]; return ESP_OK; }
+static esp_err_t wifi_networks_set_all(const wifi_network_t *a, int n) { assert(n <= 1); nvs_wifi_table_exists = true; nvs_net_count = n; if (n) nvs_nets[0] = a[0]; return ESP_OK; }
 static esp_err_t esp_wifi_set_config(wifi_interface_t i, wifi_config_t *c) { assert(i == WIFI_IF_STA); drv_ram = *c; if (drv_storage == WIFI_STORAGE_FLASH) drv_flash = *c; return ESP_OK; }
 static esp_err_t esp_wifi_get_config(wifi_interface_t i, wifi_config_t *c) { assert(i == WIFI_IF_STA); *c = drv_ram; return ESP_OK; }
 static esp_err_t esp_wifi_set_storage(wifi_storage_t s) { drv_storage = s; return ESP_OK; }
@@ -121,7 +122,7 @@ static void wizard_wifi_test(const char *ssid, const char *pw) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &c));
 }
 static void factory(void) {
-    nvs_has_setup_done = nvs_setup_done = nvs_password = nvs_has_key = false; nvs_net_count = 0;
+    nvs_has_setup_done = nvs_setup_done = nvs_password = nvs_has_key = nvs_wifi_table_exists = false; nvs_net_count = 0;
     memset(&drv_flash, 0, sizeof drv_flash);
 }
 int main(void) {
@@ -152,6 +153,13 @@ int main(void) {
     nvs_net_count = 1; strcpy(nvs_nets[0].ssid, "HomeNet"); nvs_nets[0].valid = 1;
     boot();
     assert(!first_boot_active() && drv_storage == WIFI_STORAGE_FLASH && applied_network == 0);
+
+    /* Removing the last saved uplink survives boot with a stale SDK copy. */
+    wizard_wifi_test("OldNet", "old-password");
+    assert(wifi_networks_set_all(nvs_nets, 0) == ESP_OK);
+    boot();
+    assert(!first_boot_active() && nvs_wifi_table_exists && nvs_net_count == 0);
+    assert(applied_network < 0 && !drv_ram.sta.ssid[0] && !drv_flash.sta.ssid[0]);
 
     /* Installation upgraded from 1.x with a password and only a driver-cached
      * network: still migrated as before, and recorded as set up. */
