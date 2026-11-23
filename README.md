@@ -6,7 +6,7 @@
 
 *Formerly ESP32 Tailnet Gateway: same firmware, same settings, new name.*
 
-**Mattboxx Edition · One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need.**
+**One ESP32. Remote access, Wake-on-LAN and backup internet. Enable only what you need.**
 
 **Tailscale / Headscale gateway · Wake-on-LAN from Telegram or ntfy, no VPN needed · Ethernet and 4G/LTE uplinks for IoT**
 
