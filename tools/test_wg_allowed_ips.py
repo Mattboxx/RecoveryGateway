@@ -34,6 +34,7 @@ CODE = ''.join(function(sig) for sig in (
     'static int peer_allowed_count(',
     'static struct wireguard_allowed_ip *peer_allowed(',
     'static struct wireguard_peer *peer_lookup_by_allowed_ip(',
+    'static void retire_endpoint_for_host_route(',
     'static bool peer_add_ip(',
 ))
 
@@ -53,12 +54,22 @@ PROGRAM = r'''
 typedef struct {uint32_t addr;uint8_t type;} ip_addr_t;
 #define ip_addr_cmp(a,b) ((a)->addr==(b)->addr&&(a)->type==(b)->type)
 #define IP_ADDR_NETCMP_COMPAT(s,i,m) (((s)->addr & (m)->addr)==((i)->addr & (m)->addr))
+#define IPADDR_BROADCAST 0xffffffffu
+#define IP_IS_V4(a) ((a)->type == 4)
+#define ip_addr_set_any(v6, a) (*(a) = (ip_addr_t){.type = (v6) ? 6 : 4})
 #define ip_2_ip4(a) (a)
 #define ip4_addr_get_u32(a) ((a)->addr)
 #define lwip_ntohl(x) (x)          /* host order throughout the test */
 struct wireguard_allowed_ip {bool valid;ip_addr_t ip,mask;};
 struct wireguard_keypair {bool valid;};
-struct wireguard_peer {bool valid;struct wireguard_allowed_ip allowed_source_ips[WIREGUARD_MAX_SRC_IPS];struct wireguard_keypair curr_keypair,prev_keypair;};
+struct wireguard_peer {
+    bool valid;
+    struct wireguard_allowed_ip allowed_source_ips[WIREGUARD_MAX_SRC_IPS];
+    struct wireguard_keypair curr_keypair,prev_keypair;
+    ip_addr_t connect_ip,ip;
+    uint16_t connect_port,port;
+    uint32_t last_direct_rx;
+};
 struct wireguard_device {struct wireguard_peer peers[WIREGUARD_MAX_PEERS];
     struct wireguard_allowed_ip (*extra_ips)[WIREGUARD_EXTRA_SRC_IPS];uint8_t extra_count[WIREGUARD_MAX_PEERS];};
 static int alloc_fail;
