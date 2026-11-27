@@ -255,10 +255,27 @@ assert boot.index('microlink_json_memory_init();') < boot.index('ota_remote_init
 
 wg_backend = (ROOT / 'external/microlink/components/microlink/components/wireguard_lwip/src/wireguardif.c').read_text()
 endpoint = 'static void update_peer_addr' + wg_backend.split('static void update_peer_addr', 1)[1].split('/* Count contiguous', 1)[0]
+endpoint += wg_backend[wg_backend.index('bool wireguardif_endpoint_usable('):wg_backend.index('static void mark_link_up(')]
 endpoint_fixture = r'''
 typedef uint32_t ip_addr_t;
+typedef uint32_t ip4_addr_t;
 typedef uint16_t u16_t;
-struct wireguard_peer {ip_addr_t ip;u16_t port;uint32_t last_direct_rx;};
+struct netif {ip4_addr_t ip; ip4_addr_t peer_route;};
+struct wireguard_peer {ip_addr_t ip,connect_ip;u16_t port,connect_port;uint32_t last_direct_rx;bool valid;};
+#define WIREGUARD_MAX_PEERS 2
+struct wireguard_device {struct wireguard_peer peers[WIREGUARD_MAX_PEERS];};
+#define LWIP_IPV6 0
+#define PP_NTOHL(a) (a)
+#define IP_IS_V4(ip) ((ip)!=NULL)
+#define ip_2_ip4(ip) (ip)
+#define ip4_addr_get_u32(ip) (*(ip))
+#define netif_ip4_addr(netif) (&(netif)->ip)
+#define ip4_addr_cmp(a,b) (*(a)==*(b))
+#define ip_addr_cmp(a,b) (*(a)==*(b))
+#define IPADDR_BROADCAST UINT32_MAX
+static unsigned checks;
+static bool wireguardif_has_host_route(struct netif *n,const ip4_addr_t *ip){checks++;return n->peer_route==*ip;}
+bool wireguardif_endpoint_usable(struct netif *, const ip_addr_t *);
 static uint32_t now;
 static uint32_t wireguard_sys_now(void){return now;}
 static bool ip_addr_isany(const ip_addr_t *ip){return *ip==0;}
@@ -267,6 +284,7 @@ static void ip_addr_set_any(bool ipv6,ip_addr_t *ip){(void)ipv6;*ip=0;}
 '''
 endpoint_tests = r'''
 int main(void){
+    struct netif n={.ip=0x64400001,.peer_route=0x64400002};
     ip_addr_t direct=0xc0000201,relay=0;struct wireguard_peer p={.ip=direct,.port=41641};
     now=1000;update_peer_addr(&p,&relay,0,false);assert(p.ip==0 && p.port==0);
     now=2000;update_peer_addr(&p,&direct,41642,false);assert(p.ip==direct && p.port==41642 && p.last_direct_rx==2000);
@@ -278,11 +296,26 @@ int main(void){
     now=0xfffffff0;update_peer_addr(&p,&direct,41644,false);
     now=100;update_peer_addr(&p,&relay,0,false);assert(p.ip==direct && p.port==41644);
     now=30000;update_peer_addr(&p,&relay,0,false);assert(!p.ip && !p.port);
+    ip_addr_t cgnat=0x64400003,mask=UINT32_MAX;
+    assert(!wireguardif_endpoint_usable(&n,&n.ip));
+    assert(!wireguardif_endpoint_usable(&n,&n.peer_route));
+    assert(wireguardif_endpoint_usable(&n,&cgnat));
+    update_peer_addr(&p,&cgnat,41641,false); assert(p.ip==cgnat);
+    unsigned before=checks;
+    for (int i=0;i<1000;i++) update_peer_addr(&p,&cgnat,41641,false);
+    assert(checks==before);
+    update_peer_addr(&p,&n.peer_route,41641,false); assert(p.ip==cgnat);
+    struct wireguard_device device={.peers={p}};
+    device.peers[0].valid=true;
+    device.peers[0].connect_ip=cgnat;
+    device.peers[0].connect_port=41641;
+    retire_endpoint_for_host_route(&device,&cgnat,&mask);
+    assert(!device.peers[0].ip && !device.peers[0].connect_ip && !device.peers[0].port);
 }
-'''
+'''.replace('update_peer_addr(&p,','update_peer_addr(&n, &p,')
 run('Actual authenticated endpoint selection: relay recovery, healthy direct retention, upgrade and clock wrap',
     headers + endpoint_fixture + endpoint + endpoint_tests)
-assert 'update_peer_addr(peer, addr, port, pbuf->tot_len > 0);' in wg_backend
+assert 'update_peer_addr(device->netif, peer, addr, port, pbuf->tot_len > 0);' in wg_backend
 assert 'uint32_t age = wireguard_sys_now() - kwp->last_direct_rx;' in (
     ROOT / 'external/microlink/components/microlink/src/ml_wg_mgr.c').read_text()
 

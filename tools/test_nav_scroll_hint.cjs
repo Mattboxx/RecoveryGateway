@@ -108,7 +108,12 @@ async function open(browser, width) {
       s = await state();
       assert.ok(s.scroll > 0 && s.left, 'the arrow scrolls and the left arrow appears');
       await page.evaluate(() => { const r = document.getElementById('navTabs'); r.scrollLeft = r.scrollWidth; });
-      await page.waitForTimeout(200);
+      await page.waitForFunction(() => {
+        const row = document.getElementById('navTabs');
+        return row.scrollWidth - row.clientWidth - row.scrollLeft <= 2 &&
+          !document.querySelector('.nav .scroll-more-right.show') &&
+          !!document.querySelector('.nav .scroll-more-left.show');
+      });
       s = await state();
       assert.ok(!s.right && s.left, 'at the end only the left arrow remains');
       await page.evaluate(() => { document.getElementById('navTabs').scrollLeft = 0; location.hash = '#tools'; });

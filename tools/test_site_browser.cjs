@@ -96,9 +96,21 @@ pages.unshift('');
         if (await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top)) !== 0)
           failures.push(`${width}: header does not come back on scroll up`);
         await page.evaluate(() => scrollTo(0, 1100)); await page.waitForTimeout(400);
-        await page.evaluate(() => scrollTo(0, 0)); await page.waitForTimeout(400);
-        if (await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top)) !== 0)
+        await page.evaluate(() => scrollTo(0, 0));
+        try {
+          await page.waitForFunction(() => scrollY <= 1 &&
+            !document.querySelector('.top').classList.contains('is-hidden'),
+            null, { polling: 50, timeout: 5000 });
+          // Check the final geometry with transitions disabled. A background
+          // Chromium window can suspend compositor frames mid-transition.
+          await page.emulateMedia({ reducedMotion: 'reduce' });
+          const top = await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top));
+          if (top !== 0) failures.push(`${width}: header hidden at the top of the page`);
+        } catch {
           failures.push(`${width}: header hidden at the top of the page`);
+        } finally {
+          await page.emulateMedia({ reducedMotion: null });
+        }
         await page.evaluate(() => scrollTo(0, 400)); await page.waitForTimeout(400);
         await page.evaluate(() => scrollTo(0, 300)); await page.waitForTimeout(400);
         await page.click('.menu'); await page.click('main h2, main p');

@@ -229,3 +229,72 @@ if old != BODY:
     assert o2 > bound, f'the 25 s budget was expected to exceed the bound ({o2} ms)'
 print(f'netcheck: all answer {t1} ms, one region silent {t2} ms, all silent {t3} ms (bound {bound} ms with {R} regions), '
       f'lowest RTT picked, lost first reply retried, stop honoured in {t5} ms')
+
+coord = (ROOT / 'external/microlink/components/microlink/src/ml_coord.c').read_text(encoding='utf-8')
+cache = coord[coord.index('static uint32_t derp_map_fingerprint('):coord.index('static bool parse_derp_map_from_response(')]
+cache_fixture = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#define ESP_OK 0
+typedef struct {char hostname[64];uint16_t stun_port;bool stun_only;} node_t;
+typedef struct {uint16_t region_id;uint8_t node_count;node_t nodes[2];bool avoid;} ml_derp_region_t;
+typedef struct {ml_derp_region_t derp_regions[2];uint8_t derp_region_count;
+    uint16_t derp_rtt_ms[2],netcheck_best_region;uint8_t netcheck_uplink_index,upstream_ifindex;
+    uint32_t netcheck_fingerprint,netcheck_epoch,netcheck_saved_epoch,netcheck_sta_ip,netcheck_sta_gateway;
+    uint64_t netcheck_at_ms;} microlink_t;
+typedef int esp_netif_t;
+typedef struct {struct {uint32_t addr;} ip,gw;} esp_netif_ip_info_t;
+static esp_netif_t sta;
+static uint32_t local_ip=1,gateway=2;
+static uint64_t now=1000;
+static unsigned probes;
+static uint16_t find_region=3;
+static esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key){assert(!strcmp(key,"WIFI_STA_DEF"));return &sta;}
+static bool esp_netif_is_netif_up(esp_netif_t *n){return n==&sta;}
+static int esp_netif_get_ip_info(esp_netif_t *n,esp_netif_ip_info_t *o){assert(n==&sta);o->ip.addr=local_ip;o->gw.addr=gateway;return ESP_OK;}
+static uint64_t ml_get_time_ms(void){return now;}
+static uint16_t ml_netcheck_pick_best_derp(microlink_t *ml){probes++;ml->derp_rtt_ms[0]=42;return find_region;}
+'''
+cache_tests = r'''
+int main(void){
+    microlink_t ml={.derp_region_count=2,.derp_regions={{.region_id=3,.node_count=1,.nodes={{.hostname="one"}}},
+      {.region_id=4,.node_count=1,.nodes={{.hostname="two"}}}}};
+    assert(select_measured_derp(&ml)==3 && probes==1);
+    assert(select_measured_derp(&ml)==3 && probes==1 && ml.derp_rtt_ms[0]==42);
+    ml.derp_regions[0].nodes[0].stun_port=3479;
+    assert(select_measured_derp(&ml)==3 && probes==2);
+    gateway++;
+    assert(select_measured_derp(&ml)==3 && probes==3);
+    ml.upstream_ifindex++;
+    assert(select_measured_derp(&ml)==3 && probes==4);
+    ml.netcheck_epoch++;
+    assert(select_measured_derp(&ml)==3 && probes==5);
+    now+=30*60*1000;
+    assert(select_measured_derp(&ml)==3 && probes==6);
+    local_ip=0;
+    assert(select_measured_derp(&ml)==3 && probes==7);
+    assert(select_measured_derp(&ml)==3 && probes==8);
+    local_ip=1;
+    find_region=0;
+    assert(!select_measured_derp(&ml) && probes==9);
+    assert(!select_measured_derp(&ml) && probes==10);
+    ml.derp_region_count=1;
+    assert(select_measured_derp(&ml)==3 && probes==10 && !ml.derp_rtt_ms[0]);
+    ml.derp_regions[0].nodes[0].stun_only=true;
+    assert(!select_measured_derp(&ml) && probes==11);
+    puts("PASS: unchanged DERP map reuses exact-path results, changed paths and failed probes refresh, single relay skips sweep");
+}
+'''
+with tempfile.TemporaryDirectory(prefix='netcheck-cache-') as folder:
+    directory = Path(folder)
+    source = directory / 'cache.c'
+    program = directory / ('cache.exe' if os.name == 'nt' else 'cache')
+    source.write_text(cache_fixture + cache + cache_tests, encoding='utf-8')
+    flags = ['-std=c11', '-Wall', '-Wextra', '-Werror']
+    if os.name != 'nt' and os.environ.get('HOTLOOP_SANITIZE') == '1':
+        flags += ['-fsanitize=address,undefined']
+    subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(source), '-o', str(program)], check=True)
+    subprocess.run([str(program)], check=True, timeout=20)
