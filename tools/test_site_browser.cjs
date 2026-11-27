@@ -99,10 +99,17 @@ pages.unshift('');
         await page.evaluate(() => scrollTo(0, 0));
         try {
           await page.waitForFunction(() => scrollY <= 1 &&
-            Math.round(document.querySelector('.top').getBoundingClientRect().top) === 0,
-            null, { timeout: 5000 });
+            !document.querySelector('.top').classList.contains('is-hidden'),
+            null, { polling: 50, timeout: 5000 });
+          // Check the final geometry with transitions disabled. A background
+          // Chromium window can suspend compositor frames mid-transition.
+          await page.emulateMedia({ reducedMotion: 'reduce' });
+          const top = await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top));
+          if (top !== 0) failures.push(`${width}: header hidden at the top of the page`);
         } catch {
           failures.push(`${width}: header hidden at the top of the page`);
+        } finally {
+          await page.emulateMedia({ reducedMotion: null });
         }
         await page.evaluate(() => scrollTo(0, 400)); await page.waitForTimeout(400);
         await page.evaluate(() => scrollTo(0, 300)); await page.waitForTimeout(400);
