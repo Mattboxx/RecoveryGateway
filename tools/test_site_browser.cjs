@@ -96,9 +96,14 @@ pages.unshift('');
         if (await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top)) !== 0)
           failures.push(`${width}: header does not come back on scroll up`);
         await page.evaluate(() => scrollTo(0, 1100)); await page.waitForTimeout(400);
-        await page.evaluate(() => scrollTo(0, 0)); await page.waitForTimeout(400);
-        if (await page.evaluate(() => Math.round(document.querySelector('.top').getBoundingClientRect().top)) !== 0)
+        await page.evaluate(() => scrollTo(0, 0));
+        try {
+          await page.waitForFunction(() => scrollY <= 1 &&
+            Math.round(document.querySelector('.top').getBoundingClientRect().top) === 0,
+            null, { timeout: 5000 });
+        } catch {
           failures.push(`${width}: header hidden at the top of the page`);
+        }
         await page.evaluate(() => scrollTo(0, 400)); await page.waitForTimeout(400);
         await page.evaluate(() => scrollTo(0, 300)); await page.waitForTimeout(400);
         await page.click('.menu'); await page.click('main h2, main p');
