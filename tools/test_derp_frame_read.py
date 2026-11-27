@@ -141,9 +141,11 @@ int main(void) {
     reset(); script(0, frame, 200, 0);
     assert(poll_derp_read(&ml, &ml.derp) == -1 && dispatched == 0);
 
-    /* RecvPacket of exactly 32 bytes keeps the previous behaviour */
-    reset(); n = build(DERP_FRAME_RECV_PACKET, 32); script(0, frame, (int)n, 0);
-    assert(poll_derp_read(&ml, &ml.derp) == 1 && got_len == 32);
+    /* Short RecvPacket is consumed without dispatching or losing framing. */
+    for (int len = 0; len <= 32; len++) {
+        reset(); n = build(DERP_FRAME_RECV_PACKET, len); script(0, frame, (int)n, 0);
+        assert(poll_derp_read(&ml, &ml.derp) == 1 && dispatched == 0);
+    }
 
     /* disconnected relay */
     ml.derp.connected = false; reset();

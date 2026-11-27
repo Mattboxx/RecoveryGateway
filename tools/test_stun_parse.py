@@ -87,6 +87,7 @@ int main(void) {
     uint8_t soft[5] = {'t', 'e', 's', 't', '!'};
     hdr(txid_v4); attr(0x8022, soft, 5); attr(STUN_ATTR_XOR_MAPPED_ADDRESS, xa, 8); fin();
     CHECK(v4(plen, &ip, &port) && ip == 0xCB007107u && port == 41641);
+    CHECK(!txid_v4_valid && !ml_stun_parse_response(pkt, plen, &ip, &port));
     CHECK(!v4(plen - 1, &ip, &port));                      /* message length beyond packet */
     CHECK(!v4(19, &ip, &port));                            /* short */
     pkt[1] = 0x11; CHECK(!v4(plen, &ip, &port)); pkt[1] = 0x01;  /* error response */

@@ -731,7 +731,7 @@ static unsigned deliveries,translations,allocs,frees;
 static struct wireguard_keypair *get_peer_keypair_for_idx(struct wireguard_peer *p,uint32_t idx){(void)idx;return &p->kp;}
 static bool wireguard_expired(uint32_t a,uint32_t b){(void)a;(void)b;return false;}
 static uint32_t wireguard_sys_now(void){return clock_ms;}
-static void update_peer_addr(struct wireguard_peer *p,const ip_addr_t *a,u16_t port,bool payload){(void)p;(void)a;(void)port;(void)payload;}
+static void update_peer_addr(struct netif *n,struct wireguard_peer *p,const ip_addr_t *a,u16_t port,bool payload){(void)n;(void)p;(void)a;(void)port;(void)payload;}
 static struct wireguard_keypair *keypair_update(struct wireguard_peer *p,struct wireguard_keypair *k){(void)p;return k;}
 static void keypair_destroy(struct wireguard_keypair *k){k->receiving_valid=false;}
 static void netif_set_link_up(struct netif *n){(void)n;}
