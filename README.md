@@ -74,7 +74,14 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/RecoveryGateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.1.0
+## What's new in Firmware 3.1.1
+
+- More reliable direct and relayed Tailnet connections through WireGuard
+  endpoint checks, validated STUN replies and safer DERP frame handling.
+- Relay selection skips repeat probes on the same uplink and selects a single
+  available relay without comparing it against other regions.
+
+### Also in 3.1.0
 
 - **Telegram and ntfy share recovery commands.** Use `help` to see the
   commands and `recover NAME` for Wake-on-LAN followed by verification.

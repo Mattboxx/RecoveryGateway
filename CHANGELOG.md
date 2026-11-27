@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-11-27
+
+### Fixed
+
+- Reject tunnel-owned addresses as direct WireGuard endpoints while preserving
+  carrier NAT uplinks. Cookie challenges no longer move the endpoint.
+- Apply WireGuard link transitions on the network stack thread. Validate
+  incoming STUN transactions and DERP frames before processing them.
+
+### Changed
+
+- Reuse recent relay measurements while the network path and relay map match.
+  A single usable relay needs no comparative probe. Reduce idle relay logging.
+
 ## [3.1.0] - 2026-11-21
 
 ### Changed
