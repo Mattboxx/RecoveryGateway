@@ -5379,6 +5379,8 @@ static esp_err_t system_diag_handler(httpd_req_t *req)
         sdlog_get_status(&sl);
         cJSON *sdj = cJSON_CreateObject();
         cJSON_AddBoolToObject  (sdj, "present",    sl.present);
+        cJSON_AddBoolToObject  (sdj, "checked",    sl.checked);
+        cJSON_AddNumberToObject(sdj, "console_level", sl.console_level);
         cJSON_AddNumberToObject(sdj, "card_mb",    sl.card_mb);
         cJSON_AddNumberToObject(sdj, "free_mb",    sl.free_mb);
         cJSON_AddNumberToObject(sdj, "file_count", sl.file_count);
@@ -6253,6 +6255,7 @@ static esp_err_t sdlog_status_get_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     if (!root) { httpd_resp_send_500(req); return ESP_FAIL; }
     cJSON_AddBoolToObject  (root, "present",       st.present);
+    cJSON_AddBoolToObject  (root, "checked",       st.checked);
     cJSON_AddBoolToObject  (root, "enabled",       st.enabled);
     cJSON_AddNumberToObject(root, "sd_level",      st.sd_level);
     cJSON_AddNumberToObject(root, "console_level", st.console_level);
@@ -6274,8 +6277,8 @@ static esp_err_t sdlog_status_get_handler(httpd_req_t *req)
 
 /* POST /api/sdlog — { enabled:bool, sd_level:int, console_level:int } (all
  * optional/independent: SD enable+level, and the live console sink level).
- * Toggling enabled
- * starts/stops the writer. No-op (still 200) if no card is present. */
+ * {check_card:true} explicitly checks the slot without changing settings.
+ * Toggling enabled starts/stops the writer if a card is available. */
 static esp_err_t sdlog_status_post_handler(httpd_req_t *req)
 {
     if (require_auth(req) != ESP_OK) return ESP_FAIL;
@@ -6290,6 +6293,14 @@ static esp_err_t sdlog_status_post_handler(httpd_req_t *req)
 
     const cJSON *en = cJSON_GetObjectItem(root, "enabled");
     const cJSON *sd = cJSON_GetObjectItem(root, "sd_level");
+    const cJSON *cl = cJSON_GetObjectItem(root, "console_level");
+    const cJSON *check = cJSON_GetObjectItemCaseSensitive(root, "check_card");
+    if (check && (!cJSON_IsTrue(check) || en || sd || cl)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "send check_card:true on its own");
+        return ESP_FAIL;
+    }
+    if (check) sdlog_check_card();
     uint8_t sd_level = SDLOG_LVL_WARN;
     if (cJSON_IsNumber(sd)) {
         int v = (int)sd->valuedouble;
@@ -6305,7 +6316,6 @@ static esp_err_t sdlog_status_post_handler(httpd_req_t *req)
     /* Console (UART) output level — independent of the SD recorder,
      * applied live. Absent → unchanged, so the SD toggle and the console
      * selector can post separately. */
-    const cJSON *cl = cJSON_GetObjectItem(root, "console_level");
     if (cJSON_IsNumber(cl)) {
         int v = (int)cl->valuedouble;
         if (v < SDLOG_LVL_OFF)  v = SDLOG_LVL_OFF;

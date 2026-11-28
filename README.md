@@ -74,7 +74,13 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/RecoveryGateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.1.2
+## What's new in Firmware 3.1.3
+
+- Passive diagnostics and console settings leave the optional microSD slot idle.
+- **Check SD card** checks or retries the slot explicitly, without enabling recording.
+- Console settings load after login. Diagnostics distinguish an unavailable core dump from a clean boot.
+
+### Also in 3.1.2
 
 - **Clearer notifications and command replies.** Telegram, ntfy and email use
   concise restart and connectivity notices. Recovery results separate the

@@ -342,6 +342,7 @@ def transfer(opener, url, output, expected_size, expected_hash, *, timeout=15,
     recovered before the socket timeout still shows up there."""
     import urllib.request
     start = time.monotonic()
+    started_counter = time.perf_counter()
     digest, count, windows = hashlib.sha256(), 0, []
     last_time, last_count = start, 0
     request = urllib.request.Request(url, headers={'Accept-Encoding': 'identity'})
@@ -374,7 +375,7 @@ def transfer(opener, url, output, expected_size, expected_hash, *, timeout=15,
                 windows.append(row)
                 progress(row)
                 last_time, last_count = now, count
-    elapsed = time.monotonic() - start
+    elapsed = time.perf_counter() - started_counter
     if count != expected_size or digest.hexdigest() != expected_hash:
         raise ValueError('Incomplete or corrupted file')
     return dict(bytes=count, elapsed_s=elapsed, mbps=count*8/elapsed/1e6,
@@ -426,6 +427,7 @@ def upload(opener, url, source, expected_size, expected_hash, *, timeout=15,
     import json
     import urllib.request
     start = time.monotonic()
+    started_counter = time.perf_counter()
     body = _UploadBody(source, expected_size, start, total_timeout, progress, cancelled)
     request = urllib.request.Request(url, data=body, method='PUT', headers={
         'Content-Type': 'application/octet-stream', 'Content-Length': str(expected_size)})
@@ -435,7 +437,7 @@ def upload(opener, url, source, expected_size, expected_hash, *, timeout=15,
             status = response.status
     finally:
         body.close()
-    elapsed = time.monotonic() - start
+    elapsed = time.perf_counter() - started_counter
     if status != 200:
         raise ValueError('Unexpected HTTP status')
     received = json.loads(reply)

@@ -4570,10 +4570,11 @@
         </div>
         <div class="card-body">
           <p class="form-hint" style="margin:0 0 0.75rem 0;">Persists every ESP_LOG line to the onboard microSD card. Survives reboots — the place to look after a silent control-plane wedge. A fresh boot-marker file is written on every boot.</p>
-          <p class="form-hint mono" id="sys-sdlog-cardinfo" style="margin:0 0 0.75rem 0;">No usable SD card. Insert a FAT32-formatted card and reboot to enable the recorder.</p>
+          <p class="form-hint mono" id="sys-sdlog-cardinfo" style="margin:0 0 0.75rem 0;">Loading…</p>
+          <button class="btn btn-secondary btn-sm mb-4" id="sys-sdlog-check" type="button" disabled>Check SD card</button>
           <div class="form-group">
             <label class="form-label" for="sys-sdlog-verb">SD recorder</label>
-            <select class="input" id="sys-sdlog-verb">
+            <select class="input" id="sys-sdlog-verb" disabled>
               <option value="3">All (info + warnings + errors)</option>
               <option value="2">Warnings + errors</option>
               <option value="1">Errors only</option>
@@ -10681,14 +10682,16 @@
         document.getElementById('diag-coredump').innerHTML = cd.present
           ? 'Coredump: <strong style="color:var(--accent-danger);">present</strong> at ' +
             hex(cd.addr || 0) + ' (' + kb(cd.size || 0) + ')'
-          : '<span style="color:var(--fg-muted);">Coredump: none — clean boot</span>';
+          : '<span style="color:var(--fg-muted);">Coredump: unavailable</span>';
 
         /* microSD — separate storage (FAT @ /sdcard), not a flash partition */
         var sd = d.sd || {};
         document.getElementById('diag-sd').innerHTML = sd.present
           ? 'microSD: <strong>' + (sd.free_mb | 0) + '</strong> / ' + (sd.card_mb | 0) +
             ' MB free · ' + (sd.file_count | 0) + ' log files · FAT @ /sdcard (separate from flash)'
-          : '<span style="color:var(--fg-muted);">microSD: not present</span>';
+          : '<span style="color:var(--fg-muted);">' +
+            (sd.checked === false ? 'microSD: not checked' : 'microSD: no usable card') + '</span>';
+        renderConsoleLevel(sd.console_level);
 
         /* MAC + system */
         var s = d.system || {}, ma = d.mac || {};
@@ -11985,7 +11988,7 @@
     });
 
     /* ===== SD flight-recorder ===== */
-    var sdlogState = { present: false, enabled: false };
+    var sdlogState = { present: false, enabled: false, checking: false };
 
     function sdlogRenderFiles(list) {
       var box = document.getElementById('sys-sdlog-files');
@@ -12009,9 +12012,19 @@
       });
     }
 
+    function renderConsoleLevel(level) {
+      if (typeof level !== 'number') return;
+      var control = document.getElementById('sys-sdlog-conlvl');
+      if (control) control.value = String(level);
+      if (window.logBadgeSetUartOff) window.logBadgeSetUartOff(level === 0);
+    }
+
     function loadSdlog() {
-      apiFetch('/api/sdlog')
-        .then(function (r) { return r.json(); })
+      return apiFetch('/api/sdlog')
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
         .then(function (d) {
           sdlogState.present = !!d.present;
           sdlogState.enabled = !!d.enabled;
@@ -12023,18 +12036,15 @@
             verb.value    = d.enabled ? String(d.sd_level != null ? d.sd_level : 2) : '0';
             verb.disabled = !d.present;
           }
-          /* With no card every SD-specific control is inert — and there's
-           * no hot-plug (a card inserted now isn't seen until reboot), so a
-           * Refresh wouldn't change anything either. Disable them all; the
-           * console-level selector stays live (it works without a card). */
+          /* File operations require a mounted card. The slot can be checked
+           * separately and the console level is independent of the card. */
           ['sys-sdlog-refresh', 'sys-sdlog-erase', 'sys-sdlog-tail-refresh',
            'sys-sdlog-tail-n'].forEach(function (id) {
             var el = document.getElementById(id);
             if (el) el.disabled = !d.present;
           });
-          var _cl = document.getElementById('sys-sdlog-conlvl');
-          if (_cl) _cl.value = String(d.console_level != null ? d.console_level : 2);
-          if (window.logBadgeSetUartOff) window.logBadgeSetUartOff(d.console_level === 0);
+          document.getElementById('sys-sdlog-check').disabled = sdlogState.checking || d.present;
+          renderConsoleLevel(d.console_level);
           if (d.present) {
             badge.className   = d.enabled ? 'badge badge-success' : 'badge badge-neutral';
             badge.textContent = d.enabled ? 'Recording' : 'Idle';
@@ -12043,16 +12053,34 @@
               ' · dropped ' + (d.dropped || 0);
           } else {
             badge.className   = 'badge badge-neutral';
-            badge.textContent = 'No card';
-            info.textContent  = 'No usable SD card. Insert a FAT32-formatted card and reboot to enable the recorder.';
+            badge.textContent = d.checked === false ? 'Not checked' : 'No card';
+            info.textContent = 'Insert a FAT32 microSD card and select Check SD card.';
           }
+          if (!d.present) return sdlogRenderFiles([]);
+          return apiFetch('/sdlog/list')
+            .then(function (r) { if (r.ok) return r.json(); return []; })
+            .then(sdlogRenderFiles);
         })
         .catch(function () {});
-      apiFetch('/sdlog/list')
-        .then(function (r) { return r.json(); })
-        .then(sdlogRenderFiles)
-        .catch(function () {});
     }
+
+    var sdCheck = document.getElementById('sys-sdlog-check');
+    sdCheck.addEventListener('click', function () {
+      sdlogState.checking = true;
+      sdCheck.disabled = true;
+      apiFetch('/api/sdlog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ check_card: true })
+      })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); })
+        .catch(function () { showToast('error', 'SD card check failed', '', 4000); })
+        .then(function () {
+          sdlogState.checking = false;
+          sdCheck.disabled = sdlogState.present;
+          return loadSdlog();
+        });
+    });
 
     /* SD recorder = single dropdown (Off + levels), applied live like the
      * console: Off -> disable the recorder, a level -> enable at that level. */
@@ -12089,14 +12117,6 @@
       var cl = document.getElementById('sys-sdlog-conlvl');
       if (!cl) return;
       var names = ['Off — silent UART', 'Errors only', 'Warnings + errors', 'All (info + warnings + errors)'];
-      /* Initial value — covers a Diagnostics-first visit before loadSdlog runs. */
-      apiFetch('/api/sdlog')
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.console_level != null) cl.value = String(d.console_level);
-          if (window.logBadgeSetUartOff) window.logBadgeSetUartOff(d && d.console_level === 0);
-        })
-        .catch(function () {});
       cl.addEventListener('change', function () {
         var lvl = parseInt(cl.value, 10) || 0;
         if (window.logBadgeSetUartOff) window.logBadgeSetUartOff(lvl === 0);   /* reflect into the live badge at once */

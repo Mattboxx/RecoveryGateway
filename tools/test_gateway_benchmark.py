@@ -131,7 +131,8 @@ class Transfers(unittest.TestCase):
                     opener.open(url+'/wrong', timeout=2)
                 self.assertEqual(error.exception.code, 403)
                 error.exception.close()
-                result = transfer(opener, url+service.url_path, dest, len(data), hashlib.sha256(data).hexdigest())
+                with patch('gateway_benchmark.time.monotonic', return_value=100.0):
+                    result = transfer(opener, url+service.url_path, dest, len(data), hashlib.sha256(data).hexdigest())
                 self.assertTrue(result['integrity_pass'])
                 self.assertTrue(0 <= result['max_gap_s'] < 5)
                 self.assertEqual(dest.read_bytes(), data)
