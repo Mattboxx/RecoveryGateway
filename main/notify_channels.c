@@ -309,6 +309,7 @@ done:
 #ifdef ESP_PLATFORM
 #include "json_guard.h"
 #include "notify_text.h"
+#include "power_history.h"
 #include "ota_remote.h"
 #include "esp_app_desc.h"
 #include "esp_system.h"
@@ -664,6 +665,8 @@ static void worker(void *arg)
         if ((note.channels & CH_TG) && c.tg_enabled && reply_current) {
             notify_text_compose(note.kind, note.level, note.text, version, reset, (poweron_channels & CH_TG) != 0,
                                 title, msg, sizeof msg);
+            if (note.kind == HIST_EV_BOOT && reset == ESP_RST_POWERON && (poweron_channels & CH_TG))
+                notify_text_power_interruption(msg, sizeof msg, power_history_previous_online());
             snprintf(text, sizeof text, "%s%s%s%s\n%s", note.level < 3 ? mark[note.level] : "", when, when[0] ? " " : "", title, msg);
             why[0] = 0; esp_err_t err = telegram(&c, text, 0, why, sizeof why); record(&s_tg, err, why);
             if (err) ESP_LOGW(TAG, "Telegram delivery failed: event=%u id=%lu attempt=%u/%u error=%s internal=%u largest=%u psram=%u",
@@ -676,6 +679,8 @@ static void worker(void *arg)
         if ((note.channels & CH_MAIL) && c.mail_enabled) {
             notify_text_compose(note.kind, note.level, note.text, version, reset, (poweron_channels & CH_MAIL) != 0,
                                 title, msg, sizeof msg);
+            if (note.kind == HIST_EV_BOOT && reset == ESP_RST_POWERON && (poweron_channels & CH_MAIL))
+                notify_text_power_interruption(msg, sizeof msg, power_history_previous_online());
             snprintf(text, sizeof text, "%s%s%s", msg, when[0] ? "\n\nTime: " : "", when);
             why[0] = 0; esp_err_t err = email(&c, title, text, why, sizeof why); record(&s_mail, err, why);
             if (err) ESP_LOGW(TAG, "Email delivery failed: event=%u id=%lu attempt=%u/%u error=%s internal=%u largest=%u psram=%u",

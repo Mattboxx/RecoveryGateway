@@ -105,6 +105,7 @@ typedef struct {const char *version;} esp_app_desc_t;
 typedef struct {char latest_version[32];} ota_remote_state_t;
 static esp_reset_reason_t reset_reason;
 static esp_reset_reason_t esp_reset_reason(void){return reset_reason;}
+static uint32_t power_history_previous_online(void){return 1704067200;}
 static const esp_app_desc_t *esp_app_get_description(void){static const esp_app_desc_t app={"fixture"};return &app;}
 static void ota_remote_get_state(ota_remote_state_t *s){strcpy(s->latest_version,"fixture-next");}
 '''
@@ -163,7 +164,7 @@ int main(void) {
     assert(s_status.command_errors==1 && s_status.commands_received==1);
     handle_command(&c,17,"unknown"); assert(s_status.command_errors==1);
     publish_result=ESP_FAIL; handle_command(&c,17,"help");
-    assert(s_status.command_errors==2 && strstr(published,"commands"));
+    assert(s_status.command_errors==2 && strstr(published,"COMMANDS"));
     assert(live==0 && allocations>0);
     const unsigned before_oom=requests;
     fail_at=allocations+1;
@@ -176,7 +177,7 @@ int main(void) {
         assert(s_status.alerts_sent==(unsigned)details+1&&live==0&&strlen(published)<2300);
         assert(!strstr(published,"PRIVATE_LOCAL_LOG_FIXTURE"));
         assert(!strstr(published,"Recent local log tail:"));
-        assert(strstr(published,"Tailscale has remained disconnected"));
+        assert(strstr(published,"Tailscale is disconnected"));
         assert(log_reads==0&&allocations==0);
     }
     publish_result=ESP_FAIL; assert(send_tailscale_alert(&c)==ESP_FAIL);
@@ -191,14 +192,19 @@ int main(void) {
       c.poweron_events=enabled!=0;
       for(unsigned reason=0;reason<sizeof descriptions/sizeof *descriptions;reason++){
         reset_reason=(esp_reset_reason_t)reason;
-        assert(send_system_event(&c,NTFY_EVENT_BOOT,0)==ESP_OK&&strstr(published,descriptions[reason]));
-        assert((strstr(published,"(possible blackout)")!=NULL)==(enabled&&reason==ESP_RST_POWERON));
+        assert(send_system_event(&c,NTFY_EVENT_BOOT,0)==ESP_OK);
+        bool power_notice = enabled && reason == ESP_RST_POWERON;
+        if (power_notice)
+            assert(!strcmp(published,"Power restored.\nLast recorded activity: 2024-01-01 00:00 UTC."));
+        else
+            assert(strstr(published,descriptions[reason]));
+        assert((strstr(published,"2024-01-01 00:00 UTC")!=NULL)==power_notice);
         assert(!strstr(published,"reset reason ")&&!strstr(published,"outage lasted")&&!strstr(published,"PRIVATE_LOCAL_LOG_FIXTURE"));
-        assert(strlen(published)<192&&live==0&&log_reads==0&&allocations==0);
+        assert(strlen(published)<NOTIFY_MESSAGE_MAX&&live==0&&log_reads==0&&allocations==0);
         const char *info_line=reset_reason_text(c.poweron_events);
         assert(strstr(info_line,descriptions[reason]));
         assert((strstr(info_line,"(possible blackout)")!=NULL)==(enabled&&reason==ESP_RST_POWERON));
-        assert(strstr(published,info_line));
+        if (!power_notice) assert(strstr(published,info_line));
 
       }
     }

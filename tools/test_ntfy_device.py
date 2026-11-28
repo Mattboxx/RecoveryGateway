@@ -82,7 +82,7 @@ def main():
             lines = response.read(1024 * 1024).splitlines()
         replies = [json.loads(line) for line in lines if line]
         version_pattern = re.compile(r'(?<![A-Za-z0-9.-])' + re.escape(version) + r'(?![A-Za-z0-9.-])')
-        matching = [e for e in replies if e.get('title', '').startswith('ESP32 router info')
+        matching = [e for e in replies if e.get('title', '').startswith('ESP32 gateway status')
                     and version_pattern.search(e.get('message', ''))]
         assert matching
         if args.expect_network_policy:

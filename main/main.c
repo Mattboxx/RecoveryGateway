@@ -85,6 +85,7 @@
 #include "tailnet_names.h"
 #include "settings_snapshot.h"
 #include "reset_history.h"
+#include "power_history.h"
 #include "ota.h"
 #include "ota_remote.h"
 #include "cli.h"
@@ -1236,6 +1237,7 @@ void app_main(void)
      * / ROLLBACK detection via the app-SHA8 fingerprint trick), shifts
      * the prior 10 boots down a slot, and stamps hist[0]. */
     reset_history_record_boot();
+    power_history_init();
 
     /* AP-side DNS forwarder. Spawn early so the task is up by the time
      * wifi_init_softap publishes the AP IP — set_bind_addr triggers the

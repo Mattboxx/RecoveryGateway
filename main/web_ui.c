@@ -55,6 +55,7 @@
 #include "wol.h"
 #include "mqtt_integration.h"
 #include "ota_flash.h"
+#include "power_history.h"
 #include "ntfy_integration.h"
 #include "fourvia6.h"
 #include "dhcp_reservations.h"
@@ -6724,6 +6725,7 @@ esp_err_t web_ui_init(void)
         return start;
     }
     web_idle_start(server);
+    power_history_bind(server);
     if (ota_flash_bind_httpd(server) != ESP_OK)
         ESP_LOGW(TAG, "OTA dispatcher identification could not be queued at startup");
     /* Old stored rules may conflict with the boot listener. Keep their

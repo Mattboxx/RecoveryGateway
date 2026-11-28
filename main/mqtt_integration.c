@@ -51,6 +51,7 @@
 #include "tailnet_forward.h"
 #include "mqtt_power_event.h"
 #include "notify_text.h"
+#include "power_history.h"
 #include "history.h"
 #include "mbedtls/md.h"
 #include "nvs.h"
@@ -1197,11 +1198,12 @@ static void status_update(const mqtt_integration_config_t *cfg, const service_re
 static __attribute__((noinline)) bool publish_power_event(const mqtt_integration_config_t *cfg,
                                                          const mqtt_power_event_t *power)
 {
-    char topic[128], payload[160];
+    char topic[128], payload[256];
     int n = snprintf(topic, sizeof topic, "%s/event/power", cfg->base_topic);
     if (n <= 0 || (size_t)n >= sizeof topic ||
-        !mqtt_power_event_json(payload, sizeof payload, power,
-                               (uint64_t)esp_timer_get_time() / 1000000)) return false;
+        !mqtt_power_event_json_with_checkpoint(payload, sizeof payload, power,
+                               (uint64_t)esp_timer_get_time() / 1000000,
+                               power_history_previous_online())) return false;
     return publish(topic, payload, 0) >= 0;
 }
 

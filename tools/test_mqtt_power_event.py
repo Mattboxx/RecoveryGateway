@@ -17,7 +17,9 @@ program = r'''
 ''' + config + r'''
 _Static_assert(sizeof(mqtt_integration_config_t)==496,"MQTT config must not grow");
 _Static_assert(sizeof(mqtt_power_event_t)==16,"Boot event fits sixteen bytes of the existing task stack");
-static unsigned calls;static int publish_result=1;static char last[160];
+static uint32_t last_online;
+static uint32_t power_history_previous_online(void){return last_online;}
+static unsigned calls;static int publish_result=1;static char last[256];
 static int64_t esp_timer_get_time(void){return 123000000;}
 static int publish(const char *topic,const char *payload,int retain){
  assert(!strcmp(topic,"home/gateway/event/power")&&!retain);calls++;
@@ -67,6 +69,13 @@ int main(void){
  for(unsigned i=0;i<100;i++)assert(!mqtt_power_event_due(&s,true,true,(i&1)!=0,true,40000+i));
  assert(s.boot_id==0x1234abcd&&calls==2);printf("PAYLOAD %s\n",last);
  assert(!publish_power_event(&cfg,&s)&&calls==2);
+ mqtt_power_event_init(&s,123,true,true,true);
+ last_online=1704067200;
+ assert(publish_power_event(&cfg,&s));
+ assert(strstr(last,"\"last_recorded_online_unix\":1704067200"));
+ char short_json[120];
+ assert(!mqtt_power_event_json_with_checkpoint(short_json,sizeof short_json,&s,0,last_online));
+
  puts("PASS: boot-only opt-in, no WiFi/MQTT reconnect replay, cancel/reenable, bounded retries, backpressure, non-retained event, unchanged config size");
 }
 '''
@@ -80,5 +89,5 @@ with tempfile.TemporaryDirectory(prefix='mqtt-power-') as folder:
     subprocess.run([os.environ.get('CC', 'gcc'), *flags, str(p / 'test.c'), '-o', str(binary)], check=True)
     output = subprocess.check_output([str(binary)], text=True, timeout=15)
     payload = json.loads(next(line[8:] for line in output.splitlines() if line.startswith('PAYLOAD ')))
-    assert payload == dict(event_type='possible_blackout', boot_id='1234abcd', reset_reason='power_on', uptime_s=123)
+    assert payload == dict(event_type='possible_blackout', boot_id='1234abcd', reset_reason='power_on', uptime_s=123, last_recorded_online_unix=None, checkpoint_interval_s=300)
     print(output.splitlines()[-1])

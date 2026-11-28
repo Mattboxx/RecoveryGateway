@@ -43,12 +43,13 @@ static char t[NOTIFY_TITLE_MAX], m[NOTIFY_MESSAGE_MAX];
 static void c(unsigned k, unsigned l, const char *x, int r, bool po) { notify_text_compose(k, l, x, "3.0.12", r, po, t, m, sizeof m); }
 int main(void) {
     c(HIST_EV_BOOT, HIST_INFO, "Power-on start 3.0.12 from ota_0, reset POWERON", 1, true);
-    assert(!strcmp(t, "ESP32 power-on detected"));
-    assert(!strcmp(m, "Gateway powered on: firmware 3.0.12; reset cause: power restored or first power-up (possible blackout).\nDetails: Power-on start 3.0.12 from ota_0, reset POWERON"));
+    assert(!strcmp(t, "ESP32 possible blackout"));
+    assert(!strcmp(m, "Power restored."));
+    assert(!strstr(m, "firmware") && !strstr(m, "Details") && !strstr(m, "reset"));
     c(HIST_EV_BOOT, HIST_INFO, "Power-on start 3.0.12 from ota_0, reset POWERON", 1, false);
     assert(strstr(m, "power restored or first power-up.") && !strstr(m, "blackout"));
     c(HIST_EV_BOOT, HIST_ERROR, "Started 3.0.12 from ota_1, reset BROWNOUT", 9, true);
-    assert(!strcmp(t, "ESP32 gateway restarted") && strstr(m, "Gateway restarted: firmware 3.0.12; reset cause: supply voltage drop (brownout).") && !strstr(m, "blackout"));
+    assert(!strcmp(t, "ESP32 gateway restarted") && strstr(m, "Reason: supply voltage drop (brownout).") && !strstr(m, "blackout"));
     c(HIST_EV_BOOT, HIST_INFO, "Started 3.0.12 from ota_1, reset SW", 3, false);
     assert(strstr(m, "software-requested restart"));
     c(HIST_EV_BOOT, HIST_INFO, "Started x", 77, false);
@@ -57,17 +58,17 @@ int main(void) {
     char nt[NOTIFY_TITLE_MAX], nm[NOTIFY_MESSAGE_MAX];
     notify_text_boot(nt, nm, sizeof nm, "3.0.12", 4, false);
     c(HIST_EV_BOOT, HIST_ERROR, "Started 3.0.12 from ota_1, reset PANIC", 4, false);
-    assert(!strcmp(t, nt) && !strncmp(m, nm, strlen(nm)) && m[strlen(nm)] == '\n');
+    assert(!strcmp(t, nt) && !strcmp(m, nm));
     c(HIST_EV_TAILNET, HIST_WARN, "Tailnet connection unavailable for at least 120 seconds.", 3, false);
     notify_text_tailscale_problem(nt, nm, sizeof nm);
-    assert(!strcmp(t, nt) && !strncmp(m, nm, strlen(nm)) && strstr(m, "\nUnavailable for at least 120 s."));
+    assert(!strcmp(t, nt) && !strncmp(m, nm, strlen(nm)) && strstr(m, "\nDuration: at least 120 s."));
     c(HIST_EV_TAILNET, HIST_WARN, "Tailnet connection recovered after 300 seconds.", 3, false);
     notify_text_tailscale_restored(nt, nm, sizeof nm, 300);
     assert(!strcmp(t, nt) && !strcmp(m, nm));
     c(HIST_EV_UPLINK, HIST_WARN, "Internet uplink unavailable for at least 60 seconds.", 3, false);
-    assert(!strcmp(t, "ESP32 Internet uplink problem") && !strcmp(m, "The Internet uplink has been unavailable for at least 60 s."));
+    assert(!strcmp(t, "ESP32 Internet uplink problem") && !strcmp(m, "Internet uplink unavailable.\nDuration: at least 60 s."));
     c(HIST_EV_UPLINK, HIST_WARN, "Internet uplink recovered after 65 seconds.", 3, false);
-    assert(!strcmp(t, "ESP32 Internet uplink restored") && !strcmp(m, "Internet uplink restored after about 65 s."));
+    assert(!strcmp(t, "ESP32 Internet uplink restored") && !strcmp(m, "Internet uplink restored.\nInterruption: 65 s."));
     notify_text_update_available(nt, nm, sizeof nm, "9.9.9");
     c(HIST_EV_UPDATE, HIST_INFO, nm, 3, false);
     assert(!strcmp(t, nt) && !strcmp(m, nm));
@@ -92,6 +93,19 @@ int main(void) {
     notify_text_boot(t, small, sizeof small, NULL, 1, true); assert(strlen(small) < sizeof small);
     char longv[80]; memset(longv, 'v', 79); longv[79] = 0;
     notify_text_boot(t, m, sizeof m, longv, 1, true); assert(!strstr(m, "vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv"));
+    strcpy(m, "Power restored.");
+    notify_text_power_interruption(m, sizeof m, 1704067200);
+    assert(!strcmp(m, "Power restored.\nLast recorded activity: 2024-01-01 00:00 UTC."));
+    strcpy(m, "Power restored.");
+    notify_text_power_interruption(m, sizeof m, 0);
+    assert(!strcmp(m, "Power restored.\nLast recorded activity: unavailable."));
+    char bounded[10] = "power";
+    notify_text_power_interruption(bounded, sizeof bounded, UINT32_MAX);
+    assert(bounded[9] == 0);
+    char unterminated[3] = {'a', 'b', 'c'};
+    notify_text_power_interruption(unterminated, sizeof unterminated, 0);
+    assert(unterminated[2] == 'c');
+    notify_text_power_interruption(NULL, 0, 0);
     puts("notify text ok");
     return 0;
 }

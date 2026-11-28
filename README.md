@@ -74,7 +74,19 @@ configuration, peers and measurements. Open an image for the full view.
 
 [Browse the gallery](https://mattboxx.github.io/RecoveryGateway/screenshots/) for mobile, first boot, recovery, alerts, firewall and diagnostics.
 
-## What's new in Firmware 3.1.1
+## What's new in Firmware 3.1.2
+
+- **Clearer notifications and command replies.** Telegram, ntfy and email use
+  concise restart and connectivity notices. Recovery results separate the
+  reachability check, wake-packet delivery and optional service check.
+- **A time reference for possible blackouts.** Power-return alerts show the
+  last saved activity before the restart, or explicitly report it unavailable.
+  MQTT exposes that timestamp for Home Assistant automations.
+- **Readable status reports.** Help and status replies group information by
+  purpose. Long Telegram/ntfy replies preserve complete UTF-8 characters and
+  prefer whole lines.
+
+### Also in 3.1.1
 
 - More reliable direct and relayed Tailnet connections through WireGuard
   endpoint checks, validated STUN replies and safer DERP frame handling.

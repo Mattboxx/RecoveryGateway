@@ -55,3 +55,19 @@ static inline bool mqtt_power_event_json(char *out, size_t cap,
         "\",\"reset_reason\":\"power_on\",\"uptime_s\":%" PRIu64 "}", s->boot_id, uptime_s);
     return n > 0 && (size_t)n < cap;
 }
+
+/* A timestamp is only the last known operation; retain null when unknown.
+ * Keep the boot-event identity and delivery state machine unchanged. */
+static inline bool mqtt_power_event_json_with_checkpoint(char *out, size_t cap,
+    const mqtt_power_event_t *s, uint64_t uptime_s, uint32_t last_online)
+{
+    if (!mqtt_power_event_json(out, cap, s, uptime_s)) return false;
+    size_t used = 0;
+    while (out[used]) used++;
+    char stamp[16] = "null";
+    if (last_online > 1700000000)
+        snprintf(stamp, sizeof stamp, "%" PRIu32, last_online);
+    int n = snprintf(out + used - 1, cap - used + 1,
+        ",\"last_recorded_online_unix\":%s,\"checkpoint_interval_s\":300}", stamp);
+    return n > 0 && (size_t)n < cap - used + 1;
+}
