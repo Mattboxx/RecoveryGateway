@@ -52,6 +52,7 @@ extern "C" {
 /* Snapshot of the recorder state for the /api/sdlog status endpoint. */
 typedef struct {
     bool     present;        /* microSD mounted OK                       */
+    bool     checked;        /* a mount attempt completed this boot     */
     bool     enabled;        /* recorder active (writer task running)    */
     uint8_t  sd_level;       /* SDLOG_LVL_* — SD recorder sink level     */
     uint8_t  console_level;  /* SDLOG_LVL_* — console sink level         */
@@ -75,8 +76,8 @@ typedef struct {
 typedef esp_err_t (*sdlog_chunk_cb)(void *ctx, const char *buf, size_t len);
 
 /**
- * Mount the microSD card, load NVS config, and start the writer task if
- * the recorder was previously enabled. Safe to call when no card is
+ * Load NVS config. If recording was enabled, mount the microSD card and
+ * start the writer. Safe to call when no card is
  * present — the feature simply stays dark (present=false), no crash.
  *
  * Call after the UART console is up; the vprintf hook chain is:
@@ -84,7 +85,10 @@ typedef esp_err_t (*sdlog_chunk_cb)(void *ctx, const char *buf, size_t len);
  */
 esp_err_t sdlog_init(void);
 
-/** True if the microSD card mounted successfully at init. */
+/** Try to mount the card without enabling recording or saving settings. */
+bool sdlog_check_card(void);
+
+/** True if the microSD card is mounted. */
 bool sdlog_card_present(void);
 
 /** True if the recorder is currently enabled (writer task running). */
@@ -133,6 +137,7 @@ void sdlog_set_memory_sink(vprintf_like_t store, uint8_t level);
 esp_err_t sdlog_flush(void);
 
 /** Fill *out with the current recorder status. */
+/** Read recorder status. Does not attempt to mount a card. */
 void sdlog_get_status(sdlog_status_t *out);
 
 /**

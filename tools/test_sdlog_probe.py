@@ -1,16 +1,8 @@
 """microSD probing of the SD recorder (actual components/sdlog/sdlog.c code).
 
-Compiles the real probe_card_locked(), sdlog_init(), sdlog_enable() and the
-probing start of sdlog_get_status() with a scripted card slot:
-- recorder off at boot: the SD bus is not touched (no mount attempt);
-- the first status read probes once; further reads do not probe again;
-- enabling the recorder looks again (a card inserted later is found), and
-  without a card it is refused and stays off;
-- recorder on at boot: probed at boot, found card starts the writer; on
-  without a card: the flag is kept off at runtime;
-- a mounted card is never probed again.
-Found on board A (2026-11-17): every boot logged three SD init errors with
-the recorder off and no card.
+Compiles the actual initialization, status, check and enable paths with
+a scripted card slot. Passive diagnostics never mount, expected boot
+behavior is retained, and the owner can retry an explicit check.
 """
 import os
 from pathlib import Path
@@ -28,10 +20,12 @@ def function(signature):
 
 
 status_t = HDR[HDR.index('typedef struct {', HDR.index('#define SDLOG_LVL_INFO')):HDR.index('} sdlog_status_t;') + len('} sdlog_status_t;')]
-get_status = function('void sdlog_get_status(sdlog_status_t *out)')
-probe_part = get_status[:get_status.index('    if (!out) return;')] + '    (void)out;\n}\n'
-code = function('static void probe_card_locked(bool retry)') + function('esp_err_t sdlog_init(void)') \
-    + function('esp_err_t sdlog_enable(uint8_t sd_level)') + probe_part
+code = ''.join(function(signature) for signature in (
+    'static void probe_card_locked(void)', 'bool sdlog_check_card(void)',
+    'esp_err_t sdlog_init(void)', 'esp_err_t sdlog_enable(uint8_t sd_level)',
+    'void sdlog_get_status(sdlog_status_t *out)',
+))
+
 
 PROGRAM = r'''
 #include <assert.h>
@@ -40,6 +34,7 @@ PROGRAM = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 typedef int esp_err_t;
 #define ESP_OK 0
 #define ESP_ERR_NO_MEM 0x101
@@ -53,6 +48,24 @@ typedef int esp_err_t;
 #define NVS_KEY_ENABLED "sden"
 #define ESP_LOGW(...) ((void)0)
 #define portMAX_DELAY 0
+#define pdMS_TO_TICKS(t) (t)
+#define pdTRUE 1
+#define SDLOG_MOUNT_POINT "/sdcard"
+#define SDLOG_DIR "/sdcard/eslog"
+#define DT_DIR 4
+typedef void DIR;
+struct dirent { int d_type; char d_name[16]; };
+static DIR *opendir(const char *path) {(void)path; return NULL;}
+static struct dirent *readdir(DIR *dir) {(void)dir; return NULL;}
+static void closedir(DIR *dir) {(void)dir;}
+static size_t strlcpy(char *dst, const char *src, size_t n)
+{
+    return (size_t)snprintf(dst, n, "%s", src);
+}
+static esp_err_t esp_vfs_fat_info(const char *path, uint64_t *total, uint64_t *freeb)
+{
+    (void)path; *total = 32ULL << 20; *freeb = 16ULL << 20; return ESP_OK;
+}
 typedef int StaticSemaphore_t;
 typedef void *SemaphoreHandle_t;
 static int g_locks, g_lock_depth;
@@ -69,7 +82,11 @@ static StaticSemaphore_t s_ml_mutex_storage;
 static vprintf_like_t s_original_vprintf;
 static atomic_bool s_enabled, s_present;
 static _Atomic uint8_t s_sd_level = SDLOG_LVL_WARN;
-static bool s_probed;
+static atomic_bool s_checked;
+static _Atomic uint8_t s_console_level = SDLOG_LVL_WARN;
+static _Atomic uint32_t s_dropped;
+static const char s_cur_name[] = "";
+static uint64_t s_bytes_written;
 static uint32_t s_boot_count;
 /* scripted slot */
 static bool card_inserted, saved_enabled;
@@ -82,37 +99,53 @@ static void apply_master_level(void) {}
 static void save_u8(const char *k, uint8_t v) {(void)k; (void)v; saves++;}
 static void reset(bool enabled, bool card)
 {
-    s_state_mutex = s_file_mutex = s_ml_mutex = NULL; s_probed = false; mounts = writers = saves = 0; g_locks = 0;
+    s_state_mutex = s_file_mutex = s_ml_mutex = NULL; atomic_store(&s_checked, false); mounts = writers = saves = 0; g_locks = 0;
     atomic_store(&s_present, false); atomic_store(&s_enabled, false); saved_enabled = enabled; card_inserted = card;
 }
 @@CODE@@
 int main(void)
 {
     sdlog_status_t st;
-    /* off at boot, no card: no probe at boot; the first status read probes once */
     reset(false, false);
     assert(sdlog_init() == ESP_OK && mounts == 0);
-    sdlog_get_status(&st); assert(mounts == 1);
-    sdlog_get_status(&st); sdlog_get_status(&st); assert(mounts == 1);
-    /* enabling without a card: looks again, refused, stays off */
-    assert(sdlog_enable(SDLOG_LVL_WARN) == ESP_ERR_INVALID_STATE && mounts == 2 && !atomic_load(&s_enabled) && saves == 0);
-    /* card inserted later: enabling finds it and starts the writer */
+    for (int i = 0; i < 5; i++) {
+        sdlog_get_status(&st);
+        if (mounts != 0) {
+            fputs("passive status attempted a mount\n", stderr);
+            return 17;
+        }
+        assert(!st.checked && !st.present && !st.enabled);
+        assert(st.console_level == SDLOG_LVL_WARN);
+    }
+    assert(!sdlog_check_card() && mounts == 1 && writers == 0 && saves == 0);
+    sdlog_get_status(&st);
+    assert(st.checked && !st.present && !st.enabled && mounts == 1);
+    assert(sdlog_enable(SDLOG_LVL_WARN) == ESP_ERR_INVALID_STATE && mounts == 2 && saves == 0);
+
+    /* Explicit retry after insertion, without starting or enabling the writer. */
     card_inserted = true;
-    assert(sdlog_enable(SDLOG_LVL_INFO) == ESP_OK && mounts == 3 && atomic_load(&s_present) && atomic_load(&s_enabled) && writers == 1);
-    /* mounted: never probed again */
-    sdlog_get_status(&st); assert(sdlog_enable(SDLOG_LVL_WARN) == ESP_OK && mounts == 3);
-    /* off at boot with a card: still not touched until looked at */
+    assert(sdlog_check_card() && mounts == 3 && writers == 0 && saves == 0);
+    sdlog_get_status(&st);
+    assert(st.checked && st.present && !st.enabled && st.card_mb == 32 && st.free_mb == 16);
+    assert(sdlog_enable(SDLOG_LVL_INFO) == ESP_OK && mounts == 3 && writers == 1);
+    assert(sdlog_check_card() && mounts == 3);
+    sdlog_get_status(&st);
+    assert(st.enabled && st.sd_level == SDLOG_LVL_INFO);
+
     reset(false, true);
-    assert(sdlog_init() == ESP_OK && mounts == 0 && !atomic_load(&s_present));
-    sdlog_get_status(&st); assert(mounts == 1 && atomic_load(&s_present));
-    /* on at boot with a card: probed at boot, writer started */
+    assert(sdlog_init() == ESP_OK && mounts == 0);
+    sdlog_get_status(&st);
+    assert(!st.checked && !st.present && mounts == 0);
+
     reset(true, true);
     assert(sdlog_init() == ESP_OK && mounts == 1 && writers == 1);
-    sdlog_get_status(&st); assert(mounts == 1);
-    /* on at boot without a card: probed, kept off at runtime */
+    sdlog_get_status(&st);
+    assert(st.checked && st.present && st.enabled && mounts == 1);
+
     reset(true, false);
-    assert(sdlog_init() == ESP_OK && mounts == 1 && !atomic_load(&s_enabled) && writers == 0);
-    sdlog_get_status(&st); assert(mounts == 1);              /* already tried this boot */
+    assert(sdlog_init() == ESP_OK && mounts == 1 && writers == 0);
+    sdlog_get_status(&st);
+    assert(st.checked && !st.present && !st.enabled && mounts == 1);
     puts("sdlog probe ok");
     return 0;
 }
@@ -134,7 +167,7 @@ def run(code_text):
 
 ok = run(code)
 assert ok.returncode == 0 and 'sdlog probe ok' in ok.stdout, (ok.returncode, ok.stdout, ok.stderr[-2000:])
-old = '    if (atomic_load(&s_enabled)) probe_card_locked(false);   /* off: no SD probe at boot */'
-assert old in code
-assert run(code.replace(old, '    probe_card_locked(false);')).returncode != 0, 'probing at every boot must fail'
-print('sdlog probe: no SD probe at boot while the recorder is off; probed on first look or when enabled; never twice')
+legacy = code.replace('    if (!out) return;', '    (void)sdlog_check_card();\n    if (!out) return;')
+regression = run(legacy)
+assert regression.returncode == 17 and 'passive status attempted a mount' in regression.stderr, regression
+print('PASS: passive SD status, explicit check/retry, recording enable and boot behavior')

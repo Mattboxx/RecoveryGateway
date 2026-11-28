@@ -2462,5 +2462,11 @@
  "Add devices to monitor or wake in Devices & Recovery; they appear as entities.": "在“设备与恢复”中添加要监控或唤醒的设备；它们会显示为实体。",
  "Optionally allow recovery commands over MQTT (Automation).": "可选：允许通过 MQTT 发送恢复命令（自动化）。",
  "chosen at setup": "设置时已选择",
- "Count traffic per access point device": "按接入点设备统计流量"
+ "Count traffic per access point device": "按接入点设备统计流量",
+ "Check SD card": "检查 SD 卡",
+ "Insert a FAT32 microSD card and select Check SD card.": "插入 FAT32 格式的 microSD 卡，然后选择“检查 SD 卡”。",
+ "SD card check failed": "SD 卡检查失败",
+ "microSD: not checked": "microSD：未检查",
+ "microSD: no usable card": "microSD：没有可用的卡",
+ "Coredump: unavailable": "核心转储：不可用"
 }

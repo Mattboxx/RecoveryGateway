@@ -6,6 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Read-only diagnostics and console settings no longer attempt to mount a
+  microSD. Use **Check SD card** in System → Logging & SNMP to check or
+  retry the optional recorder.
+- Wait for the authenticated view before requesting console settings.
+  Distinguish an unavailable core dump from a confirmed clean boot.
+
 ## [3.1.2] - 2026-11-28
 
 ### Added

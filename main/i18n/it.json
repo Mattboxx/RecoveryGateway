@@ -2463,5 +2463,11 @@
  "Add devices to monitor or wake in Devices & Recovery; they appear as entities.": "Aggiungi i dispositivi da monitorare o risvegliare in Dispositivi e ripristino; compaiono come entità.",
  "Optionally allow recovery commands over MQTT (Automation).": "Facoltativo: consenti i comandi di ripristino via MQTT (Automazione).",
  "chosen at setup": "scelto al setup",
- "Count traffic per access point device": "Conta il traffico per dispositivo dell'access point"
+ "Count traffic per access point device": "Conta il traffico per dispositivo dell'access point",
+ "Check SD card": "Controlla scheda SD",
+ "Insert a FAT32 microSD card and select Check SD card.": "Inserisci una microSD FAT32 e seleziona Controlla scheda SD.",
+ "SD card check failed": "Controllo della scheda SD non riuscito",
+ "microSD: not checked": "microSD: non controllata",
+ "microSD: no usable card": "microSD: nessuna scheda utilizzabile",
+ "Coredump: unavailable": "Dump di memoria: non disponibile"
 }
