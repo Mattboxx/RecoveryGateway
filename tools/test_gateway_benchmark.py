@@ -350,13 +350,13 @@ class Transfers(unittest.TestCase):
         from gateway_benchmark import _UploadBody
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder)/'source.bin'; source.write_bytes(b'x'*300_000)
-            body = _UploadBody(source, 300_000, time.monotonic(), 60, lambda row: None, lambda: False)
+            body = _UploadBody(source, 300_000, 100.0, 60, lambda row: None, lambda: False)
             try:
-                body.read(65536)
-                self.assertEqual(body.max_gap_s, 0.0)      # the first read has no predecessor
-                time.sleep(0.3)
-                body.read(65536); body.read(65536)
-                self.assertTrue(0.3 <= body.max_gap_s < 2.0, body.max_gap_s)
+                with patch('gateway_benchmark.time.monotonic', side_effect=[100.0, 100.3, 100.31]):
+                    body.read(65536)
+                    self.assertEqual(body.max_gap_s, 0.0)  # the first read has no predecessor
+                    body.read(65536); body.read(65536)
+                    self.assertAlmostEqual(body.max_gap_s, 0.3)
             finally:
                 body.close()
 

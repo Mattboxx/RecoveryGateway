@@ -27,6 +27,7 @@ typedef struct {bool enabled,broker_watchdog_enabled,poweron_events,home_assista
 #define ESP_RST_POWERON 1
 static int raw_reset=ESP_RST_POWERON;static bool power_selected=true,ha_discovery;
 static int esp_reset_reason(void){return raw_reset;}
+static uint32_t power_history_previous_online(void){return 0;}
 static uint32_t esp_random(void){return 0x13579abc;}
 #define BROKER_CONNECTED 1u
 #define BROKER_DISCONNECTED 2u
