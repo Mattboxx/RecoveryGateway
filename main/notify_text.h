@@ -23,6 +23,9 @@ const char *notify_text_reset_cause(int esp_reset_reason, bool poweron_events);
 /* The gateway started: power-on or restart, firmware, reset cause. */
 void notify_text_boot(char title[NOTIFY_TITLE_MAX], char *msg, size_t cap,
                       const char *version, int esp_reset_reason, bool poweron_events);
+/* Append the previous boot's last persisted clock reading in UTC. A
+ * checkpoint is a lower bound on power loss, not a measured outage time. */
+void notify_text_power_interruption(char *msg, size_t cap, uint32_t last_online);
 /* The uplink works but Tailscale stayed disconnected. */
 void notify_text_tailscale_problem(char title[NOTIFY_TITLE_MAX], char *msg, size_t cap);
 /* The Tailscale control connection is back after outage_seconds. */

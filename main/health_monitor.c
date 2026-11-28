@@ -257,11 +257,11 @@ void saved_tcp_summary(char *out,size_t capacity)
     out[0]='\0';
     for (unsigned i=0;i<SAVED_TCP_MAX;++i) {
         if (!saved_targets[i].name[0]) continue;
-        int n=snprintf(out+used,capacity-used,"%s%s: %s",used?"\n":"",saved_targets[i].name,saved_state(&saved_results[i]));
+        int n=snprintf(out+used,capacity-used,"%s%s: %s",used?"\n":"Saved TCP checks (last result)\n\n",saved_targets[i].name,saved_state(&saved_results[i]));
         if (n<0 || (size_t)n>=capacity-used) break;
         used+=(size_t)n;
     }
-    if (!out[0]) snprintf(out,capacity,"No saved TCP checks.");
+    if (!out[0]) snprintf(out,capacity,"No saved TCP checks. Add one in Health & Resources.");
     HUNLOCK();
 }
 
@@ -351,7 +351,7 @@ static void saved_tcp_poll(void)
     HUNLOCK();
     if (notify) {
         char message[100];
-        snprintf(message,sizeof message,"TCP check %s: %s.",t.name,result>0?"reachable":result==0?"not reachable":"inconclusive");
+        snprintf(message,sizeof message,"Service: %s\nTCP check: %s.",t.name,result>0?"reachable":result==0?"not reachable":"inconclusive");
         if (destination) (void)remote_command_reply(origin,destination,message);
         else (void)ntfy_integration_queue_event(message);
     }

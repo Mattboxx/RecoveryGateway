@@ -7,6 +7,7 @@
 #include "homelab_ops.h"
 #include "notify_channels.h"
 #include "ota_flash.h"
+#include "power_history.h"
 #include "portmap.h"
 #include "service_check.h"
 #include "tailscale_config.h"
@@ -61,6 +62,7 @@ static void sample_task(void *arg)
         notify_channels_retry_setup();
         portmap_retry_pending();
         ota_flash_retry_binding();
+        power_history_tick();
         tailscale_retry_peer_dns();
 #if CONFIG_TSR_SNMP
         snmp_agent_retry();

@@ -34,6 +34,7 @@ typedef enum {ESP_RST_POWERON=1,ESP_RST_SW=3,ESP_RST_PANIC=4,ESP_RST_INT_WDT=5,E
 typedef struct {const char *version;} esp_app_desc_t;
 static esp_reset_reason_t raw_cause=ESP_RST_SW;
 static esp_reset_reason_t esp_reset_reason(void){return raw_cause;}
+static uint32_t power_history_previous_online(void){return 1704067200;}
 static const esp_app_desc_t *esp_app_get_description(void){static const esp_app_desc_t app={"fixture"};return &app;}
 /* OTA release check (ota_remote.h): the update notice reads only these fields */
 typedef struct {bool update_available; char latest_version[32];} ota_remote_state_t;
@@ -137,7 +138,7 @@ int main(void){
  reset();lost();clock_s=59;notify_poll();assert(!s_count&&!creates);up();notify_poll();assert(!s_count&&!sends);
  reset();for(int day=0;day<10;day++){clock_s=(uint32_t)day*86400;wan_ready=0;lost();clock_s+=3;up();notify_poll();}assert(!s_count&&!creates);
  reset();lost();clock_s=60;notify_poll();assert(s_count==1&&s_links[LINK_UPLINK].announced);notify_poll();lost();notify_poll();assert(s_count==1);drain();assert(s_tg.sent==1);clock_s=300;notify_poll();assert(!s_count);
- reset();lost();clock_s=60;notify_poll();clock_s=70;up();assert(s_count==1&&strstr(s_queue[s_head].text,"recovered after 70 seconds"));drain();assert(strstr(last_text,"ESP32 Internet uplink restored\nInternet uplink restored after about 70 s.")&&sends==1);
+ reset();lost();clock_s=60;notify_poll();clock_s=70;up();assert(s_count==1&&strstr(s_queue[s_head].text,"recovered after 70 seconds"));drain();assert(strstr(last_text,"ESP32 Internet uplink restored\nInternet uplink restored.\nInterruption: 70 s.")&&sends==1);
  reset();lost();clock_s=60;notify_poll();tg_result=ESP_FAIL;drain();
  for(int i=1;i<MAX_ATTEMPTS;i++){clock_s+=RETRY_S;start_worker_locked(clock_s);drain();}
  assert(s_tg.failed==MAX_ATTEMPTS&&!s_count);clock_s=600;up();assert(s_count==1&&strstr(s_queue[s_head].text,"recovered after 600"));tg_result=ESP_OK;drain();assert(s_tg.sent==1);
@@ -156,7 +157,7 @@ int main(void){
  reset();offer(HIST_EV_UPLINK,HIST_WARN,0,"Wi-Fi station disconnectedX");assert(s_count==1);   /* only the exact event text */
  reset();task_ok=0;enqueue_locked(HIST_EV_SERVICE,HIST_INFO,CH_TG,0,"result");assert(s_count==1&&!s_worker&&creates==1);clock_s=29;notify_poll();assert(creates==1);clock_s=30;task_ok=1;notify_poll();assert(s_worker&&creates==2);drain();
  reset();enqueue_locked(HIST_EV_SERVICE,HIST_INFO,CH_TG,0,"old head");during_send=fill_while_sending;drain();assert(s_tg.sent==QUEUE_MAX+1&&s_count==0&&s_dropped==1);
- reset();lost();clock_s=60;notify_poll();during_send=recover_while_sending;drain();assert(strstr(last_text,"restored after about 65 s.")&&s_count==0);
+ reset();lost();clock_s=60;notify_poll();during_send=recover_while_sending;drain();assert(strstr(last_text,"restored.\nInterruption: 65 s.")&&s_count==0);
  reset();lost();clock_s=10;s_cfg.tg_enabled=false;apply_locked();assert(!s_queue&&!registered_poll&&!s_links[LINK_UPLINK].down);
  /* Permanent rejection ends its own retry. Other channels keep moving. */
  reset();s_cfg.mail_enabled=true;
@@ -183,25 +184,25 @@ int main(void){
   * the channel's blackout choice, restart cause, Tailnet outage and recovery. */
  reset();raw_cause=ESP_RST_POWERON;s_startup_channels=(CH_TG|CH_MAIL)<<2;s_cfg.mail_enabled=true;
  enqueue_locked(HIST_EV_BOOT,HIST_INFO,CH_TG|CH_MAIL,0,"Power-on start fixture from ota_0, reset POWERON");drain();
- assert(strstr(last_text,"ESP32 power-on detected\nGateway powered on: firmware fixture; reset cause: power restored or first power-up (possible blackout).\nDetails: Power-on start fixture from ota_0, reset POWERON"));
- assert(!strcmp(last_subject,"ESP32 power-on detected"));
+ assert(!strcmp(last_text,"ESP32 possible blackout\nPower restored.\nLast recorded activity: 2024-01-01 00:00 UTC."));
+ assert(!strcmp(last_subject,"ESP32 possible blackout"));
  reset();raw_cause=ESP_RST_POWERON;s_startup_channels=CH_TG;
  enqueue_locked(HIST_EV_BOOT,HIST_INFO,CH_TG,0,"Power-on start fixture from ota_0, reset POWERON");drain();
  assert(strstr(last_text,"(power restored or first power-up.")==NULL&&!strstr(last_text,"possible blackout"));
  reset();raw_cause=ESP_RST_BROWNOUT;
  enqueue_locked(HIST_EV_BOOT,HIST_ERROR,CH_TG,0,"Started fixture from ota_1, reset BROWNOUT");drain();
- assert(strstr(last_text,"ESP32 gateway restarted\nGateway restarted: firmware fixture; reset cause: supply voltage drop (brownout)."));
+ assert(strstr(last_text,"ESP32 gateway restarted\nReason: supply voltage drop (brownout)."));
  reset();enqueue_locked(HIST_EV_TAILNET,HIST_WARN,CH_TG,0,"Tailnet connection unavailable for at least 120 seconds.");drain();
- assert(strstr(last_text,"ESP32 Tailscale problem\nInternet uplink is connected, but Tailscale has remained disconnected.\nOpen the local Diagnostics page to inspect logs.\nUnavailable for at least 120 s."));
+ assert(strstr(last_text,"ESP32 Tailscale problem\nTailscale is disconnected.\nInternet uplink: connected.\nDuration: at least 120 s."));
  reset();enqueue_locked(HIST_EV_TAILNET,HIST_WARN,CH_TG,0,"Tailnet connection recovered after 300 seconds.");drain();
- assert(strstr(last_text,"ESP32 Tailscale restored\nTailscale control connection restored after about 300 s. This does not prove every peer or service is reachable."));
+ assert(strstr(last_text,"ESP32 Tailscale restored\nTailscale control connection restored.\nInterruption: 300 s."));
  /* Update available: once per version per boot, on All events or with
   * "other restarts" (ntfy's system events); nothing while not available. */
  reset();s_cfg.level=NOTIFY_PROBLEMS;s_startup_channels=0;fixture_update=(ota_remote_state_t){true,"9.9.9"};
  clock_s=1000;notify_poll();assert(s_count==0);
  reset();s_cfg.level=NOTIFY_PROBLEMS;s_startup_channels=CH_TG;fixture_update=(ota_remote_state_t){true,"9.9.9"};
  s_update_seen=0;s_update_checked=0;clock_s=2000;notify_poll();assert(s_count==1&&s_queue[s_head].kind==HIST_EV_UPDATE);
- drain();assert(strstr(last_text,"ESP32 firmware update available\nFirmware 9.9.9 is available. Nothing was installed"));
+ drain();assert(strstr(last_text,"ESP32 firmware update available\nFirmware 9.9.9 is available.\nUpdate from System > Firmware."));
  clock_s=2100;notify_poll();assert(s_count==0);                         /* same version: once */
  fixture_update=(ota_remote_state_t){true,"9.9.10"};clock_s=2130;notify_poll();assert(s_count==0);   /* checked at most once a minute */
  clock_s=2161;notify_poll();assert(s_count==1&&strstr(s_queue[s_head].text,"9.9.10"));

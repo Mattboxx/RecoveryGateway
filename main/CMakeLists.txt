@@ -121,6 +121,7 @@ idf_component_register(SRCS "main.c" ${_tsr_optional}
                             "tailnet_reassembly.c"
                             "mac_deny.c"
                             "reset_history.c"
+                            "power_history.c"
                             "ota.c"
                             "ota_remote.c"
                             "ota_flash.c"

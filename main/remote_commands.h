@@ -56,3 +56,19 @@ bool remote_command_reply(ops_recovery_origin_t origin, uint32_t destination, co
 /* Heap text of the info reply (about 8 KB at most); the caller frees it.
  * Never contains passwords, Wi-Fi keys, Tailscale keys or service tokens. */
 char *remote_info_text(bool include_details, bool poweron_events);
+
+/* Prefer whole lines and never split a UTF-8 sequence between messages.
+ * A zero result means invalid input or a limit too short for one code point. */
+static inline size_t remote_reply_chunk_size(const char *text, size_t length,
+                                             size_t offset, size_t limit)
+{
+    if (!text || offset >= length || !limit) return 0;
+    size_t remaining = length - offset;
+    if (remaining <= limit) return remaining;
+    size_t take = limit;
+    size_t line = take;
+    while (line > limit / 2 && text[offset + line - 1] != '\n') line--;
+    if (line > limit / 2) take = line;
+    while (take && ((unsigned char)text[offset + take] & 0xc0u) == 0x80u) take--;
+    return take;
+}

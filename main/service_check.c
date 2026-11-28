@@ -330,8 +330,8 @@ static void sc_notify(int index, const tailnet_forward_rule_t *rule, bool recove
     char message[160];
     bool named = rule->name[0] != 0;
     snprintf(message, sizeof message, recovered
-             ? "Service watch: rule %d%s%.31s%s answers again (TCP handshake from this gateway)."
-             : "Service watch: rule %d%s%.31s%s gave no TCP answer twice in a row. This is not proof the peer is offline.",
+             ? "Service rule %d%s%.31s%s\nTCP check: responding again."
+             : "Service rule %d%s%.31s%s\nTCP check: no response on two consecutive checks.",
              index + 1, named ? " (" : "", named ? rule->name : "", named ? ")" : "");
     (void)ntfy_integration_queue_event(message);
     mqtt_integration_publish_now();

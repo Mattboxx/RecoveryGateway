@@ -52,6 +52,7 @@
 #include "service_retry.h"
 #include "ntfy_events.h"
 #include "notify_text.h"
+#include "power_history.h"
 #include "notify_channels.h"
 #include "tailnet_forward.h"
 #include "web_ui.h"
@@ -434,6 +435,7 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
     char *text = calloc(1, 8192);
     if (!text) return NULL;
     const esp_app_desc_t *app = esp_app_get_description();
+    appendf(text, 8192, "GATEWAY\n");
     runtime_metrics_t cpu = runtime_metrics_get();
     if (cpu.valid)
         appendf(text, 8192, "CPU: %u%% (core 0: %u%%, core 1: %u%%)\n",
@@ -454,11 +456,11 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
     cJSON *operations=homelab_ops_snapshot(false);
     if(operations){
         const cJSON *state=cJSON_GetObjectItemCaseSensitive(operations,"recovery_state");
-        appendf(text,8192,"Recovery/check: %s (sending WoL is not proof of boot)\n",cJSON_IsString(state)?state->valuestring:"unavailable");
+        appendf(text,8192,"Recovery job: %s\n",cJSON_IsString(state)?state->valuestring:"unavailable");
         const cJSON *health=cJSON_GetObjectItemCaseSensitive(operations,"health"),*check;
         cJSON_ArrayForEach(check,cJSON_GetObjectItemCaseSensitive(health,"checks")){
             const cJSON *role=cJSON_GetObjectItemCaseSensitive(check,"role"),*status=cJSON_GetObjectItemCaseSensitive(check,"state");
-            appendf(text,8192,"Configured %s: %s\n",cJSON_IsString(role)?role->valuestring:"check",cJSON_IsString(status)?status->valuestring:"unknown");
+            appendf(text,8192,"Health check (%s): %s\n",cJSON_IsString(role)?role->valuestring:"check",cJSON_IsString(status)?status->valuestring:"unknown");
         }
         cJSON_Delete(operations);
     }
@@ -472,8 +474,9 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
     wifi_ap_record_t ap = {0};
     bool uplink = uplink_address(uplink_internet_netif(), &ip);
     bool have_ap = esp_wifi_sta_get_ap_info(&ap) == ESP_OK;
-    appendf(text, 8192, "\nUplink: %s\nRSSI: %d dBm\n",
-            uplink ? "connected" : "disconnected", have_ap ? ap.rssi : 0);
+    appendf(text, 8192, "\nCONNECTIVITY\nInternet uplink: %s\n",
+            uplink ? "connected" : "disconnected");
+    if (have_ap) appendf(text, 8192, "Wi-Fi signal: %d dBm\n", ap.rssi);
     bool wifi_ps_active = false;
     bool wifi_ps_known = wifi_power_save_runtime(&wifi_ps_active);
     appendf(text, 8192, "WiFi power save: %s (runtime: %s)\n",
@@ -488,16 +491,16 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
 
     bool ts = tailscale_is_connected();
     ip4_addr_t ts_ip = {.addr = tailscale_tunnel_ip};
-    appendf(text, 8192, "\nTailscale: %s (enabled: %s)\nAdvertise as exit node: %s\n",
-            ts ? "connected" : "disconnected", tailscale_enabled ? "yes" : "no",
+    appendf(text, 8192, "\nTAILNET\nTailscale: %s\nAdvertise as exit node: %s\n",
+            !tailscale_enabled ? "disabled" : ts ? "connected" : "disconnected",
             tailscale_advertise_exit_node ? "yes" : "no");
     microlink_t *ml = tailscale_get_microlink();
     ota_remote_state_t update; ota_remote_get_state(&update);
-    appendf(text, 8192, "GitHub updates: checks %s, automatic install %s, channel %s\nUpdate: %s (%s)\n",
+    appendf(text, 8192, "\nUPDATES\nPeriodic checks: %s\nAutomatic install: %s\nChannel: %s\nLatest release: %s\nStatus: %s\n",
             update.config.enabled ? "on" : "off", update.config.auto_install ? "on" : "off",
             update.config.beta_channel ? "stable + beta" : "stable only",
             update.latest_version[0] ? update.latest_version : "none", update.status);
-    appendf(text, 8192, "Exit-node server (this boot): %s\nExit-node DNS: %s (port %u)\n",
+    appendf(text, 8192, "\nTAILNET ROUTING\nExit-node server (this boot): %s\nExit-node DNS: %s (port %u)\n",
             tailscale_exit_server_active() ? "active" : "inactive",
             peer_dns_is_running() ? "running" : "stopped", (unsigned)tailscale_peerapi_port());
     appendf(text, 8192, "Exit-node server configured: %s (manual default route: %s)\n",
@@ -506,7 +509,7 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
     appendf(text, 8192, "Automatic AP advertisement (configured): %s\n",
             tailscale_advertise_ap ? "yes" : "no");
     int peers = ml ? microlink_get_peer_count(ml) : 0;
-    appendf(text, 8192, "Peers (%d):\n", peers);
+    appendf(text, 8192, "Known peers: %d\n", peers);
     if (c->info_include_details) {
         appendf(text, 8192, "Tailscale IP: " IPSTR
                 "\nActive advertised routes: %s\nAccept peer routes: %s\nSource NAT: %s\n",
@@ -533,7 +536,7 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
     wifi_sta_list_t clients = {0};
     int clients_n = wifi_ap_runtime_enabled() && esp_wifi_ap_get_sta_list(&clients) == ESP_OK
                     ? clients.num : 0;
-    appendf(text, 8192, "\nAccess point: %s (policy: %s)\nConnected AP devices: %d\n",
+    appendf(text, 8192, "\nWI-FI GATEWAY\nAccess point: %s\nPolicy: %s\nConnected devices: %d\n",
             wifi_ap_runtime_enabled() ? "enabled" : "disabled",
             wifi_ap_policy_auto_off() ? "standby while uplink is connected" : "always available", clients_n);
     if (c->info_include_details) {
@@ -545,16 +548,16 @@ NTFY_NOINLINE char *remote_info_text(bool include_details, bool poweron_events)
     }
     uint32_t tf_enabled=0,tf_installed=0,tf_accepted=0,tf_blocked=0;
     tailnet_forward_totals(&tf_enabled,&tf_installed,&tf_accepted,&tf_blocked);
-    appendf(text,8192,"\nLAN -> Tailnet forwarding: %lu configured, %lu enabled, %lu active\nAccepted/blocked packets: %lu/%lu\n",
+    appendf(text,8192,"\nSERVICE GATEWAY\nRules: %lu saved, %lu enabled, %lu active\nPackets: %lu accepted, %lu blocked\n",
             (unsigned long)tailnet_forward_count(),(unsigned long)tf_enabled,(unsigned long)tf_installed,
             (unsigned long)tf_accepted,(unsigned long)tf_blocked);
     if(c->info_include_details){for(int i=0;i<tailnet_forward_count();i++){tailnet_forward_rule_t r;tailnet_forward_runtime_t rt;if(!tailnet_forward_get(i,&r,&rt))continue;char cidr[TAILNET_FORWARD_SOURCES_TEXT];tailnet_forward_format_sources(&r,cidr,sizeof cidr);appendf(text,8192,"- %s: %s/%u -> %s:%u, source %s [%s]\n",r.name[0]?r.name:"unnamed",r.proto==17?"UDP":"TCP",r.listen_port,r.destination,r.destination_port,cidr,rt.installed?"active":(rt.error[0]?rt.error:"inactive"));}}
 
     mqtt_integration_config_t mqtt;
     mqtt_integration_get_config(&mqtt);
-    appendf(text, 8192, "\nMQTT: %s / %s\nSaved WOL devices: %d\n",
-            mqtt_integration_connected() ? "connected" : "disconnected",
-            mqtt.enabled ? "enabled" : "disabled", wol_count());
+    appendf(text, 8192, "\nAUTOMATION\nMQTT: %s\n\nWAKE-ON-LAN\nSaved devices: %d\n",
+            !mqtt.enabled ? "disabled" : mqtt_integration_connected() ? "connected" : "disconnected",
+            wol_count());
     for (int i = 0; i < wol_count(); i++) {
         wol_device_t w;
         if (!wol_get(i, &w)) continue;
@@ -574,21 +577,29 @@ static NTFY_NOINLINE esp_err_t send_info(const ntfy_integration_config_t *c, uin
     /* ntfy messages are limited in size. Send deterministic chunks; no chunk
      * contains passwords, WiFi keys, Tailscale keys, or broker/ntfy tokens. */
     size_t length = strlen(text), offset = 0;
-    unsigned part = 1, parts = (unsigned)((length + 3499) / 3500);
+    unsigned part = 1, parts = 0;
+    for (size_t start = 0; start < length; ) {
+        size_t take = remote_reply_chunk_size(text, length, start, 3500);
+        if (!take) { free(text); return ESP_FAIL; }
+        start += take;
+        parts++;
+    }
     esp_err_t result = ESP_OK;
     while (offset < length) {
         if (!remote_command_active(OPS_RECOVERY_NTFY, destination)) {
             result = ESP_ERR_INVALID_STATE;
             break;
         }
-        size_t take = length - offset > 3500 ? 3500 : length - offset;
+        size_t take = remote_reply_chunk_size(text, length, offset, 3500);
+        if (!take) { result = ESP_FAIL; break; }
         char saved = text[offset + take]; text[offset + take] = '\0';
         char title[64];
-        if (parts > 1) snprintf(title, sizeof title, "ESP32 router info %u/%u", part, parts);
-        else strlcpy(title, "ESP32 router info", sizeof title);
+        if (parts > 1) snprintf(title, sizeof title, "ESP32 gateway status %u/%u", part, parts);
+        else strlcpy(title, "ESP32 gateway status", sizeof title);
         esp_err_t err = publish_message(c, title, "information,mattboxx-response", text + offset);
-        if (err != ESP_OK) result = err;
-        text[offset + take] = saved; offset += take; part++;
+        text[offset + take] = saved;
+        if (err != ESP_OK) { result = err; break; }
+        offset += take; part++;
     }
     free(text);
     return result;
@@ -678,14 +689,14 @@ remote_cmd_kind_t remote_command_run(const char *message, bool info_enabled, boo
     if (help) {
         *title = "ESP32 command guide";
         snprintf(reply, cap,
-            "RecoveryGateway commands\n\n"
+            "COMMANDS\n\n"
             "help — show this guide\n"
-            "devices — saved devices and last known results\n"
+            "devices — last result for each saved device\n"
             "wol NAS — send a Wake-on-LAN packet\n"
             "%s%s\nReplace NAS and PRINTER with your saved names. Names can contain spaces.",
             info_enabled ? "info (or status) — gateway status\n" : "",
             homelab_ops_recovery_allowed(origin) ?
-            "\nVerified recovery and checks\n"
+            "\nRECOVERY AND CHECKS\n"
             "recover NAS — wake if needed and verify online status\n"
             "check NAS — verify without waking\n"
             "probe PRINTER — test a saved TCP service\n"
@@ -707,8 +718,8 @@ remote_cmd_kind_t remote_command_run(const char *message, bool info_enabled, boo
         if (!remote_command_active(origin, destination)) return REMOTE_CMD_NONE;
         *title = "ESP32 Wake-on-LAN";
         esp_err_t err = wake_argument(allow_direct_mac, argument);
-        if (err == ESP_OK) snprintf(reply, cap, "Wake packet sent for %s.%s", argument,
-            homelab_ops_recovery_allowed(origin) ? " Use recover to verify the device comes online." : "");
+        if (err == ESP_OK) snprintf(reply, cap, "Device: %s\nWake packet: sent.%s", argument,
+            homelab_ops_recovery_allowed(origin) ? "\nUse recover to check online status." : "");
         else strlcpy(reply, err == ESP_ERR_INVALID_STATE ?
             "Wake failed. Check the uplink and whether this channel allows unsaved MAC addresses." :
             err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_SIZE ? remote_error(err, false) :
@@ -737,7 +748,7 @@ remote_cmd_kind_t remote_command_run(const char *message, bool info_enabled, boo
             if (err == ESP_OK) err = homelab_ops_remote_request(device.mac, recover, origin, destination);
         }
     }
-    if (err == ESP_OK) snprintf(reply, cap, "%s queued for %s. The result will follow here.",
+    if (err == ESP_OK) snprintf(reply, cap, "%s queued.\nTarget: %s\nThe result will follow here.",
                                probe ? "TCP check" : recover ? "Recovery" : "Reachability check", argument);
     else strlcpy(reply, remote_error(err, probe), cap);
     return err == ESP_OK ? REMOTE_CMD_OK : REMOTE_CMD_ERROR;
@@ -971,11 +982,13 @@ static NTFY_NOINLINE esp_err_t send_system_event(const ntfy_integration_config_t
                                                 uint32_t outage_seconds)
 {
     /* Wording shared with Telegram and email (notify_text.c). */
-    char message[192], title[NOTIFY_TITLE_MAX];
+    char message[NOTIFY_MESSAGE_MAX], title[NOTIFY_TITLE_MAX];
     if (event == NTFY_EVENT_BOOT) {
         const esp_app_desc_t *app = esp_app_get_description();
         notify_text_boot(title, message, sizeof message, app ? app->version : "unknown",
                          (int)esp_reset_reason(), c->poweron_events);
+        if (esp_reset_reason() == ESP_RST_POWERON && c->poweron_events)
+            notify_text_power_interruption(message, sizeof message, power_history_previous_online());
     } else if (event == NTFY_EVENT_RESTORED) {
         notify_text_tailscale_restored(title, message, sizeof message, outage_seconds);
     } else {

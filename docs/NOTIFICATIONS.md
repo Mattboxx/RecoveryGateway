@@ -83,6 +83,53 @@ The Automation Refresh button updates Telegram/email delivery status too.
 Status polls preserve drafts and independently saved cards, and an older
 response cannot replace a newer one. The token/password remains write-only.
 
+## Consistent remote messages
+
+Startup notices show the readable reset cause. Power-return alerts keep their
+two-line format. Link alerts include the observed duration, and recovery replies
+use a device name, check result, wake-packet result and service result where
+configured. Sending a wake packet and verifying a host remain separate results.
+The devices/checks lists explicitly show the last result, rather than a new test.
+
+The shared help and info commands group their existing fields by purpose.
+Disabled MQTT/Tailscale modules are reported as disabled. Wi-Fi signal appears
+only when a Wi-Fi station connection exists. Detailed network addresses stay
+behind the existing include-details setting.
+
+Telegram and ntfy split long status replies on whole lines where possible and
+at UTF-8 boundaries. A failed ntfy part stops the response. MQTT JSON keys and
+event identities retain their existing machine-readable format. Command
+permissions, channel-disable handling and notification selection are unchanged.
+
+## Power-return message format
+
+The opted-in power-return alert uses the title "ESP32 possible blackout".
+Its body contains "Power restored." and "Last recorded activity", followed
+by a UTC date and time rounded down to the minute, or "unavailable".
+The last activity is the saved checkpoint before the restart. A detailed
+explanation of its uncertainty follows below. Firmware version, slot and
+numeric reset cause remain in diagnostics and ordinary restart messages.
+
+## Previous operation time on power-return alerts
+
+Power-return alerts in ntfy, Telegram and email include the previous boot's
+last recorded operation time in UTC when available. The existing MQTT power
+event adds last_recorded_online_unix (Unix seconds, or null) and
+checkpoint_interval_s (300), so Home Assistant can use the same information.
+
+The gateway saves one local NVS timestamp after clock synchronization and
+then at most once per five minutes, using the existing internal-stack admin
+server. No extra task is allocated. The previous checkpoint is consumed at boot,
+preventing a quick second reboot from presenting it as that boot's operation.
+
+This timestamp is a lower bound on the power-off time. Delayed/failed writes,
+loss of clock synchronization or an abrupt short boot can make it older or
+unavailable. A five-minute schedule is not a guaranteed five-minute accuracy.
+A valid previous-boot checkpoint is available even before the new boot\nreceives its first time-sync response.\nThe alert states when no usable checkpoint is available. On the first boot
+after installing this feature there is no previous checkpoint.
+Existing power-return switches still control delivery. Software restarts and
+crashes never acquire this power-interruption annotation.
+
 ## Power-on and other restarts (3.0.3)
 
 Firmware 3.0.4 replaces ntfy's numeric reset reason with an

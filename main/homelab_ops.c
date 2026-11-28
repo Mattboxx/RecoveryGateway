@@ -375,8 +375,10 @@ void homelab_ops_device_summary(char *out, size_t cap) {
         result_t result = results[i];
         UNLOCK();
         const char *state = result.observed_ms && !memcmp(result.mac,device.mac,6) ?
-                            states[result.state] : "not checked";
-        int n = snprintf(out+used,cap-used,"%s%s: %s",used?"\n":"Saved devices · last known results\n\n",
+                            (result.state == J_TIMEOUT ? "not reachable" :
+                             result.state == J_RESOURCE ? "deferred (gateway busy)" :
+                             states[result.state]) : "not checked";
+        int n = snprintf(out+used,cap-used,"%s%s: %s",used?"\n":"Saved devices (last result)\n\n",
                          device.name[0]?device.name:"Unnamed device",state);
         if (n<0 || (size_t)n>=cap-used) break;
         used+=(size_t)n;
@@ -503,20 +505,20 @@ static void notify_job_result(const job_t *done)
     const char *result = done->state == J_TIMEOUT ? "not reachable" :
                          done->state == J_RESOURCE ? "deferred (gateway busy)" : states[done->state];
     if (!done->manual) {
-        snprintf(message, sizeof message, "Device %.32s stopped responding to its configured check.",
+        snprintf(message, sizeof message, "Device: %.32s\nCheck: no response.",
                  name);
     } else if (!done->wake) {
-        snprintf(message, sizeof message, "Check for %.32s: %s.%s", name, result,
+        snprintf(message, sizeof message, "Device: %.32s\nCheck: %s.%s", name, result,
                  done->host_seen && !done->service_seen && done->profile.service_port ?
-                 " Host reachable; configured service unverified." : "");
+                 "\nService: not verified." : "");
     } else if (done->destination && done->state == J_REACHABLE && !done->wake_attempted) {
-        snprintf(message, sizeof message, "%.32s was already reachable. No wake packet needed.", name);
+        snprintf(message, sizeof message, "Device: %.32s\nCheck: reachable.\nWake packet: not needed.", name);
     } else {
-        const char *wake = done->packet_sent ? "packet sent" : done->wake_datagrams ? "burst partly sent" :
+        const char *wake = done->packet_sent ? "sent" : done->wake_datagrams ? "partly sent" :
                            done->wake_attempted ? "send failed" : "not sent";
-        snprintf(message, sizeof message, "WoL recovery for %.32s: %s. Wake %s.%s",
+        snprintf(message, sizeof message, "Device: %.32s\nCheck: %s.\nWake packet: %s.%s",
                  name, result, wake, !done->profile.service_port ? "" :
-                 done->service_seen ? " Service verified." : " Service unverified.");
+                 done->service_seen ? "\nService: reachable." : "\nService: not verified.");
     }
     if (done->destination) {
         (void)remote_command_reply(done->origin, done->destination, message);

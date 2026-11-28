@@ -2,11 +2,15 @@
  * Copyright (C) 2026 Mattboxx. RecoveryGateway, Mattboxx Edition: see LICENSE
  * and LICENSE-EXCEPTION.md. */
 /* Notification wording shared by ntfy, Telegram and email (notify_text.h). */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "notify_text.h"
 #include "history.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* esp_reset_reason_t values (esp_system.h), kept numeric so this file builds
  * on the host without the SDK; tools/test_notify_text.py checks them. */
@@ -44,30 +48,57 @@ static void set_title(char title[NOTIFY_TITLE_MAX], const char *t) {snprintf(tit
 void notify_text_boot(char title[NOTIFY_TITLE_MAX], char *msg, size_t cap,
                       const char *version, int r, bool poweron_events)
 {
-    snprintf(msg, cap, "Gateway %s: firmware %.31s; reset cause: %s.",
-             r == RST_POWERON ? "powered on" : "restarted", version && version[0] ? version : "unknown",
-             notify_text_reset_cause(r, poweron_events));
+    if (r == RST_POWERON && poweron_events) {
+        set_title(title, "ESP32 possible blackout");
+        snprintf(msg, cap, "Power restored.");
+        return;
+    }
+    (void)version; /* Firmware version remains available in diagnostics/info. */
+    snprintf(msg, cap, "Reason: %s.", notify_text_reset_cause(r, poweron_events));
     set_title(title, r == RST_POWERON ? "ESP32 power-on detected" : "ESP32 gateway restarted");
+}
+
+void notify_text_power_interruption(char *msg, size_t cap, uint32_t last_online)
+{
+    if (!msg || !cap) return;
+    size_t used = 0;
+    while (used < cap && msg[used]) used++;
+    if (used == cap) return;
+    char stamp[32] = "";
+    time_t wall = (time_t)last_online;
+    struct tm utc;
+#ifdef _WIN32
+    bool valid = last_online > 1700000000 && gmtime_s(&utc, &wall) == 0;
+#else
+    bool valid = last_online > 1700000000 && gmtime_r(&wall, &utc) != NULL;
+#endif
+    if (valid)
+        strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M UTC", &utc);
+    if (stamp[0])
+        snprintf(msg + used, cap - used,
+                 "\nLast recorded activity: %s.", stamp);
+    else
+        snprintf(msg + used, cap - used,
+                 "\nLast recorded activity: unavailable.");
 }
 
 void notify_text_tailscale_problem(char title[NOTIFY_TITLE_MAX], char *msg, size_t cap)
 {
     /* Alerts report connectivity, never export the local log buffer. */
-    snprintf(msg, cap, "Internet uplink is connected, but Tailscale has remained disconnected.\n"
-                       "Open the local Diagnostics page to inspect logs.");
+    snprintf(msg, cap, "Tailscale is disconnected.\nInternet uplink: connected.");
     set_title(title, "ESP32 Tailscale problem");
 }
 
 void notify_text_tailscale_restored(char title[NOTIFY_TITLE_MAX], char *msg, size_t cap, uint32_t outage_seconds)
 {
-    snprintf(msg, cap, "Tailscale control connection restored after about %lu s. "
-                       "This does not prove every peer or service is reachable.", (unsigned long)outage_seconds);
+    snprintf(msg, cap, "Tailscale control connection restored.\nInterruption: %lu s.",
+             (unsigned long)outage_seconds);
     set_title(title, "ESP32 Tailscale restored");
 }
 
 void notify_text_update_available(char title[NOTIFY_TITLE_MAX], char *msg, size_t cap, const char *version)
 {
-    snprintf(msg, cap, "Firmware %.31s is available. Nothing was installed; review the release and update from the Web UI.",
+    snprintf(msg, cap, "Firmware %.31s is available.\nUpdate from System > Firmware.",
              version ? version : "");
     set_title(title, "ESP32 firmware update available");
 }
@@ -91,20 +122,18 @@ void notify_text_compose(unsigned kind, unsigned level, const char *text,
     unsigned long s = 0;
     if (!text) text = "";
     if (kind == HIST_EV_BOOT && (!strncmp(text, "Power-on start ", 15) || !strncmp(text, "Started ", 8))) {
-        char head[NOTIFY_MESSAGE_MAX];
-        notify_text_boot(title, head, sizeof head, version, r, poweron_events);
-        snprintf(msg, cap, "%s\nDetails: %s", head, text);   /* slot and recorded reset label */
+        notify_text_boot(title, msg, cap, version, r, poweron_events);
     } else if (kind == HIST_EV_TAILNET && seconds_after(text, "Tailnet connection unavailable for at least ", &s)) {
         char head[NOTIFY_MESSAGE_MAX];
         notify_text_tailscale_problem(title, head, sizeof head);
-        snprintf(msg, cap, "%s\nUnavailable for at least %lu s.", head, s);
+        snprintf(msg, cap, "%s\nDuration: at least %lu s.", head, s);
     } else if (kind == HIST_EV_TAILNET && seconds_after(text, "Tailnet connection recovered after ", &s)) {
         notify_text_tailscale_restored(title, msg, cap, (uint32_t)s);
     } else if (kind == HIST_EV_UPLINK && seconds_after(text, "Internet uplink unavailable for at least ", &s)) {
-        snprintf(msg, cap, "The Internet uplink has been unavailable for at least %lu s.", s);
+        snprintf(msg, cap, "Internet uplink unavailable.\nDuration: at least %lu s.", s);
         set_title(title, "ESP32 Internet uplink problem");
     } else if (kind == HIST_EV_UPLINK && seconds_after(text, "Internet uplink recovered after ", &s)) {
-        snprintf(msg, cap, "Internet uplink restored after about %lu s.", s);
+        snprintf(msg, cap, "Internet uplink restored.\nInterruption: %lu s.", s);
         set_title(title, "ESP32 Internet uplink restored");
     } else if (kind == HIST_EV_UPDATE && !strncmp(text, "Firmware ", 9) && strstr(text, " is available.")) {
         snprintf(msg, cap, "%s", text);

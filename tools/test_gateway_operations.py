@@ -112,7 +112,7 @@ int main(void) {
     finish_locked(J_UNKNOWN); assert(!job.notify_result);
     finish_locked(J_TIMEOUT); assert(job.notify_result);
     notify_job_result(&job);
-    assert(sent==1 && strstr(notice,"Fixture NAS stopped responding") && !strstr(notice,"WoL"));
+    assert(sent==1 && strstr(notice,"Device: Fixture NAS\nCheck: no response.") && !strstr(notice,"WoL"));
     finish_locked(J_TIMEOUT); assert(!job.notify_result);
     finish_locked(J_REACHABLE); assert(!job.notify_result);
     finish_locked(J_TIMEOUT); assert(job.notify_result);
@@ -120,17 +120,21 @@ int main(void) {
     finish_locked(J_TIMEOUT); assert(!job.notify_result); /* another MAC cannot inherit an outage */
     job.manual=job.wake=true;
     finish_locked(J_REACHABLE); assert(job.notify_result);
-    notify_job_result(&job); assert(sent==2 && strstr(notice,"Wake not sent"));
+    notify_job_result(&job); assert(sent==2 && strstr(notice,"Wake packet: not sent"));
     job.wake_attempted=true;
     finish_locked(J_UNKNOWN); assert(job.notify_result);
-    notify_job_result(&job); assert(sent==3 && strstr(notice,"Wake send failed"));
+    notify_job_result(&job); assert(sent==3 && strstr(notice,"Wake packet: send failed"));
     job.packet_sent=true;
     finish_locked(J_REACHABLE); assert(job.notify_result);
-    notify_job_result(&job); assert(sent==4 && strstr(notice,"Wake packet sent"));
+    notify_job_result(&job); assert(sent==4 && strstr(notice,"Wake packet: sent"));
     job.packet_sent=false;job.wake_datagrams=1;
     job.origin=OPS_RECOVERY_TELEGRAM;job.destination=19;
     finish_locked(J_REACHABLE);notify_job_result(&job);
-    assert(sent==5 && strstr(notice,"burst partly sent"));
+    assert(sent==5 && strstr(notice,"partly sent"));
+    /* Already reachable remote recovery is distinct from packet delivery. */
+    job.wake_attempted=false;
+    notify_job_result(&job);
+    assert(sent==6 && !strcmp(notice,"Device: Fixture NAS\nCheck: reachable.\nWake packet: not needed."));
     job.origin=OPS_RECOVERY_LOCAL;job.destination=0;
     job.profile.notify=0;
     finish_locked(J_REACHABLE); assert(!job.notify_result);

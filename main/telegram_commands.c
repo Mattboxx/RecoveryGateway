@@ -215,9 +215,8 @@ static esp_err_t send_info(const telegram_commands_config_t *c, uint32_t destina
     size_t len = strlen(text), off = 0;
     esp_err_t result = ESP_OK;
     while (off < len) {
-        size_t take = len - off > 900 ? 900 : len - off;
-        if (off + take < len) { size_t cut = take; while (cut > 200 && text[off + cut - 1] != '\n') cut--; if (cut > 200) take = cut; }
-        while (((unsigned char)text[off + take] & 0xc0u) == 0x80u) take--;
+        size_t take = remote_reply_chunk_size(text, len, off, 900);
+        if (!take) { result = ESP_FAIL; break; }
         char saved = text[off + take];
         text[off + take] = 0;
         result = reply(destination, text + off, 0);

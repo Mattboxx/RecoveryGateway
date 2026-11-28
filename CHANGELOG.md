@@ -6,6 +6,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [3.1.2] - 2026-11-28
+
+### Added
+
+- Previous-operation timestamp in opted-in power-return alerts for ntfy,
+  Telegram and email. The existing MQTT power event exposes the timestamp
+  for Home Assistant, with an explicit unknown value when unavailable.
+  The local checkpoint is saved every five minutes and consumed once at boot.
+
+### Changed
+
+- Concise and consistent restart, connectivity, recovery and saved-check
+  messages. Help and status replies group the existing information by task.
+
+### Fixed
+
+- Keep a valid previous-boot power checkpoint available before the new
+  clock synchronization completes.
+- Split Telegram and ntfy status replies on UTF-8 boundaries, preferring
+  complete lines. Stop sending further ntfy parts after a delivery failure.
+
+
 ## [3.1.1] - 2026-11-27
 
 ### Fixed
